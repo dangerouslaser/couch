@@ -63,11 +63,16 @@ if [ "$WIFI" = "1" ]; then
     $BB mdev -s
     [ -e /dev/wmtWifi ] || $BB mknod /dev/wmtWifi c 153 0 2>/dev/null
 
-    # Now the properties are safe to restore, for anything else that wants them.
-    $BB mount -t tmpfs tmpfs /dev/__properties__ 2>/dev/null
-    ( cd /dev/__properties__ && $BB tar xzf /extra/props.tar.gz 2>/dev/null )
-    $BB mkdir -p $A/dev/__properties__
-    $BB mount -o bind /dev/__properties__ $A/dev/__properties__ 2>/dev/null
+    # No property area is restored. The snapshot was device-specific (it carries
+    # this unit's serial number among other things) and cannot ship in a
+    # distributable image; it also broke detection above. Restored here only if
+    # a snapshot happens to be present, which it is not by default.
+    if [ -f /extra/props.tar.gz ]; then
+        $BB mount -t tmpfs tmpfs /dev/__properties__ 2>/dev/null
+        ( cd /dev/__properties__ && $BB tar xzf /extra/props.tar.gz 2>/dev/null )
+        $BB mkdir -p $A/dev/__properties__
+        $BB mount -o bind /dev/__properties__ $A/dev/__properties__ 2>/dev/null
+    fi
 
     LD_LIBRARY_PATH=/system/lib:/vendor/lib /vendor/bin/wmt_launcher -p /vendor/firmware/ >/tmp/wl.log 2>&1 &
     $BB sleep 5
@@ -117,6 +122,22 @@ if [ "$WIFI" = "1" ]; then
         fi
         mark 6 "S6 assoc=$ST ip=${IP:-none}"
     fi
+
+    # No network: bring up the setup portal so WiFi can be configured without a
+    # USB shell. The passphrase is shown on the panel, so setup requires being
+    # able to see the device.
+    if [ -z "$IP" ]; then
+        $BB sh "$(dirname "$0")/confirm.sh" >/tmp/confirm.log 2>&1 &
+        $BB sh "$(dirname "$0")/portal.sh"
+    else
+        # sshd only once we are actually on a network, and only if a key has
+        # been enrolled - the shipped image trusts nobody by default.
+        if [ -s $A/root/.ssh/authorized_keys ]; then
+            $BB chroot $A /usr/sbin/sshd 2>/dev/null && echo "= sshd listening on $IP:22"
+        else
+            echo "= sshd not started: no key enrolled (use the setup portal)"
+        fi
+    fi
 else
     echo "= wifi parked"
 fi
@@ -125,7 +146,7 @@ $BB dmesg | $BB dd of=$LOG bs=512 seek=2048 conv=notrunc 2>/dev/null
 mark $((BASE+4)) "S4 stage2 done"
 echo ""
 echo "= READY  uptime $($BB cut -d. -f1 /proc/uptime)s"
-echo "= edit:  tools/push.py stage2/stage2.sh /mnt/alpine/opt/ha100/stage2.sh"
+echo "= edit:  tools/push.py stage2/stage2.sh /mnt/alpine/opt/couch/stage2.sh"
 echo "= rerun: tools/relinux.sh"
 
 echo "= fast-loop test marker: 22:12:42"

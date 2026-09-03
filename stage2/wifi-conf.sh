@@ -6,11 +6,18 @@
 # actually see. Credentials are read on the device at runtime and never leave it.
 CFG=${1:-/mnt/data/misc/wifi/WifiConfigStore.xml}
 OUT=${2:-/tmp/wpa.conf}
-[ -f "$CFG" ] || { echo "no wifi store at $CFG" >&2; exit 1; }
+# Android's store is a bonus, not a requirement: a distributable image may be
+# running on a device that was never set up under Android.
+[ -f "$CFG" ] || CFG=/dev/null
+
+SAVED=/opt/couch/networks.conf
 
 {
     echo "ctrl_interface=/tmp/wpa"
     echo "update_config=1"
+    # Networks configured through the setup portal, which persist on the Alpine
+    # partition, come first.
+    [ -f "$SAVED" ] && grep -v '^# net ' "$SAVED"
     awk '
     function flush() {
         if (have) {

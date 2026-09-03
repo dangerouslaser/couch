@@ -1,0 +1,120 @@
+<!doctype html>
+<title>Sanytron Wi-Fi Setup</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#252a34;--fg:#e6e9ef;--dim:#98a2b3;--accent:#4c8dff}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);
+     font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:420px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px}
+p.sub{color:var(--dim);margin:0 0 20px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px}
+button.net{display:flex;width:100%;align-items:center;justify-content:space-between;
+    gap:12px;background:none;border:0;border-bottom:1px solid var(--line);
+    color:var(--fg);font:inherit;padding:14px 12px;text-align:left;cursor:pointer}
+button.net:last-child{border-bottom:0}
+button.net:hover{background:#1d212a}
+.sig{color:var(--dim);font-size:13px;font-variant-numeric:tabular-nums}
+form{margin-top:20px;display:none}
+form.show{display:block}
+label{display:block;font-size:13px;color:var(--dim);margin:14px 0 6px}
+input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--line);
+      background:#10131a;color:var(--fg);font:inherit}
+button.go{width:100%;margin-top:18px;padding:13px;border:0;border-radius:8px;
+     background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button.go:disabled{opacity:.5}
+#msg,#smsg{margin-top:16px;font-size:14px;color:var(--dim);min-height:20px}
+details{margin-top:28px;border-top:1px solid var(--line);padding-top:16px}
+summary{cursor:pointer;font-size:14px;color:var(--dim)}
+code{background:#10131a;padding:1px 5px;border-radius:4px;font-size:12px}
+.err{color:#ff8080!important}.ok{color:#7ce09b!important}
+</style>
+<div class=wrap>
+  <h1>Wi-Fi Setup</h1>
+  <p class=sub>Choose a network for the remote to join.</p>
+  <div class=card id=list><div style="padding:14px 12px;color:var(--dim)">Scanning…</div></div>
+  <form id=f>
+    <label for=psk>Password for <b id=chosen></b></label>
+    <input id=psk type=password autocomplete=off placeholder="Leave blank if open">
+    <button class=go id=go type=submit>Connect</button>
+  </form>
+  <div id=msg></div>
+
+  <details id=sshbox>
+    <summary>Enable SSH access</summary>
+    <p class=sub style="margin:12px 0 0">
+      Paste a public key (<code>~/.ssh/id_ed25519.pub</code>). You will need to
+      press a button on the remote to approve it.
+    </p>
+    <label for=key>Public key</label>
+    <input id=key placeholder="ssh-ed25519 AAAA...">
+    <button class=go id=enroll type=button>Enrol key</button>
+    <div id=smsg></div>
+  </details>
+</div>
+<script>
+const list = document.getElementById('list'), form = document.getElementById('f');
+const chosen = document.getElementById('chosen'), msg = document.getElementById('msg');
+let ssid = '';
+
+function scan() {
+  fetch('/cgi-bin/scan').then(r => r.json()).then(nets => {
+    if (!nets.length) { list.innerHTML = '<div style="padding:14px 12px;color:var(--dim)">No networks found.</div>'; return; }
+    list.innerHTML = '';
+    nets.forEach(n => {
+      const b = document.createElement('button');
+      b.className = 'net'; b.type = 'button';
+      b.innerHTML = '<span></span><span class=sig></span>';
+      b.firstChild.textContent = n.ssid;
+      b.lastChild.textContent = (n.secure ? '🔒 ' : '') + n.signal + ' dBm';
+      b.onclick = () => {
+        ssid = n.ssid; chosen.textContent = n.ssid;
+        form.classList.add('show'); document.getElementById('psk').focus();
+      };
+      list.appendChild(b);
+    });
+  }).catch(() => { list.innerHTML = '<div style="padding:14px 12px" class=err>Scan failed.</div>'; });
+}
+
+form.onsubmit = e => {
+  e.preventDefault();
+  const go = document.getElementById('go');
+  go.disabled = true; msg.className = ''; msg.textContent = 'Connecting…';
+  fetch('/cgi-bin/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'ssid=' + encodeURIComponent(ssid) + '&psk=' + encodeURIComponent(document.getElementById('psk').value)
+  }).then(r => r.text()).then(t => {
+    const ok = t.indexOf('OK') === 0;
+    msg.className = ok ? 'ok' : 'err';
+    msg.textContent = ok ? t.slice(3).trim() || 'Connected. This network will now disappear.'
+                         : t.replace(/^ERR/, '').trim() || 'Could not connect.';
+    go.disabled = !ok ? false : true;
+  }).catch(() => {
+    // The AP drops as soon as the radio switches back to station mode, so a
+    // failed request here usually means it worked.
+    msg.className = 'ok';
+    msg.textContent = 'Remote is switching networks. You can reconnect to your Wi-Fi.';
+  });
+};
+document.getElementById('enroll').onclick = () => {
+  const b = document.getElementById('enroll'), sm = document.getElementById('smsg');
+  const key = document.getElementById('key').value.trim();
+  if (!key) { sm.className = 'err'; sm.textContent = 'Paste a public key first.'; return; }
+  b.disabled = true; sm.className = ''; sm.textContent = 'Press a button on the remote to approve…';
+  fetch('/cgi-bin/enroll', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'key=' + encodeURIComponent(key)
+  }).then(r => r.text()).then(t => {
+    const ok = t.indexOf('OK') === 0;
+    sm.className = ok ? 'ok' : 'err';
+    sm.textContent = t.replace(/^(OK|ERR)/, '').trim();
+    b.disabled = false;
+  }).catch(() => {
+    sm.className = 'err'; sm.textContent = 'Request failed.'; b.disabled = false;
+  });
+};
+scan();
+</script>

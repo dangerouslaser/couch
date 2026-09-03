@@ -21,7 +21,7 @@ MNT=/data/local/tmp/alp
 # Alpine's own wpa_supplicant, not the vendor one: the vendor build logs solely
 # to Android's logd and exits silently when logd is not running, which makes it
 # undebuggable here.
-PKGS="wpa_supplicant libnl3 dbus-libs pcsc-lite-libs"
+PKGS="wpa_supplicant libnl3 dbus-libs pcsc-lite-libs openssh hostapd dnsmasq iw"
 
 mkdir -p build/apks
 
@@ -53,19 +53,45 @@ $ADB push "build/$ROOTFS" /data/local/tmp/rootfs.tgz >/dev/null
 $ADB shell "cd $MNT && $BB tar xzf /data/local/tmp/rootfs.tgz"
 
 echo "installing packages offline ..."
-$ADB shell "mkdir -p $MNT/opt/apks $MNT/opt/ha100"
+$ADB shell "mkdir -p $MNT/opt/apks $MNT/opt/couch"
 for f in build/apks/*.apk; do $ADB push "$f" "$MNT/opt/apks/" >/dev/null; done
 $ADB shell "cd $MNT && printf '%s\n' \
     '$MIRROR/v$ALPINE_VER/main' '$MIRROR/v$ALPINE_VER/community' > etc/apk/repositories
     echo 'nameserver 1.1.1.1' > etc/resolv.conf
-    echo ha100 > etc/hostname"
+    echo couch > etc/hostname"
 # apk runs inside the chroot so it resolves against the new root, not Android.
 $ADB shell "$BB chroot $MNT /sbin/apk add --allow-untrusted --no-network /opt/apks/*.apk 2>&1 | tail -3"
 
 echo "installing our payload ..."
-$ADB push stage2/stage2.sh   "$MNT/opt/ha100/stage2.sh"   >/dev/null
-$ADB push stage2/wifi-conf.sh "$MNT/opt/ha100/wifi-conf.sh" >/dev/null
-[ -f build/fbcon ] && $ADB push build/fbcon "$MNT/opt/ha100/fbcon" >/dev/null
-$ADB shell "chmod 755 $MNT/opt/ha100/*; \
+for f in stage2/*.sh; do
+    $ADB push "$f" "$MNT/opt/couch/$(basename "$f")" >/dev/null
+done
+$ADB shell "mkdir -p $MNT/opt/couch/www/cgi-bin"
+$ADB push stage2/www/index.html "$MNT/opt/couch/www/index.html" >/dev/null
+for f in stage2/www/cgi-bin/*; do
+    $ADB push "$f" "$MNT/opt/couch/www/cgi-bin/$(basename "$f")" >/dev/null
+done
+[ -f build/fbcon ] && $ADB push build/fbcon "$MNT/opt/couch/fbcon" >/dev/null
+
+# sshd: key-only, no passwords, and NO key shipped. The image trusts nobody
+# until someone enrols a key through the setup portal (which requires reading a
+# passphrase off the device's screen and pressing a button on it).
+#
+# Alpine ships root locked with "!" in /etc/shadow, and sshd refuses to complete
+# authentication for a locked account even with a valid key. "*" leaves it with
+# no password while unlocked, so key auth works and password auth cannot.
+$ADB shell "mkdir -p $MNT/etc/ssh/sshd_config.d
+    printf '%s\n' 'PermitRootLogin prohibit-password' 'PasswordAuthentication no' \
+        'PubkeyAuthentication yes' 'UseDNS no' > $MNT/etc/ssh/sshd_config.d/couch.conf
+    sed -i 's|^root:[!*]*:|root:*:|' $MNT/etc/shadow
+    rm -rf $MNT/root/.ssh
+    rm -f $MNT/opt/couch/networks.conf"
+
+$ADB shell "chmod -R 755 $MNT/opt/couch; chmod 644 $MNT/opt/couch/www/index.html; \
     $BB chroot $MNT /sbin/apk info 2>/dev/null | tr '\n' ' '; echo; \
-    ls $MNT/sbin/wpa_supplicant; sync; umount $MNT && echo 'provisioned, unmounted'"
+    echo \"authorized_keys present: \$([ -e $MNT/root/.ssh/authorized_keys ] && echo YES-BAD || echo no)\"; \
+    sync; umount $MNT && echo 'provisioned, unmounted'"
+
+echo
+echo "The image trusts no keys. Enrol one via the setup portal, or for a"
+echo "development device:  tools/push.py ~/.ssh/id_ed25519.pub /root/.ssh/authorized_keys"

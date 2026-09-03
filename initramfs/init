@@ -1,5 +1,6 @@
 #!/bin/busybox sh
-# Sanytron HA100 (MT6580) - first stage.
+# Couch - Linux for the Sanytron Astrion HA100 (MT6580).
+# first stage.
 #
 # Deliberately minimal and stable: bring up enough to get a shell and a screen,
 # then hand off to stage2 on the Alpine partition. stage2 can be replaced with

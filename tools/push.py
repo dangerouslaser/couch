@@ -4,7 +4,7 @@
 No adb, no reflash, no trip through Android. The port is opened once and held
 for the whole transfer - reopening it per chunk turns seconds into minutes.
 
-  tools/push.py stage2/stage2.sh /mnt/alpine/opt/ha100/stage2.sh
+  tools/push.py stage2/stage2.sh /mnt/alpine/opt/couch/stage2.sh
 """
 import base64, hashlib, os, select, sys, termios, time, glob
 

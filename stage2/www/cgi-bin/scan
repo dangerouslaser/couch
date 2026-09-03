@@ -1,0 +1,7 @@
+#!/bin/sh
+# Networks seen just before the radio switched to AP mode. A radio in AP mode
+# cannot scan, so this list is cached by portal.sh rather than gathered here.
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo
+cat /tmp/scan.json 2>/dev/null || echo "[]"

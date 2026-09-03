@@ -1,11 +1,15 @@
-# Linux on the Sanytron Astrion HA100
+# Couch
 
-Real Linux, running on a Home Assistant remote control.
+A small Linux distribution for the couch: it runs on a Home Assistant remote
+control, the Sanytron Astrion HA100.
 
 ```
-Linux (none) 3.18.79 #7 SMP PREEMPT armv7l GNU/Linux
-uid=0 gid=0
+couch:~# uname -a
+Linux couch 3.18.79 #7 SMP PREEMPT armv7l GNU/Linux
 ```
+
+Alpine userland, WiFi, SSH, a framebuffer console, and a setup portal for
+configuring it without a cable.
 
 The HA100 is a MediaTek MT6580 (quad Cortex-A7, ARMv7, 1GB RAM, 480x800 touchscreen)
 shipping Android 8.1. This boots a non-Android userland on it and gives you a root
@@ -155,12 +159,46 @@ Writing `/dev/wmtWifi` while the chip is half-initialised panics the kernel in
 `wmt_drv` (`__list_add` on an uninitialised mutex) and hard-resets the device.
 Get the order right and it is fine.
 
+## Setup portal
+
+With no known network, the remote hosts its own. `stage2` falls back to
+`portal.sh`, which brings up an AP, a wildcard-DNS captive portal and a small web
+UI for choosing a network and enrolling an SSH key.
+
+It is deliberately not an open AP. The AP runs **WPA2 with a random passphrase
+generated per boot and shown on the device's own screen**, so joining it requires
+physically looking at the remote. That is what makes enrolling an SSH key through
+a web page acceptable: an open setup network would let anyone in radio range take
+permanent root, and the exposure would not be brief - a device whose WiFi password
+changed would sit in setup mode indefinitely.
+
+On top of that: enrolling a key needs a **physical button press** on the remote
+(read from evdev), the portal **times out** after ten minutes, and the shipped
+image **contains no authorised keys at all**, so a fresh device trusts nobody.
+
+Because a radio cannot scan while in AP mode, the network list is captured just
+before switching and cached for the portal to serve.
+
+## Distribution
+
+The image is meant to be reusable, so it carries nothing device- or
+owner-specific:
+
+* **no SSH keys** - enrolment happens through the portal or over USB
+* **no WiFi credentials** - read from Android's store on the device at runtime,
+  or entered through the portal and saved to the Alpine partition
+* **no Android property snapshot** - it contained this unit's serial number, and
+  it broke WiFi detection anyway
+
+`root` is unlocked with `*` rather than `!` in `/etc/shadow`: sshd refuses to
+complete authentication for a locked account even with a valid key, but `*`
+leaves it with no password at all, so key auth works and password auth cannot.
+
 ## Roadmap
 
 1. ~~Alpine rootfs~~ — done.
 2. ~~WiFi~~ — done.
-3. **Captive portal**: bring up an AP and a small web UI when no known network is
-   reachable, so WiFi can be configured without a USB shell.
+3. ~~Captive portal~~ — done.
 4. **Move to the `boot` slot**, putting Android's boot image into `recovery` so
    lk's menu still reaches it. Tooling exists (`tools/swap-slots.sh`), not applied.
 
