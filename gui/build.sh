@@ -27,6 +27,6 @@ echo "compiling $(echo "$SRCS" | wc -l | tr -d ' ') lvgl sources + main.c ..."
 "$CC" -static -Os -DLV_CONF_INCLUDE_SIMPLE \
     -I. -I../build -I"$LVGL" \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -o couch-gui main.c $SRCS -lm
+    -o couch-gui main.c theme.c icons.c $SRCS -lm
 "$STRIP" couch-gui
 echo "couch-gui: $(stat -f%z couch-gui) bytes"

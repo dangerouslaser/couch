@@ -31,6 +31,8 @@
 #include <errno.h>
 #include "lvgl/lvgl.h"
 #include "lvgl/src/drivers/evdev/lv_evdev.h"
+#include "theme.h"
+#include "icons.h"
 
 #define TOUCH_DEV  "/dev/input/event3"   /* mtk-tpd     */
 #define KEYPAD_DEV "/dev/input/event1"   /* mt_gpio_kpd */
@@ -89,10 +91,23 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
         const size_t off = (size_t)y1 * stride;
         const size_t len = (size_t)(y2 - y1 + 1) * stride;
 
-        /* mtkfb composites ARGB8888 and LVGL leaves alpha clear, which would
-         * render the frame invisible. */
+        /* Two fixes in the pass we already make, so they cost nothing extra:
+         *
+         * 1. Alpha. LVGL leaves the alpha byte clear and mtkfb composites
+         *    ARGB8888, so an untouched frame is fully transparent.
+         * 2. Channel order. The panel reads the low byte as red - it wants
+         *    ABGR while LVGL renders ARGB. Verified with labelled bars: a
+         *    stored 0xffff0000 (pure red) displays blue. Note fb_var_screeninfo
+         *    reports red=0/8 blue=16/8, which is the same claim, but I got this
+         *    backwards once by trusting a washed-out grey to tell me - only a
+         *    saturated test pattern settles it. */
         uint32_t *px = (uint32_t *)(px_map + off);
-        for (size_t i = 0; i < len / 4; i++) px[i] |= 0xFF000000u;
+        for (size_t i = 0; i < len / 4; i++) {
+            uint32_t v = px[i];
+            px[i] = 0xFF000000u | ((v & 0x0000FFu) << 16)
+                                | (v & 0x00FF00u)
+                                | ((v >> 16) & 0x0000FFu);
+        }
 
         struct timespec a, b;
         clock_gettime(CLOCK_MONOTONIC, &a);
@@ -109,58 +124,74 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 /* ---- a small remote-shaped UI, so the demo shows the real interaction ---- */
 
 static lv_obj_t *status;
+static lv_obj_t *clock_lbl;
+
+/* Tick the clock once a second. LVGL timers run off lv_timer_handler, which the
+ * main loop already calls, so this needs no thread. */
+/* Seconds east of UTC, taken from the system rather than from libc.
+ *
+ * couch-gui is a static bionic binary, and bionic resolves timezones through
+ * Android's tzdata and persist.sys.timezone - it never reads Alpine's
+ * /etc/localtime, so localtime_r() yields UTC. Its POSIX TZ parsing does not
+ * apply the DST rule here either, with or without explicit transition times,
+ * which leaves the clock an hour behind all summer.
+ *
+ * Alpine's own date(1) has correct tzdata, so ask it once an hour: that keeps
+ * DST transitions right without shipping a TZif parser. */
+static long tz_offset(void)
+{
+    static long cached;
+    static time_t checked;
+    time_t now = time(NULL);
+    if (checked && now - checked < 3600) return cached;
+
+    FILE *f = popen("date +%z", "r");
+    if (f) {
+        char b[16] = {0};
+        if (fgets(b, sizeof b, f) && (b[0] == '+' || b[0] == '-')) {
+            int hh = (b[1] - '0') * 10 + (b[2] - '0');
+            int mm = (b[3] - '0') * 10 + (b[4] - '0');
+            cached = (hh * 3600L + mm * 60L) * (b[0] == '-' ? -1 : 1);
+        }
+        pclose(f);
+    }
+    checked = now;
+    return cached;
+}
+
+static void clock_tick(lv_timer_t *t)
+{
+    LV_UNUSED(t);
+    time_t now = time(NULL) + tz_offset();
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    char buf[16];
+    strftime(buf, sizeof buf, "%I:%M %p", &tm);
+    /* strftime pads the hour to two digits; drop the leading zero so it reads
+     * "1:40 PM" rather than "01:40 PM". */
+    const char *txt = (buf[0] == '0') ? buf + 1 : buf;
+    if (clock_lbl) lv_label_set_text(clock_lbl, txt);
+}
 
 static void row_clicked(lv_event_t *e)
 {
-    const char *name = lv_event_get_user_data(e);
-    lv_label_set_text_fmt(status, "selected: %s", name);
+    lv_label_set_text_fmt(status, "selected: %s", (const char *)lv_event_get_user_data(e));
 }
 
-static lv_obj_t *make_row(lv_obj_t *parent, const char *icon, const char *name,
-                          const char *value, lv_group_t *group)
+static lv_obj_t *add_row(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                         const char *name, const char *value, lv_group_t *group)
 {
-    lv_obj_t *row = lv_button_create(parent);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, 56);
-    lv_obj_set_style_bg_color(row, lv_color_hex(0x171a21), 0);
-    lv_obj_set_style_bg_color(row, lv_color_hex(0x25406b), LV_STATE_FOCUSED);
-    lv_obj_set_style_radius(row, 10, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_hor(row, 12, 0);
-    /* The focus fade is back on (LV_THEME_DEFAULT_TRANSITION_TIME in lv_conf.h).
-     * It renders ~7 frames per press, but a frame costs ~124us, so the cost is
-     * the 80ms settle rather than any real work. The sluggishness blamed on it
-     * was actually the keypad driver: debounce-delay-ms = 50 plus
-     * linux,no-autorepeat.
-     *
-     * Note: do not disable it with lv_obj_set_style_transition(obj, NULL, ...) -
-     * a NULL descriptor crashes LVGL during build_ui. */
-
-    lv_obj_t *l = lv_label_create(row);
-    lv_label_set_text_fmt(l, "%s  %s", icon, name);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xe6e9ef), 0);
-    lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
-
-    if (value) {
-        lv_obj_t *v = lv_label_create(row);
-        lv_label_set_text(v, value);
-        lv_obj_set_style_text_color(v, lv_color_hex(0x7ce09b), 0);
-        lv_obj_align(v, LV_ALIGN_RIGHT_MID, 0, 0);
-    }
-
+    lv_obj_t *row = couch_row(parent, icon, name, value);
     lv_obj_add_event_cb(row, row_clicked, LV_EVENT_CLICKED, (void *)name);
     lv_group_add_obj(group, row);
     return row;
 }
 
-/* ---- keypad, read directly ------------------------------------------------
- *
- * LVGL's evdev driver binds both keypad nodes without error yet never delivers
- * a key, while a plain reader on the same node sees KEY_UP/KEY_DOWN fine. Rather
- * than keep bisecting the driver, read the devices here and inject into the
- * focus group. That is also what this device needs eventually: the remote has
- * colour buttons, Home, channel and volume keys that want their own meanings,
- * not just the six codes LVGL maps. */
+static void focus_changed(lv_group_t *g)
+{
+    if (verbose) printf("couch-gui: focus -> %p\n", (void *)lv_group_get_focused(g));
+}
+
 #define MAX_KPD 3
 static int kpd_fd[MAX_KPD];
 static int kpd_n;
@@ -284,53 +315,75 @@ static int keypad_poll(lv_group_t *group)
 
 static void build_ui(lv_group_t *group)
 {
+    couch_theme_init();
     lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0a0c12), 0);
-    lv_obj_set_style_pad_all(scr, 14, 0);
 
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "Living Room");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    if (getenv("COUCH_BARS")) {
+        static const uint32_t probe[] = { 0xFF0000, 0x00FF00, 0x0000FF };
+        static const char *pname[] = { "RED", "GREEN", "BLUE" };
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *bar = lv_obj_create(scr);
+            lv_obj_remove_style_all(bar);
+            lv_obj_set_size(bar, 140, 80);
+            lv_obj_set_pos(bar, i * 148, 0);
+            lv_obj_set_style_bg_color(bar, lv_color_hex(probe[i]), 0);
+            lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+            lv_obj_t *t = lv_label_create(bar);
+            lv_label_set_text(t, pname[i]);
+            lv_obj_set_style_text_color(t, lv_color_hex(0x000000), 0);
+            lv_obj_center(t);
+        }
+    }
 
-    lv_obj_t *list = lv_obj_create(scr);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, LV_PCT(100), 430);
-    lv_obj_align(list, LV_ALIGN_TOP_LEFT, 0, 52);
-    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(list, 8, 0);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    int top = getenv("COUCH_BARS") ? 88 : 0;
 
-    make_row(list, LV_SYMBOL_VIDEO, "Watch TV",      NULL,     group);
-    make_row(list, LV_SYMBOL_POWER, "All Lights",    "off",    group);
-    make_row(list, LV_SYMBOL_POWER, "Ceiling Only",  "off",    group);
-    make_row(list, LV_SYMBOL_SETTINGS, "Roller Blind", "open", group);
+    lv_obj_t *h = couch_h1(scr, "Living Room");
+    lv_obj_align(h, LV_ALIGN_TOP_LEFT, 0, top);
 
-    lv_obj_t *sl = lv_slider_create(scr);
-    lv_obj_set_width(sl, LV_PCT(100));
-    lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -52);
-    lv_slider_set_value(sl, 60, LV_ANIM_OFF);
-    lv_group_add_obj(group, sl);
+    clock_lbl = lv_label_create(scr);
+    lv_label_set_text(clock_lbl, "--:--");
+    lv_obj_set_style_text_color(clock_lbl, lv_color_hex(C_MUTED_FOREGROUND), 0);
+    lv_obj_set_style_text_font(clock_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, 0, top + 8);
+    lv_timer_create(clock_tick, 1000, NULL);
+    clock_tick(NULL);
 
-    status = lv_label_create(scr);
-    lv_label_set_text(status, "keys navigate - touch also works");
-    lv_obj_set_style_text_color(status, lv_color_hex(0x98a2b3), 0);
-    lv_obj_align(status, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-}
+    lv_obj_t *card = couch_group(scr);
+    lv_obj_set_size(card, LV_PCT(100), 4 * (ROW_H + GAP) + 2 * GAP);
+    /* Same offset as when a subtitle sat here - the line is gone, the spacing
+     * it created is deliberate. */
+    lv_obj_align(card, LV_ALIGN_TOP_LEFT, 0, top + 72);
 
-static void key_seen(lv_event_t *e)
-{
-    uint32_t k = lv_event_get_key(e);
-    printf("couch-gui: LVGL delivered key 0x%02x\n", (unsigned)k);
-    lv_label_set_text_fmt(status, "key 0x%02x", (unsigned)k);
-}
+    add_row(card, &icon_tv,         "Watch TV",     NULL,   group);
+    add_row(card, &icon_lightbulb,  "All Lights",   "off",  group);
+    add_row(card, &icon_lightbulb,  "Ceiling Only", "off",  group);
+    add_row(card, &icon_blinds,     "Roller Blind", "open", group);
 
-/* Log the focused object each time it changes, so we can tell "no keys" from
- * "keys arrive but focus is stuck" from "focus moves but nothing repaints". */
-static void focus_changed(lv_group_t *g)
-{
-    if (verbose) printf("couch-gui: focus -> %p\n", (void *)lv_group_get_focused(g));
+    lv_obj_t *actions = lv_obj_create(scr);
+    lv_obj_remove_style_all(actions);
+    /* Taller and padded so the focus ring, which draws outside each button,
+     * is not clipped by this container on any side. */
+    lv_obj_set_size(actions, LV_PCT(100), 52 + 2 * 8);
+    /* Sits at the bottom now the hint line is gone; the container's own 8px
+     * padding keeps the focus ring clear of the screen edge. */
+    lv_obj_align(actions, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(actions, 8, 0);
+    lv_obj_set_style_pad_column(actions, GAP + 4, 0);
+
+    lv_obj_t *b1 = couch_button(actions, BTN_DEFAULT, "All Off");
+    lv_obj_set_height(b1, 52);
+    lv_obj_set_flex_grow(b1, 1);
+    lv_group_add_obj(group, b1);
+    lv_obj_t *b2 = couch_button(actions, BTN_OUTLINE, "Scenes");
+    lv_obj_set_height(b2, 52);
+    lv_obj_set_flex_grow(b2, 1);
+    lv_group_add_obj(group, b2);
+
+    status = couch_muted(scr, "");
+    lv_obj_add_flag(status, LV_OBJ_FLAG_HIDDEN);
 }
 
 int main(void)
@@ -339,6 +392,7 @@ int main(void)
     struct fb_fix_screeninfo fix;
 
     verbose = getenv("COUCH_DEBUG") != NULL;
+
     /* Line buffering, not unbuffered: unbuffered means a write() syscall to
      * eMMC for every printf, inside the input loop, which is itself enough to
      * make the UI feel sluggish. */
@@ -386,6 +440,14 @@ int main(void)
      * never sees anything - the screen is not focusable. */
     lv_group_set_focus_cb(group, focus_changed);
     lv_group_focus_next(group);
+    /* COUCH_FOCUS=n advances focus n places at startup, so a screenshot can
+     * show any focus position without someone pressing buttons. */
+    if (getenv("COUCH_FOCUS")) {
+        int n = atoi(getenv("COUCH_FOCUS"));
+        for (int i = 0; i < n; i++) lv_group_focus_next(group);
+    }
+    printf("couch-gui: focused object = %p, group size = %u\n",
+           (void *)lv_group_get_focused(group), lv_group_get_obj_count(group));
     printf("couch-gui: ui built, entering loop\n");
 
     uint32_t last_bl = 0, last_stat = 0;
