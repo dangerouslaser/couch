@@ -78,13 +78,8 @@ if [ "$WIFI" = "1" ]; then
     $BB umount /dev/__properties__ 2>/dev/null
     $BB umount $A/dev/__properties__ 2>/dev/null
 
-    # The wlan driver reads its calibration from /data/nvram/APCFG/APRDEB/WIFI,
-    # so /data has to be mounted before the chip is powered on, not later when
-    # we want the stored credentials. userdata is f2fs.
-    $BB mkdir -p /mnt/data /data
-    $BB mount -t f2fs -o ro /dev/mmcblk0p23 /mnt/data 2>/dev/null
-    [ -d /mnt/data/nvram ] && $BB mount -o bind /mnt/data /data 2>/dev/null
-    echo "= nvram: $([ -e /data/nvram/APCFG/APRDEB/WIFI ] && echo ok || echo MISSING)"
+    # userdata now holds our rootfs, so there is no Android /data to borrow.
+    # The wlan driver logs an NVRAM warning without it and works regardless.
 
     $BB insmod /vendor/lib/modules/wmt_drv.ko 2>/dev/null
     $BB sleep 1; $BB mdev -s
@@ -132,19 +127,27 @@ if [ "$WIFI" = "1" ]; then
 
     # Credentials come from Android's own store, read on the device at runtime,
     # so they never live in this repo or the boot image. userdata is f2fs.
+    # Android's store is a bonus, not a requirement. After installing to
+    # userdata it is gone, and gating on it skipped our own saved networks too -
+    # sending a perfectly configured device to the setup portal. wifi-conf.sh
+    # merges /opt/couch/networks.conf with the store and copes if either is
+    # missing, so the only real precondition is having a radio.
     CFG=/mnt/data/misc/wifi/WifiConfigStore.xml
-    if [ -d /sys/class/net/wlan0 ] && [ -f "$CFG" ]; then
+    if [ -d /sys/class/net/wlan0 ]; then
         # Every stored network, not just the first: the first entry is not
         # necessarily the one in range.
         $BB sh "$(dirname "$0")/wifi-conf.sh" "$CFG" /tmp/wpa.conf | $BB tail -1
+        NETS=$($BB grep -c "^network=" /tmp/wpa.conf 2>/dev/null)
+        echo "= known networks: ${NETS:-0}"
 
-        $BB chroot $A /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/wpa.conf -B \
-            >/tmp/wpa.log 2>&1
+        [ "${NETS:-0}" -gt 0 ] && $BB chroot $A /sbin/wpa_supplicant -i wlan0 \
+            -Dnl80211 -c /tmp/wpa.conf -B >/tmp/wpa.log 2>&1
 
         # Wait for association rather than guessing: a fixed sleep runs dhcp
-        # while still SCANNING and it fails for no visible reason.
+        # while still SCANNING and it fails for no visible reason. With nothing
+        # to associate to there is nothing to wait for - go straight to setup.
         n=0
-        while [ $n -lt 30 ]; do
+        while [ "${NETS:-0}" -gt 0 ] && [ $n -lt 30 ]; do
             ST=$($BB chroot $A /sbin/wpa_cli -p /tmp/wpa -i wlan0 status 2>/dev/null | $BB grep "^wpa_state=" | $BB cut -d= -f2)
             [ "$ST" = "COMPLETED" ] && break
             $BB sleep 1; n=$((n+1))
@@ -161,7 +164,10 @@ if [ "$WIFI" = "1" ]; then
             IP=$($BB ifconfig wlan0 2>/dev/null | $BB sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
             if [ -n "$IP" ]; then
                 $BB cp /etc/resolv.conf $A/etc/resolv.conf 2>/dev/null
-                $BB telnetd -l /bin/sh -p 23 2>/dev/null
+                # Root telnet, no password, on the LAN. Fine on a bench, not
+                # something to ship - sshd with an enrolled key is the shipped
+                # remote path, so this stays behind the debug flag.
+                [ -n "$COUCH_DEBUG" ] && $BB telnetd -l /bin/sh -p 23 2>/dev/null
                 echo "= NETWORK UP  $IP"
             else
                 echo "= dhcp FAILED $($BB tail -1 /tmp/dhcp.log 2>/dev/null)"
@@ -177,16 +183,36 @@ if [ "$WIFI" = "1" ]; then
         $BB sh "$(dirname "$0")/confirm.sh" >/tmp/confirm.log 2>&1 &
         $BB sh "$(dirname "$0")/portal.sh"
     else
-        # sshd only once we are actually on a network, and only if a key has
-        # been enrolled - the shipped image trusts nobody by default.
-        if [ -s $A/root/.ssh/authorized_keys ]; then
-            $BB chroot $A /usr/sbin/sshd 2>/dev/null && echo "= sshd listening on $IP:22"
-        else
-            echo "= sshd not started: no key enrolled (use the setup portal)"
-        fi
+        # sshd only once we are actually on a network, and only if the user
+        # enrolled a key or set a root password through the setup portal. The
+        # shipped image trusts nobody by default.
+        echo "= $($BB chroot $A /bin/sh /opt/couch/sshd.sh) ${IP:+on $IP:22}"
     fi
 else
     echo "= wifi parked"
+fi
+
+# --- the UI ------------------------------------------------------------------
+# Start it last, so anything above still reports to the screen through fbcon.
+# couch-gui takes the panel over when it starts and shows its own splash.
+# Only when we have a network. With no known WiFi the setup portal owns the
+# screen: it prints its SSID and one-time passphrase through fbcon, and the GUI
+# would paint straight over them.
+GUI="$(dirname "$0")/couch-gui"
+# With no network, portal.sh has already left /tmp/couch.setup behind and the
+# GUI reads it at startup, showing the join QR instead of the room UI. Nothing
+# to pass here: a variable set in this loop's environment could never be
+# cleared again without killing the loop.
+[ -f /tmp/couch.setup ] && echo "= couch-gui starting in setup mode"
+if [ -x "$GUI" ]; then
+    ( while true; do
+        "$GUI" >/tmp/gui.log 2>&1
+        echo "= couch-gui exited ($?), restarting" >> /tmp/gui.log
+        $BB sleep 2
+      done ) &
+    echo "= couch-gui started"
+else
+    echo "= no couch-gui at $GUI"
 fi
 
 $BB dmesg | $BB dd of=$LOG bs=512 seek=2048 conv=notrunc 2>/dev/null

@@ -10,7 +10,12 @@ OUT=${2:-/tmp/wpa.conf}
 # running on a device that was never set up under Android.
 [ -f "$CFG" ] || CFG=/dev/null
 
-SAVED=/opt/couch/networks.conf
+# Next to this script, deliberately. An absolute /opt/couch path is only right
+# inside the Alpine chroot, which is where the portal's CGI writes it; stage2
+# runs this from the initramfs, where the very same file is at
+# /mnt/alpine/opt/couch - so the lookup quietly found nothing and every network
+# saved through the portal was dropped on the next boot.
+SAVED="$(dirname "$0")/networks.conf"
 
 {
     echo "ctrl_interface=/tmp/wpa"
