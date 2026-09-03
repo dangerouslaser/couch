@@ -1,9 +1,9 @@
 #!/bin/sh
 # Enrol an SSH public key.
 #
-# Joining this AP already required reading a passphrase off the device's screen,
-# so the requester is physically present. A button press is still required as a
-# second, deliberate confirmation, so a key cannot be added by a request alone.
+# The setup AP is open, so joining it proves nothing about who is asking. The
+# button press below is therefore the ONLY thing standing between a request and
+# permanent root on this device - it must never become optional.
 echo "Content-Type: text/plain"
 echo "Cache-Control: no-store"
 echo

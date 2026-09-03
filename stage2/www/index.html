@@ -1,4 +1,5 @@
 <!doctype html>
+<meta charset="utf-8">
 <title>Sanytron Wi-Fi Setup</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <style>
@@ -29,12 +30,21 @@ details{margin-top:28px;border-top:1px solid var(--line);padding-top:16px}
 summary{cursor:pointer;font-size:14px;color:var(--dim)}
 code{background:#10131a;padding:1px 5px;border-radius:4px;font-size:12px}
 .err{color:#ff8080!important}.ok{color:#7ce09b!important}
+.actions{display:flex;gap:18px;margin-top:12px}
+.link{background:none;border:0;padding:4px 0;color:var(--accent);font:inherit;cursor:pointer}
+.link:disabled{opacity:.5;cursor:default}
 </style>
 <div class=wrap>
   <h1>Wi-Fi Setup</h1>
   <p class=sub>Choose a network for the remote to join.</p>
   <div class=card id=list><div style="padding:14px 12px;color:var(--dim)">Scanning…</div></div>
+  <div class=actions>
+    <button type=button class=link id=rescan>Rescan</button>
+    <button type=button class=link id=manual>Other network…</button>
+  </div>
   <form id=f>
+    <label for=ssidin id=ssidlab hidden>Network name</label>
+    <input id=ssidin hidden autocomplete=off placeholder="Network name">
     <label for=psk>Password for <b id=chosen></b></label>
     <input id=psk type=password autocomplete=off placeholder="Leave blank if open">
     <button class=go id=go type=submit>Connect</button>
@@ -44,10 +54,13 @@ code{background:#10131a;padding:1px 5px;border-radius:4px;font-size:12px}
   <details id=sshbox>
     <summary>Enable SSH access</summary>
     <p class=sub style="margin:12px 0 0">
-      Paste a public key (<code>~/.ssh/id_ed25519.pub</code>). You will need to
+      Set a root password, or paste a public key. Either way you will need to
       press a button on the remote to approve it.
     </p>
-    <label for=key>Public key</label>
+    <label for=pw>Root password</label>
+    <input id=pw type=password autocomplete=off placeholder="At least 8 characters">
+    <button class=go id=setpw type=button>Set password</button>
+    <label for=key style="margin-top:20px">Public key (<code>~/.ssh/id_ed25519.pub</code>)</label>
     <input id=key placeholder="ssh-ed25519 AAAA...">
     <button class=go id=enroll type=button>Enrol key</button>
     <div id=smsg></div>
@@ -56,11 +69,25 @@ code{background:#10131a;padding:1px 5px;border-radius:4px;font-size:12px}
 <script>
 const list = document.getElementById('list'), form = document.getElementById('f');
 const chosen = document.getElementById('chosen'), msg = document.getElementById('msg');
+const rescanBtn = document.getElementById('rescan'), manualBtn = document.getElementById('manual');
+const ssidin = document.getElementById('ssidin'), ssidlab = document.getElementById('ssidlab');
 let ssid = '';
 
-function scan() {
-  fetch('/cgi-bin/scan').then(r => r.json()).then(nets => {
-    if (!nets.length) { list.innerHTML = '<div style="padding:14px 12px;color:var(--dim)">No networks found.</div>'; return; }
+function pick(name) {
+  ssid = name; chosen.textContent = name || 'this network';
+  form.classList.add('show');
+}
+
+// live=1 makes the remote scan again now; the cached list is what portal.sh
+// captured before the radio switched to AP mode.
+function scan(live) {
+  list.innerHTML = '<div style="padding:14px 12px;color:var(--dim)">Scanning…</div>';
+  return fetch('/cgi-bin/scan' + (live ? '?live=1' : '')).then(r => r.json()).then(nets => {
+    if (!nets.length) {
+      list.innerHTML = '<div style="padding:14px 12px;color:var(--dim)">' +
+        'No networks found. Try Rescan, or add one with “Other network…”.</div>';
+      return;
+    }
     list.innerHTML = '';
     nets.forEach(n => {
       const b = document.createElement('button');
@@ -69,17 +96,32 @@ function scan() {
       b.firstChild.textContent = n.ssid;
       b.lastChild.textContent = (n.secure ? '🔒 ' : '') + n.signal + ' dBm';
       b.onclick = () => {
-        ssid = n.ssid; chosen.textContent = n.ssid;
-        form.classList.add('show'); document.getElementById('psk').focus();
+        ssidin.hidden = ssidlab.hidden = true;
+        pick(n.ssid); document.getElementById('psk').focus();
       };
       list.appendChild(b);
     });
   }).catch(() => { list.innerHTML = '<div style="padding:14px 12px" class=err>Scan failed.</div>'; });
 }
 
+rescanBtn.onclick = () => {
+  rescanBtn.disabled = true;
+  // A live rescan takes a few seconds on the remote before it answers.
+  scan(true).catch(() => {}).then(() => { rescanBtn.disabled = false; });
+};
+
+// Hidden SSIDs never appear in a scan, and a weak one may not appear reliably.
+manualBtn.onclick = () => {
+  ssidin.hidden = ssidlab.hidden = false;
+  pick(ssidin.value.trim());
+  ssidin.focus();
+};
+ssidin.oninput = () => pick(ssidin.value.trim());
+
 form.onsubmit = e => {
   e.preventDefault();
   const go = document.getElementById('go');
+  if (!ssid) { msg.className = 'err'; msg.textContent = 'Pick a network first.'; return; }
   go.disabled = true; msg.className = ''; msg.textContent = 'Connecting…';
   fetch('/cgi-bin/save', {
     method: 'POST',
@@ -98,23 +140,33 @@ form.onsubmit = e => {
     msg.textContent = 'Remote is switching networks. You can reconnect to your Wi-Fi.';
   });
 };
-document.getElementById('enroll').onclick = () => {
-  const b = document.getElementById('enroll'), sm = document.getElementById('smsg');
-  const key = document.getElementById('key').value.trim();
-  if (!key) { sm.className = 'err'; sm.textContent = 'Paste a public key first.'; return; }
-  b.disabled = true; sm.className = ''; sm.textContent = 'Press a button on the remote to approve…';
-  fetch('/cgi-bin/enroll', {
+// Both SSH credentials follow the same path: post it, then wait while someone
+// presses a button on the remote to approve it.
+function sshRequest(btn, url, field, input, missing) {
+  const sm = document.getElementById('smsg'), val = input.value.trim();
+  if (!val) { sm.className = 'err'; sm.textContent = missing; return; }
+  btn.disabled = true; sm.className = '';
+  sm.textContent = 'Press a button on the remote to approve\u2026';
+  fetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: 'key=' + encodeURIComponent(key)
+    body: field + '=' + encodeURIComponent(val)
   }).then(r => r.text()).then(t => {
     const ok = t.indexOf('OK') === 0;
     sm.className = ok ? 'ok' : 'err';
     sm.textContent = t.replace(/^(OK|ERR)/, '').trim();
-    b.disabled = false;
+    if (ok) input.value = '';
+    btn.disabled = false;
   }).catch(() => {
-    sm.className = 'err'; sm.textContent = 'Request failed.'; b.disabled = false;
+    sm.className = 'err'; sm.textContent = 'Request failed.'; btn.disabled = false;
   });
-};
-scan();
+}
+
+document.getElementById('enroll').onclick = e =>
+  sshRequest(e.target, '/cgi-bin/enroll', 'key',
+             document.getElementById('key'), 'Paste a public key first.');
+document.getElementById('setpw').onclick = e =>
+  sshRequest(e.target, '/cgi-bin/setpw', 'pw',
+             document.getElementById('pw'), 'Enter a password first.');
+scan(false);
 </script>
