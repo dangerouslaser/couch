@@ -227,6 +227,32 @@ MT6580 defconfigs, and this device's exact config is in the backup as
 device nodes, while keeping the WiFi driver that only exists downstream. It
 needs a gcc-4.9-era ARM cross toolchain, which Docker can supply.
 
+### Why the rebuild is blocked
+
+Rebuilding from public source does not work for this board, and it is worth
+knowing before spending a day on a toolchain. Three drivers this device needs are
+absent from every public MT6580 tree checked
+([Mysteryagr](https://github.com/Mysteryagr/MT6580-Kernel-3.18),
+[parthibx24/k80](https://github.com/parthibx24/android_kernel_mediatek_k80),
+[LCM-MTK](https://github.com/LCM-MTK/android_kernel_mediatek_mt6580)):
+
+| needed | status |
+| --- | --- |
+| `CONFIG_MTK_IRTX_PWM_SUPPORT` (IR transmit) | `irtx/` has only Kconfig and Makefile in all three trees; the Makefile pulls `irtx/$(CONFIG_MTK_PLATFORM)/`, and `irtx/mt6580/` does not exist |
+| `st7701s_wvga_dsi_vdo_boe_tn_tianxian` (panel) | absent; 42 other panels present |
+| `tlsc6x` (touchscreen) | absent; ektf2k / ft5x0x / ft6336 present |
+
+IR is compiled in rather than built as a module, so it cannot be lifted out of
+the stock kernel either. A kernel built from these trees would boot with no
+display, no touch and no IR - which is the entire device.
+
+The unblock is a GPL source request. A kernel panic leaked the vendor's build
+path, `/home/felix/ha100fw/alps/out/target/product/x15cm_s90_kr/...`, so
+Sanytron build from a full MediaTek ALPS tree and distribute a GPL-2.0 kernel;
+they are obliged to provide its source, which would be the exact tree including
+all three drivers. Ask for the kernel source corresponding to the shipped build
+(`3.18.79 #7`, `RS30_HAOS_HA100_V1.0.4`).
+
 Mainline is a different road: [u-boot-mt6580](https://github.com/predefine-mt6580/u-boot-mt6580)
 has active MT6580 work (clocks, eMMC, display PWM), but `mt76` does not cover
 MT6580's in-SoC CONSYS, so a mainline kernel means no WiFi at all.
