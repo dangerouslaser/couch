@@ -57,8 +57,11 @@ c.chardev("dev/ttyMT1",  204, 210)
 c.chardev("dev/ttyMT2",  204, 211)  # WMT STP transport
 c.chardev("dev/fb0",     29,  0)
 c.chardev("dev/irtx",    243, 0)
-c.blockdev("dev/mmcblk0p9",  179, 9)    # recovery: our own scratch log area
+c.blockdev("dev/mmcblk0p8",  179, 8)    # boot: the slot Couch runs from, so a
+                                        # running Couch can reflash itself
+c.blockdev("dev/mmcblk0p9",  179, 9)    # recovery: Android, the fallback
 c.blockdev("dev/mmcblk0p10", 179, 10)   # para: the BCB we must clear
+c.blockdev("dev/mmcblk0p11", 179, 11)   # logo: the bootloader splash
 c.blockdev("dev/mmcblk0p13", 179, 13)   # expdb: marker and log scratch
 c.blockdev("dev/mmcblk0p14", 179, 14)   # vendor: MTK modules, firmware, wpa_supplicant
 c.blockdev("dev/mmcblk0p21", 179, 21)   # system: bionic + the dynamic linker
