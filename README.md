@@ -179,6 +179,58 @@ image **contains no authorised keys at all**, so a fresh device trusts nobody.
 Because a radio cannot scan while in AP mode, the network list is captured just
 before switching and cached for the portal to serve.
 
+## Reading the vendor source
+
+`pwr_on fail(-3)` is not a mystery once you have the source. MediaTek's MT6580
+kernel tree is public ([Mysteryagr/MT6580-Kernel-3.18](https://github.com/Mysteryagr/MT6580-Kernel-3.18),
+180MB) and contains the exact driver our binary module was built from -
+`connectivity/wlan/gen2/common/{wlan_lib,wlan_oid,wlan_p2p,wlan_bow}.c` matches
+the paths embedded in `wlan_drv.ko`, and `connectivity/common/conn_soc` is the
+SoC-connectivity variant the vendor ships as `common_main`.
+
+In `conn_soc/core/wmt_core.c`, the ops lookup is a switch on the chip id:
+
+```c
+    case 0x6580:
+        p_ops = &wmt_ic_ops_soc;
+        break;
+    default:
+        p_ops = (P_WMT_IC_OPS) NULL;
+    }
+    if (NULL == p_ops) {
+        WMT_ERR_FUNC("unsupported chip id (hw_code): 0x%x\n", chipid);
+        return -3;
+    }
+```
+
+So **-3 means "unsupported chip id"**: 0x6580 *is* supported, and the failure is
+that the driver had no valid chip id when power-on ran. That is also the earlier
+`gMtkWmtCtx.p_ic_ops is NULL` line - the same cause seen from the other end.
+
+`wmt_loader` hands the id over by ioctl on `/dev/wmtdetect`; a working run shows
+
+```
+ioctl(_IOC_READ,  0x77, 0x3) = 25984     # 0x6580, read from hardware
+ioctl(_IOC_WRITE, 0x77, 0x1, 0x6580) = 0 # handed to the driver
+```
+
+Anything that stops the loader reaching those ioctls leaves the driver with no
+chip id and power-on fails with -3 - which is why restoring Android's property
+area before the loader breaks WiFi (see above): the loader sees
+`persist.mtk.wcn.combo.chipid` already set, assumes detection happened, and
+exits without ever opening `/dev/wmtdetect`.
+
+Having the source also makes a **rebuild** attractive: the tree includes four
+MT6580 defconfigs, and this device's exact config is in the backup as
+`config-stock.txt` (3867 lines). Rebuilding the vendor 3.18 kernel with
+`CONFIG_VT` and `CONFIG_DEVTMPFS` enabled would retire fbcon and the hand-made
+device nodes, while keeping the WiFi driver that only exists downstream. It
+needs a gcc-4.9-era ARM cross toolchain, which Docker can supply.
+
+Mainline is a different road: [u-boot-mt6580](https://github.com/predefine-mt6580/u-boot-mt6580)
+has active MT6580 work (clocks, eMMC, display PWM), but `mt76` does not cover
+MT6580's in-SoC CONSYS, so a mainline kernel means no WiFi at all.
+
 ## Distribution
 
 The image is meant to be reusable, so it carries nothing device- or
