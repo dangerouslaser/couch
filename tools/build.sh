@@ -17,10 +17,20 @@ mkdir -p build
       https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv7l
 }
 
+# On-screen console. This kernel has no CONFIG_VT, so without this a boot is silent.
+NDK="${NDK:-$HOME/Library/Android/sdk/ndk/29.0.14206865}"
+CC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang"
+if [ ! -f build/fbcon ] && [ -x "$CC" ]; then
+    echo "building fbcon..."
+    "$CC" -static -Os -o build/fbcon src/fbcon.c
+    "$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip" build/fbcon
+fi
+
 rm -rf build/tree
 mkdir -p build/tree/extra
 cp initramfs/init build/tree/init
 cp build/busybox-armv7l build/tree/busybox
+[ -f build/fbcon ] && cp build/fbcon build/tree/extra/fbcon
 # Anything staged in initramfs/extra/ ships inside the image (modules, firmware).
 [ -d initramfs/extra ] && cp -R initramfs/extra/. build/tree/extra/ 2>/dev/null || true
 

@@ -57,5 +57,12 @@ c.chardev("dev/fb0",     29,  0)
 c.chardev("dev/irtx",    243, 0)
 c.blockdev("dev/mmcblk0p9",  179, 9)    # recovery: our own scratch log area
 c.blockdev("dev/mmcblk0p10", 179, 10)   # para: the BCB we must clear
+c.blockdev("dev/mmcblk0p14", 179, 14)   # vendor: MTK modules, firmware, wpa_supplicant
+c.blockdev("dev/mmcblk0p21", 179, 21)   # system: bionic + the dynamic linker
+c.blockdev("dev/mmcblk0p22", 179, 22)   # cache: future Alpine rootfs
+c.blockdev("dev/mmcblk0p23", 179, 23)   # userdata: stored wifi credentials
+c.chardev("dev/urandom", 1, 9, 0o666)
+c.chardev("dev/random",  1, 8, 0o666)
+c.chardev("dev/zero",    1, 5, 0o666)
 open(OUT, "wb").write(c.finish())
 print("cpio:", OUT, os.path.getsize(OUT), "bytes")

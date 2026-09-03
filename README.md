@@ -77,15 +77,52 @@ this kernel offers.
 | Input | `mt_gpio_kpd`, `mtk-kpd` (buttons), `mtk-tpd` (touchscreen) |
 | IR | `/dev/irtx`, `mt_irtx` driver loaded |
 | Watchdog | kicked by kernel threads `wdtk-0..3`; userspace need not |
-| WiFi | not yet up — see below |
+| WiFi | **parked** — see below |
+| Userland | Alpine 3.21.7 armv7 on the cache partition, with working `apk` |
+
+## The Alpine userland
+
+Alpine armv7 lives on the `cache` partition and is installed *from Android* over adb,
+which is far faster than pushing it down a serial line and needs no network at all:
+
+```sh
+adb shell 'umount /cache; mke2fs -t ext4 -b 4096 -L alpine -F /dev/block/mmcblk0p22'
+adb shell 'mkdir -p /data/local/tmp/alp && mount -t ext4 /dev/block/mmcblk0p22 /data/local/tmp/alp'
+adb push alpine-minirootfs-3.21.7-armv7.tar.gz /data/local/tmp/alpine.tgz
+adb shell 'cd /data/local/tmp/alp && /data/local/tmp/busybox tar xzf /data/local/tmp/alpine.tgz'
+```
+
+Use busybox's `tar`, not Android's toybox, so symlinks and permissions survive.
+
+init chroots into it rather than `switch_root`-ing into OpenRC, because OpenRC expects
+a devtmpfs this kernel does not have. The initramfs stays PID 1 and supervises.
+
+## WiFi: why it is parked
+
+Everything needed is on the device — `/vendor/lib/modules/wlan_drv.ko`,
+`wmt_chrdev_wifi.ko`, `wmt_drv.ko`, firmware `WIFI_RAM_CODE_6580`, and
+`/vendor/bin/hw/wpa_supplicant` — but the bring-up chain fights back:
+
+* `wmt_loader` talks to `/dev/stpwmt`, which `wmt_drv` registers asynchronously.
+  Run it too early and it exits 2 with an empty log, which is easy to misread as
+  the chip being absent.
+* It also reads Android properties (`persist.mtk.wcn.combo.chipid` = `0x6580`).
+  With no property area every read returns empty. Restoring a snapshot of
+  `/dev/__properties__` fixes that — and is useful for every other vendor binary.
+* Once it gets *partway*, writing `/dev/wmtWifi` panics the kernel:
+  `osal_lock_sleepable_lock` -> `__list_add` on a mutex whose list head is NULL,
+  then `emergency_restart`. The device hard-resets.
+
+`WIFI=1` at the top of `initramfs/init` re-enables the attempt. It is guarded: it
+checks the loader's exit code and greps dmesg for `pwr_on fail` / `p_ic_ops is NULL`
+and refuses rather than panicking.
 
 ## Roadmap
 
-1. **WiFi.** Everything needed is already on the device: `/vendor/lib/modules/
-   wlan_drv.ko` (+ `wmt_chrdev_wifi.ko`, `wmt_drv.ko`), firmware `WIFI_RAM_CODE_6580`
-   and `WMT_SOC.cfg`, and `/vendor/bin/hw/wpa_supplicant`. Unlocks SSH and `apk`.
-2. **Alpine rootfs** on the `cache` partition (112MB, expendable).
-3. **Move to the `boot` slot** once it is trustworthy.
+1. ~~Alpine rootfs~~ — done.
+2. **Move to the `boot` slot**, putting Android's boot image into `recovery` so lk's
+   menu still reaches it.
+3. WiFi, when the vendor chain is worth another round.
 
 The remote's existing control app is Android/Kotlin, so replacing Android outright
 means rewriting that UI against the raw framebuffer and evdev.
