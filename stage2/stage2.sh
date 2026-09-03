@@ -211,6 +211,11 @@ if [ -x "$GUI" ]; then
         $BB sleep 2
       done ) &
     echo "= couch-gui started"
+    # The GUI owns the panel from here, so the rest of the boot narration goes
+    # to the log instead of on top of it. fbcon cannot be relied on to stop by
+    # itself: stage1 resolves $FBCON before /mnt/alpine is mounted, so it always
+    # runs the copy baked into the initramfs, not the one we can update here.
+    exec >>/tmp/stage2.log 2>&1
 else
     echo "= no couch-gui at $GUI"
 fi

@@ -723,6 +723,20 @@ int main(void)
      * survives on top of the UI instead of being covered by the splash. */
     close(open("/tmp/couch.gui", O_WRONLY | O_CREAT | O_TRUNC, 0644));
 
+    /* Then clear the panel ourselves. LVGL invalidates only what it drew - for
+     * the splash, the rows holding one centred icon - so the boot log survived
+     * everywhere else and the splash appeared to float on top of it. Paint the
+     * background over the whole framebuffer once, in the panel's own channel
+     * order (low byte red), so the handover is clean whatever LVGL redraws. */
+    {
+        uint32_t bg = 0xFF000000u
+                    | ((C_BACKGROUND & 0x0000FFu) << 16)   /* blue  -> high  */
+                    | (C_BACKGROUND & 0x00FF00u)           /* green stays     */
+                    | ((C_BACKGROUND >> 16) & 0x0000FFu);  /* red   -> low   */
+        uint32_t *p = (uint32_t *)fb_map;
+        for (size_t i = 0; i < fb_bytes / 4; i++) p[i] = bg;
+    }
+
     show_splash(group);
     /* LV_EVENT_KEY fires on the focused object, so a callback on the screen
      * never sees anything - the screen is not focusable. */

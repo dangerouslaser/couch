@@ -7,6 +7,11 @@
  *
  * Scrolls by moving the framebuffer up one text row and drawing only the new
  * line, rather than repainting 1.5MB per line.
+ *
+ * Quiet by default: a user booting an appliance should see a logo, not a wall
+ * of shell narration. The log is still produced and still reaches the serial
+ * console and the offline markers, it is simply not painted. Pass -v, or drop
+ * a "verbose" file next to the bundle on the rootfs, to watch a boot.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 #include "font.h"
+#include "logo.h"
 
 #define CW 8
 #define CH 16
@@ -25,6 +31,7 @@ static unsigned char *shadow;    /* what we draw into */
 static int W, H, bpp, stride, fblen, shlen;
 static int cols, rows, cur;
 static int fbfd;
+static int quiet = 1;   /* appliance boot: silent unless asked */
 
 /* mtkfb composites ARGB8888: a pixel with alpha 0 is fully transparent, so it
  * reads back correctly from /dev/fb0 and is never visible on the panel.
@@ -101,10 +108,29 @@ static void flip(void)
     if (b >= 0) { write(b, "255\n", 4); close(b); }
 }
 
+/* The same artwork couch-gui shows, drawn from an alpha bitmap so it can be
+ * composited over the background at any brightness. Centred, because there is
+ * nothing else on the screen to align to. */
+static void draw_logo(unsigned int bg)
+{
+    int ox = (W - LOGO_W) / 2, oy = (H - LOGO_H) / 2;
+    for (int y = 0; y < LOGO_H; y++) {
+        for (int x = 0; x < LOGO_W; x++) {
+            int a = logo_a8[y * LOGO_W + x];
+            if (!a) continue;
+            /* Blend white over the background by the icon's own alpha. */
+            int r = ((bg & 0xff) * (255 - a) + 250 * a) / 255;
+            int g = (((bg >> 8) & 0xff) * (255 - a) + 250 * a) / 255;
+            int b = (((bg >> 16) & 0xff) * (255 - a) + 250 * a) / 255;
+            put_px(ox + x, oy + y, 0xFF000000u | (b << 16) | (g << 8) | r);
+        }
+    }
+}
+
 static void draw_line(const char *s)
 {
     /* A leading marker tints the line so failures stand out at a glance. */
-    unsigned int fg = rgb(0xd0, 0xd8, 0xe0), bg = rgb(0x0a, 0x0c, 0x12);
+    unsigned int fg = rgb(0xd0, 0xd8, 0xe0), bg = rgb(0x09, 0x09, 0x0b);
     if (strstr(s, "FAIL") || strstr(s, "ERROR") || strstr(s, "MISSING"))
         fg = rgb(0xff, 0x6b, 0x6b);
     else if (strstr(s, "ok") || strstr(s, "OK") || strstr(s, "up"))
@@ -121,7 +147,12 @@ static void draw_line(const char *s)
 
 int main(int argc, char **argv)
 {
-    const char *dev = argc > 1 ? argv[1] : "/dev/fb0";
+    const char *dev = "/dev/fb0";
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-v"))      quiet = 0;
+        else if (!strcmp(argv[i], "-q")) quiet = 1;
+        else                             dev = argv[i];
+    }
     int fd = open(dev, O_RDWR);
     if (fd < 0) { perror("open fb"); return 1; }
 
@@ -140,7 +171,9 @@ int main(int argc, char **argv)
     shadow = malloc(shlen);
     if (!shadow) { perror("malloc"); return 1; }
 
-    unsigned int bg = rgb(0x0a, 0x0c, 0x12);
+    /* couch-gui's background, so the handover from this to the GUI is not a
+     * visible colour change. */
+    unsigned int bg = rgb(0x09, 0x09, 0x0b);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) put_px(x, y, bg);
 
     FILE *g = fopen("/tmp/fbcon.geom", "w");
@@ -156,22 +189,27 @@ int main(int argc, char **argv)
         fclose(g);
     }
 
-    char banner[128];
-    snprintf(banner, sizeof banner, "== HA100 Linux %dx%d %dbpp %dx%d ==",
-             W, H, bpp, cols, rows);
-    draw_line(banner);
+    if (quiet) {
+        draw_logo(bg);
+    } else {
+        char banner[128];
+        snprintf(banner, sizeof banner, "== HA100 Linux %dx%d %dbpp %dx%d ==",
+                 W, H, bpp, cols, rows);
+        draw_line(banner);
+    }
     flip();
 
     char line[512];
     int muted = 0;
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\r\n")] = 0;
-        /* Once couch-gui has the panel, keep draining stdin - init writes into
-         * this pipe and would block if nobody read it - but stop painting. The
-         * GUI repaints only the areas it knows changed, so anything drawn here
-         * afterwards sits on top of it and stays there. */
+        /* Keep draining stdin whatever happens: init writes into this pipe and
+         * would block if nobody read it. Painting is the part that stops -
+         * either because we were never meant to paint, or because couch-gui has
+         * taken the panel. It repaints only what it knows changed, so anything
+         * drawn here afterwards sits on top of it and stays. */
         if (!muted && access("/tmp/couch.gui", F_OK) == 0) muted = 1;
-        if (muted) continue;
+        if (quiet || muted) continue;
         draw_line(line);
         flip();
     }
