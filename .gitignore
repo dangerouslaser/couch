@@ -8,3 +8,7 @@ build/
 busybox-armv7l
 firmware/*.bin
 firmware/*.img
+gui/couch-gui
+gui/evdump
+gui/fbprobe
+src/font_8x16.c
