@@ -27,7 +27,17 @@ for i in $ICONS; do
     rsvg-convert -w "$SZ" -h "$SZ" -o "$PNG/$i.png" "$PNG/$i.svg"
     rm -f "$PNG/$i.svg"
 done
-echo "rasterised $(ls "$PNG"/*.png 2>/dev/null | wc -l | tr -d ' ') icons at ${SZ}px"
+# The splash needs one icon much larger than the UI set.
+SPLASH="sofa"
+SPLASH_SZ=${SPLASH_SIZE:-112}
+for i in $SPLASH; do
+    [ -f "$SVG/$i.svg" ] || curl -sfL -o "$SVG/$i.svg" "$BASE/$i.svg" || continue
+    sed 's/currentColor/#ffffff/g' "$SVG/$i.svg" > "$PNG/$i-big.svg"
+    rsvg-convert -w "$SPLASH_SZ" -h "$SPLASH_SZ" -o "$PNG/${i}_lg.png" "$PNG/$i-big.svg"
+    rm -f "$PNG/$i-big.svg"
+done
+
+echo "rasterised $(ls "$PNG"/*.png 2>/dev/null | wc -l | tr -d ' ') icons (${SZ}px, splash ${SPLASH_SZ}px)"
 
 # LVGL's own LVGLImage.py needs pypng; Pillow is already present, so convert
 # directly rather than adding a dependency.

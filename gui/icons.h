@@ -18,6 +18,7 @@ extern const lv_image_dsc_t icon_power;
 extern const lv_image_dsc_t icon_settings;
 extern const lv_image_dsc_t icon_skip_back;
 extern const lv_image_dsc_t icon_skip_forward;
+extern const lv_image_dsc_t icon_sofa_lg;
 extern const lv_image_dsc_t icon_speaker;
 extern const lv_image_dsc_t icon_square;
 extern const lv_image_dsc_t icon_sun;

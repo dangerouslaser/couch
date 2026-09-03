@@ -313,6 +313,141 @@ static int keypad_poll(lv_group_t *group)
     return got;
 }
 
+/* Boot splash: a pulsing sofa while the rest of the system settles.
+ *
+ * fbcon owns the panel until this point, so the log is what you see during
+ * boot; couch-gui takes the screen over as soon as it starts. */
+static void splash_opa(void *obj, int32_t v)
+{
+    lv_obj_set_style_image_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+static void build_ui(lv_group_t *group);
+
+/* ---- setup screen -------------------------------------------------------
+ * Shown instead of the room UI when the remote has no network of its own yet.
+ * The QR carries a "WIFI:" join record, which phone cameras act on directly,
+ * so nobody has to read an SSID off a 3.1" panel and type it in. Joining the
+ * open setup network then trips the captive portal, which is where the user
+ * picks the network the remote should actually live on. */
+#define QR_PX   288
+#define QR_PAD   16
+
+/* Setup mode is a file, not an environment variable, so that it can be turned
+ * off while the remote is running: stage2 supervises couch-gui in a restart
+ * loop whose environment is fixed at boot, so an env flag could never be
+ * cleared without killing the supervisor too. join.sh removes this marker and
+ * restarts the GUI once the remote is on a real network. */
+static int in_setup_mode(void)
+{
+    return getenv("COUCH_SETUP") != NULL || access("/tmp/couch.setup", F_OK) == 0;
+}
+
+static const char *setup_ssid(void)
+{
+    static char buf[64];
+    const char *s = getenv("COUCH_SETUP_SSID");
+    if (s && *s) return s;
+
+    FILE *f = fopen("/tmp/portal.ssid", "r");
+    if (f) {
+        char *got = fgets(buf, sizeof buf, f);
+        fclose(f);
+        if (got) {
+            buf[strcspn(buf, "\r\n")] = 0;
+            if (buf[0]) return buf;
+        }
+    }
+    return "Couch-Setup";
+}
+
+static void setup_line(lv_obj_t *scr, const char *label, const char *value,
+                       const lv_font_t *font, int y)
+{
+    lv_obj_t *l = couch_muted(scr, label);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_t *v = lv_label_create(scr);
+    lv_label_set_text(v, value);
+    lv_obj_set_style_text_color(v, lv_color_hex(C_FOREGROUND), 0);
+    lv_obj_set_style_text_font(v, font, 0);
+    lv_obj_align(v, LV_ALIGN_TOP_MID, 0, y + 26);
+}
+
+static void build_setup_ui(void)
+{
+    couch_theme_init();
+    lv_obj_t *scr = lv_screen_active();
+
+    lv_obj_t *h = couch_h1(scr, "Wi-Fi Setup");
+    lv_obj_align(h, LV_ALIGN_TOP_MID, 0, 28);
+
+    lv_obj_t *sub = couch_muted(scr, "Scan with your phone camera");
+    lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 68);
+
+    /* A QR only scans reliably against a light quiet zone, so this one card
+     * stays white in an otherwise near-black theme. */
+    lv_obj_t *card = lv_obj_create(scr);
+    lv_obj_remove_style_all(card);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(card, QR_PX + 2 * QR_PAD, QR_PX + 2 * QR_PAD);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, R_LG, 0);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 108);
+
+    /* T:nopass because the setup network is open, so the scan joins outright
+     * instead of prompting for a passphrase nobody has. */
+    char join[160];
+    snprintf(join, sizeof join, "WIFI:S:%s;T:nopass;;", setup_ssid());
+
+    lv_obj_t *qr = lv_qrcode_create(card);
+    lv_qrcode_set_size(qr, QR_PX);
+    lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
+    lv_qrcode_set_light_color(qr, lv_color_hex(0xFFFFFF));
+    if (lv_qrcode_update(qr, join, strlen(join)) != LV_RESULT_OK)
+        fprintf(stderr, "qrcode: could not encode \"%s\"\n", join);
+    lv_obj_center(qr);
+
+    /* Everything the QR encodes, spelled out for a phone that will not scan
+     * it - an older camera app, or a reader that ignores WIFI: records. */
+    setup_line(scr, "Network - no password", setup_ssid(),
+               &lv_font_montserrat_28, 468);
+    setup_line(scr, "Then open", "http://192.168.4.1",
+               &lv_font_montserrat_20, 556);
+}
+
+static void splash_done(lv_timer_t *t)
+{
+    lv_group_t *group = lv_timer_get_user_data(t);
+    lv_anim_delete_all();
+    lv_obj_clean(lv_screen_active());
+    if (in_setup_mode()) build_setup_ui();
+    else                 build_ui(group);
+}
+
+static void show_splash(lv_group_t *group)
+{
+    couch_theme_init();
+    lv_obj_t *im = lv_image_create(lv_screen_active());
+    lv_image_set_src(im, &icon_sofa_lg);
+    lv_obj_set_style_image_recolor(im, lv_color_hex(C_FOREGROUND), 0);
+    lv_obj_set_style_image_recolor_opa(im, LV_OPA_COVER, 0);
+    lv_obj_center(im);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, im);
+    lv_anim_set_exec_cb(&a, splash_opa);
+    lv_anim_set_values(&a, LV_OPA_40, LV_OPA_COVER);
+    lv_anim_set_duration(&a, 800);
+    lv_anim_set_playback_duration(&a, 800);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+
+    lv_timer_t *t = lv_timer_create(splash_done, 2400, group);
+    lv_timer_set_repeat_count(t, 1);
+}
+
 static void build_ui(lv_group_t *group)
 {
     couch_theme_init();
@@ -435,7 +570,7 @@ int main(void)
     keypad_open("/dev/input/event2");   /* mtk-kpd     */
     printf("couch-gui: %d keypad device(s)\n", kpd_n);
 
-    build_ui(group);
+    show_splash(group);
     /* LV_EVENT_KEY fires on the focused object, so a callback on the screen
      * never sees anything - the screen is not focusable. */
     lv_group_set_focus_cb(group, focus_changed);
