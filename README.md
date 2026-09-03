@@ -155,6 +155,39 @@ Five things had to be right, and four of them fail silently:
 Credentials are read from Android's own store on the device at runtime, so they
 never live in this repo or the boot image. userdata is **f2fs**, not ext4.
 
+### The SELinux context files are not optional
+
+Couch carries MediaTek's blobs so it does not need Android's partitions. Getting
+that to work needed one non-obvious file set: `plat_property_contexts` and
+`nonplat_property_contexts` under `/system/etc/selinux` and
+`/vendor/etc/selinux`.
+
+bionic's property system maps property names to SELinux contexts using them.
+Without them property access misbehaves, and `wmt_launcher` sits in a 300ms
+`nanosleep` poll loop and never issues its STP-mode ioctl. The kernel then
+reports
+
+```
+stp_init(717): WMT-CORE: no hif info!
+stp_init fail (-1)
+stp_deinit: gMtkWmtCtx.p_ic_ops is NULL
+opfunc_func_on: func(3) pwr_on fail(-3)
+```
+
+which is misleading twice over: `p_ic_ops is NULL` is a consequence of the
+failed init, not the cause, and the `-3` is `opfunc_pwr_on` failing - not the
+"unsupported chip id" `-3` returned by the ops lookup in the same driver. The
+chip id handover works fine; `SET_CHIP_ID` with `0x6580` lands, as
+`cmd (1074034433),arg(25984)` in dmesg confirms.
+
+With the six context files in the bundle: `HIF info added`, `STP mode success!`,
+and `wlan0` appears. A clean boot reaches an address in ~35s.
+
+Trap worth naming: the vendor `wmt_launcher` writes nothing to stdout and only
+logs to Android's logd, so it looks healthy while doing nothing. `strace` is
+what shows the poll loop - borrow Android's from `/system/xbin/strace` by
+mounting `mmcblk0p21` read-only at a side path, leaving the bundle under test.
+
 Writing `/dev/wmtWifi` while the chip is half-initialised panics the kernel in
 `wmt_drv` (`__list_add` on an uninitialised mutex) and hard-resets the device.
 Get the order right and it is fine.

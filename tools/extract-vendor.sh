@@ -23,10 +23,17 @@ VENDOR_FILES="lib/modules/wmt_drv.ko lib/modules/wmt_chrdev_wifi.ko lib/modules/
 # The whole firmware directory, not a hand-picked subset. It is only ~6MB, and
 # picking files by name left the chip failing to power up ("pwr_on fail(-3)")
 # because the patch set the launcher downloads is not obvious from filenames.
-VENDOR_DIRS="firmware"
+# etc/selinux carries nonplat_property_contexts. bionic's property system needs
+# it to map property names to SELinux contexts; without it wmt_launcher spins in
+# a 300ms poll loop and never issues the STP-mode ioctl, so stp_init reports
+# "no hif info!" and chip power-on fails with -3.
+VENDOR_DIRS="firmware etc/selinux"
 # The MTK binaries are bionic, so they need Android's linker and libc, at their
 # real paths - PT_INTERP is baked in as /system/bin/linker.
-SYSTEM_FILES="xbin/strace bin/linker lib/libc.so lib/libm.so lib/libdl.so lib/libc++.so \
+# Same reason as vendor/etc/selinux: plat_property_contexts is required for
+# property access to work at all. ld.config.txt keeps the linker quiet.
+SYSTEM_DIRS="etc/selinux"
+SYSTEM_FILES="etc/ld.config.txt xbin/strace bin/linker lib/libc.so lib/libm.so lib/libdl.so lib/libc++.so \
               lib/liblog.so lib/libcutils.so lib/libbacktrace.so lib/libunwind.so \
               lib/libutils.so lib/libnetd_client.so lib/libbase.so lib/liblzma.so"
 
@@ -61,8 +68,15 @@ elif $ADB shell true >/dev/null 2>&1; then
         if $ADB pull "/vendor/$f" "$OUT/vendor/$f" >/dev/null 2>&1; then ok=$((ok+1));
         else echo "  missing vendor/$f"; fi
     done
+    for d in $SYSTEM_DIRS; do
+        $ADB shell "mkdir -p /dev/null" >/dev/null 2>&1
+        mkdir -p "$OUT/system/$(dirname "$d")"
+        $ADB pull "/system/$d" "$OUT/system/$d" >/dev/null 2>&1 \
+            && ok=$((ok+1)) || echo "  missing system/$d/"
+    done
     for d in $VENDOR_DIRS; do
-        $ADB pull "/vendor/$d" "$OUT/vendor/" >/dev/null 2>&1 \
+        mkdir -p "$OUT/vendor/$(dirname "$d")"
+        $ADB pull "/vendor/$d" "$OUT/vendor/$d" >/dev/null 2>&1 \
             && ok=$((ok + $(ls "$OUT/vendor/$d" | wc -l | tr -d " "))) \
             || echo "  missing vendor/$d/"
     done
