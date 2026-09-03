@@ -127,10 +127,14 @@ static lv_obj_t *make_row(lv_obj_t *parent, const char *icon, const char *name,
     lv_obj_set_style_radius(row, 10, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_pad_hor(row, 12, 0);
-    /* Focus must snap, not ease: the default theme's 80ms fade is ~7 rendered
-     * frames per keypress and reads as input lag on a remote. That is disabled
-     * via LV_THEME_DEFAULT_TRANSITION_TIME in lv_conf.h - setting a NULL
-     * transition descriptor here instead crashes LVGL during build_ui. */
+    /* The focus fade is back on (LV_THEME_DEFAULT_TRANSITION_TIME in lv_conf.h).
+     * It renders ~7 frames per press, but a frame costs ~124us, so the cost is
+     * the 80ms settle rather than any real work. The sluggishness blamed on it
+     * was actually the keypad driver: debounce-delay-ms = 50 plus
+     * linux,no-autorepeat.
+     *
+     * Note: do not disable it with lv_obj_set_style_transition(obj, NULL, ...) -
+     * a NULL descriptor crashes LVGL during build_ui. */
 
     lv_obj_t *l = lv_label_create(row);
     lv_label_set_text_fmt(l, "%s  %s", icon, name);
