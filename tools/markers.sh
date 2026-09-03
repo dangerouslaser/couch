@@ -3,8 +3,7 @@
 # of the recovery partition. This is the debug channel when USB gives us nothing.
 cd "$(dirname "$0")/.."
 . tools/env.sh
-$ADB root >/dev/null 2>&1 || true
-sleep 2; $ADB wait-for-device
+sh "$(dirname "$0")/wait-adb.sh" 60 || exit 1
 echo "=== stage markers ==="
 i=0
 while [ $i -le 12 ]; do

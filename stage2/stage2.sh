@@ -14,9 +14,23 @@ mark() { $BB echo "$2" | $BB dd of=$LOG bs=512 seek=$1 count=1 conv=notrunc 2>/d
 echo "= stage2 running from $(dirname "$0")"
 [ -e /dev/mmcblk0p13 ] || $BB mknod /dev/mmcblk0p13 b 179 13 2>/dev/null
 
+# MediaTek's connectivity blobs. Couch ships its own copies so it does not
+# depend on Android still being installed: mounting Android's /system and
+# /vendor works only until someone flashes over them, and then WiFi disappears
+# and takes the setup portal with it. Android's partitions are used only as a
+# fallback for a device that still has them.
 $BB mkdir -p /system /vendor /dev/__properties__ /usr/share/udhcpc
-$BB mount -t ext4 -o ro /dev/mmcblk0p21 /system 2>/dev/null
-$BB mount -t ext4 -o ro /dev/mmcblk0p14 /vendor 2>/dev/null
+BUNDLE="$(dirname "$0")"
+if [ -d "$BUNDLE/vendor/lib/modules" ]; then
+    $BB mount -o bind "$BUNDLE/vendor" /vendor 2>/dev/null
+    $BB mount -o bind "$BUNDLE/system" /system 2>/dev/null
+    VSRC=bundled
+else
+    $BB mount -t ext4 -o ro /dev/mmcblk0p21 /system 2>/dev/null
+    $BB mount -t ext4 -o ro /dev/mmcblk0p14 /vendor 2>/dev/null
+    VSRC=android-partitions
+fi
+echo "= vendor blobs: $VSRC"
 $BB mount -t tmpfs tmpfs /dev/__properties__ 2>/dev/null
 ( cd /dev/__properties__ && $BB tar xzf /extra/props.tar.gz 2>/dev/null )
 echo "= /system $([ -x /system/bin/linker ] && echo ok || echo FAIL)  /vendor $([ -d /vendor/lib/modules ] && echo ok || echo FAIL)  props $($BB ls /dev/__properties__ | $BB wc -l)"

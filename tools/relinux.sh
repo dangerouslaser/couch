@@ -19,15 +19,5 @@ else
     python3 tools/sercmd.py 'printf "boot-recovery" | dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1
 fi
 echo "rebooting straight back into Linux..."
-sleep 22
-i=0
-while [ $i -lt 30 ]; do
-    if ls /dev/cu.usbmodem* >/dev/null 2>&1; then
-        sleep 2
-        python3 tools/sercmd.py 'touch /tmp/stay; echo CLAIMED'
-        exit 0
-    fi
-    sleep 2; i=$((i+1))
-done
-echo "did not come back; check the screen or use tools/markers.sh from Android"
-exit 1
+sh "$(dirname "$0")/wait-shell.sh" 90 || exit 1
+python3 tools/sercmd.py 'touch /tmp/stay; echo CLAIMED'

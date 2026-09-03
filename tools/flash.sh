@@ -5,8 +5,7 @@ cd "$(dirname "$0")/.."
 . tools/env.sh
 BB=/data/local/tmp/busybox
 
-$ADB root >/dev/null 2>&1 || true
-sleep 2; $ADB wait-for-device
+sh "$(dirname "$0")/wait-adb.sh" 60 || exit 1
 
 # Android's toybox dd has conv= disabled; push busybox once and use that instead.
 $ADB shell "[ -x $BB ]" 2>/dev/null || {

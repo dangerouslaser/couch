@@ -9,8 +9,7 @@ cd "$(dirname "$0")/.."
 BB=/data/local/tmp/busybox
 mkdir -p "$BACKUP_DIR"
 
-$ADB root >/dev/null 2>&1 || true
-sleep 2; $ADB wait-for-device
+sh "$(dirname "$0")/wait-adb.sh" 60 || exit 1
 $ADB shell "[ -x $BB ]" 2>/dev/null || {
     curl -sL -o /tmp/bb https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv7l
     $ADB push /tmp/bb $BB >/dev/null; $ADB shell "chmod 755 $BB"

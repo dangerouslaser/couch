@@ -28,8 +28,7 @@ for f in "$ANDROID_BOOT" "$LINUX_IMG"; do
 done
 echo "verified: both images carry the ANDROID! magic"
 
-$ADB root >/dev/null 2>&1 || true
-sleep 2; $ADB wait-for-device
+sh "$(dirname "$0")/wait-adb.sh" 60 || exit 1
 $ADB shell "[ -x $BB ]" 2>/dev/null || { $ADB push build/busybox-armv7l $BB >/dev/null; $ADB shell "chmod 755 $BB"; }
 
 echo "writing Android's boot.img -> recovery ..."
