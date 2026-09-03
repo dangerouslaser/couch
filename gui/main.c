@@ -103,24 +103,11 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
         const size_t off = (size_t)y1 * stride;
         const size_t len = (size_t)(y2 - y1 + 1) * stride;
 
-        /* Two fixes in the pass we already make, so they cost nothing extra:
-         *
-         * 1. Alpha. LVGL leaves the alpha byte clear and mtkfb composites
-         *    ARGB8888, so an untouched frame is fully transparent.
-         * 2. Channel order. The panel reads the low byte as red - it wants
-         *    ABGR while LVGL renders ARGB. Verified with labelled bars: a
-         *    stored 0xffff0000 (pure red) displays blue. Note fb_var_screeninfo
-         *    reports red=0/8 blue=16/8, which is the same claim, but I got this
-         *    backwards once by trusting a washed-out grey to tell me - only a
-         *    saturated test pattern settles it. */
-        uint32_t *px = (uint32_t *)(px_map + off);
-        for (size_t i = 0; i < len / 4; i++) {
-            uint32_t v = px[i];
-            px[i] = 0xFF000000u | ((v & 0x0000FFu) << 16)
-                                | (v & 0x00FF00u)
-                                | ((v >> 16) & 0x0000FFu);
-        }
-
+        /* Just a copy now. The channel swap moved to couch_rgb(), applied
+         * once per colour instead of once per pixel per frame, and alpha is
+         * pre-set in ram_buf: with XRGB8888 an opaque fill writes 0xff itself
+         * (lv_color_to_u32) and a blended edge writes only three bytes, so the
+         * byte we set at startup survives. */
         struct timespec a, b;
         clock_gettime(CLOCK_MONOTONIC, &a);
         memcpy(fb_map + off, px_map + off, len);
@@ -182,7 +169,7 @@ static void battery_tick(lv_timer_t *t)
                               : cap >= 35  ? &icon_battery_medium
                                            : &icon_battery_low);
     lv_obj_set_style_image_recolor(batt_icon,
-        lv_color_hex(!charging && cap <= 15 ? C_DESTRUCTIVE : C_MUTED_FOREGROUND), 0);
+        couch_rgb(!charging && cap <= 15 ? C_DESTRUCTIVE : C_MUTED_FOREGROUND), 0);
     lv_label_set_text_fmt(batt_lbl, "%d%%", cap);
     lv_obj_remove_flag(batt_lbl, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(batt_icon, LV_OBJ_FLAG_HIDDEN);
@@ -433,7 +420,7 @@ static void setup_line(lv_obj_t *scr, const char *label, const char *value,
     lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
     lv_obj_t *v = lv_label_create(scr);
     lv_label_set_text(v, value);
-    lv_obj_set_style_text_color(v, lv_color_hex(C_FOREGROUND), 0);
+    lv_obj_set_style_text_color(v, couch_rgb(C_FOREGROUND), 0);
     lv_obj_set_style_text_font(v, font, 0);
     lv_obj_align(v, LV_ALIGN_TOP_MID, 0, y + 26);
 }
@@ -499,7 +486,7 @@ static void build_setup_ui(void)
     lv_obj_remove_style_all(card);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(card, QR_PX + 2 * QR_PAD, QR_PX + 2 * QR_PAD);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(card, couch_rgb(0xFFFFFF), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(card, R_LG, 0);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 108);
@@ -511,8 +498,8 @@ static void build_setup_ui(void)
 
     lv_obj_t *qr = lv_qrcode_create(card);
     lv_qrcode_set_size(qr, QR_PX);
-    lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
-    lv_qrcode_set_light_color(qr, lv_color_hex(0xFFFFFF));
+    lv_qrcode_set_dark_color(qr, couch_rgb(0x000000));
+    lv_qrcode_set_light_color(qr, couch_rgb(0xFFFFFF));
     if (lv_qrcode_update(qr, join, strlen(join)) != LV_RESULT_OK)
         fprintf(stderr, "qrcode: could not encode \"%s\"\n", join);
     lv_obj_center(qr);
@@ -530,7 +517,7 @@ static void build_setup_ui(void)
     lv_obj_remove_style_all(approve_card);
     lv_obj_remove_flag(approve_card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(approve_card, 432, 116);
-    lv_obj_set_style_bg_color(approve_card, lv_color_hex(C_PRIMARY), 0);
+    lv_obj_set_style_bg_color(approve_card, couch_rgb(C_PRIMARY), 0);
     lv_obj_set_style_bg_opa(approve_card, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(approve_card, R_LG, 0);
     lv_obj_align(approve_card, LV_ALIGN_BOTTOM_MID, 0, -28);
@@ -538,7 +525,7 @@ static void build_setup_ui(void)
 
     approve_text = lv_label_create(approve_card);
     lv_label_set_text(approve_text, "");
-    lv_obj_set_style_text_color(approve_text, lv_color_hex(C_PRIMARY_FG), 0);
+    lv_obj_set_style_text_color(approve_text, couch_rgb(C_PRIMARY_FG), 0);
     lv_obj_set_style_text_font(approve_text, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(approve_text, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(approve_text);
@@ -546,13 +533,121 @@ static void build_setup_ui(void)
     lv_timer_create(approve_tick, 400, NULL);
 }
 
+/* ---- stress mode --------------------------------------------------------
+ * Two full pages on a track that slides the whole screen, so every frame is a
+ * complete repaint rather than one dirty row. That is the case a toolkit
+ * comparison actually turns on: moving a focus ring dirties 60 rows of pixels,
+ * a page transition dirties all 800. Enabled with COUCH_STRESS. */
+static void stress_x(void *obj, int32_t v) { lv_obj_set_x((lv_obj_t *)obj, v); }
+
+static void stress_page(lv_obj_t *track, int idx)
+{
+    static const char *heads[] = { "Living Room", "Kitchen" };
+    static const char *names[] = { "Watch TV", "All Lights", "Ceiling Only", "Roller Blind" };
+    static const char *vals[]  = { "", "off", "off", "open" };
+    int sel = idx ? 2 : 0;
+
+    lv_obj_t *page = lv_obj_create(track);
+    lv_obj_remove_style_all(page);
+    lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(page, 480, 800);
+    lv_obj_set_pos(page, idx * 480, 0);
+    lv_obj_set_style_bg_color(page, couch_rgb(C_BACKGROUND), 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+
+    lv_obj_t *h = couch_h1(page, heads[idx]);
+    lv_obj_set_pos(h, 16, 16);
+
+    lv_obj_t *ck = lv_label_create(page);
+    lv_label_set_text(ck, "100%  9:31 PM");
+    lv_obj_set_style_text_color(ck, couch_rgb(C_MUTED_FOREGROUND), 0);
+    lv_obj_set_style_text_font(ck, &lv_font_montserrat_20, 0);
+    lv_obj_align(ck, LV_ALIGN_TOP_RIGHT, -16, 24);
+
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *row = lv_obj_create(page);
+        lv_obj_remove_style_all(row);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(row, 448, 60);
+        lv_obj_set_pos(row, 16, 88 + i * 68);
+        lv_obj_set_style_radius(row, R_LG, 0);
+        if (i == sel) {
+            lv_obj_set_style_bg_color(row, couch_rgb(C_MUTED), 0);
+            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(row, 3, 0);   /* RING_W, which is private to theme.c */
+            lv_obj_set_style_border_color(row, couch_rgb(C_RING), 0);
+        }
+        lv_obj_t *t = lv_label_create(row);
+        lv_label_set_text(t, names[i]);
+        lv_obj_set_style_text_color(t, couch_rgb(C_FOREGROUND), 0);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+        lv_obj_align(t, LV_ALIGN_LEFT_MID, 20, 0);
+        if (vals[i][0]) {
+            lv_obj_t *v = lv_label_create(row);
+            lv_label_set_text(v, vals[i]);
+            lv_obj_set_style_text_color(v, couch_rgb(C_MUTED_FOREGROUND), 0);
+            lv_obj_set_style_text_font(v, &lv_font_montserrat_14, 0);
+            lv_obj_align(v, LV_ALIGN_RIGHT_MID, -20, 0);
+        }
+    }
+
+    lv_obj_t *b1 = couch_button(page, BTN_DEFAULT, "All Off");
+    lv_obj_set_size(b1, 216, 60);
+    lv_obj_set_pos(b1, 16, 720);
+    lv_obj_t *b2 = couch_button(page, BTN_OUTLINE, "Scenes");
+    lv_obj_set_size(b2, 216, 60);
+    lv_obj_set_pos(b2, 248, 720);
+}
+
+static void build_stress_ui(void)
+{
+    couch_theme_init();
+    lv_obj_t *track = lv_obj_create(lv_screen_active());
+    lv_obj_remove_style_all(track);
+    lv_obj_remove_flag(track, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(track, 960, 800);
+    lv_obj_set_pos(track, 0, 0);
+    stress_page(track, 0);
+    stress_page(track, 1);
+
+    /* 400ms each way with a 100ms pause, matching the spike's driver so the
+     * frames being averaged cover the same motion. */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, track);
+    lv_anim_set_exec_cb(&a, stress_x);
+    lv_anim_set_values(&a, 0, -480);
+    lv_anim_set_duration(&a, 400);
+    lv_anim_set_playback_duration(&a, 400);
+    lv_anim_set_repeat_delay(&a, 100);
+    lv_anim_set_playback_delay(&a, 100);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+    printf("couch-gui: stress mode, full-screen transitions\n");
+}
+
+/* COUCH_NAV walks the focus ring on a timer, so the small-dirty-region case is
+ * measurable without someone sitting there pressing buttons - and identically
+ * on both builds. */
+static void nav_tick(lv_timer_t *t)
+{
+    lv_group_focus_next((lv_group_t *)lv_timer_get_user_data(t));
+}
+
 static void splash_done(lv_timer_t *t)
 {
     lv_group_t *group = lv_timer_get_user_data(t);
     lv_anim_delete_all();
     lv_obj_clean(lv_screen_active());
-    if (in_setup_mode()) build_setup_ui();
-    else                 build_ui(group);
+    if (getenv("COUCH_STRESS")) {
+        build_stress_ui();
+    } else if (in_setup_mode()) {
+        build_setup_ui();
+    } else {
+        build_ui(group);
+        if (getenv("COUCH_NAV")) lv_timer_create(nav_tick, 250, group);
+    }
 }
 
 static void show_splash(lv_group_t *group)
@@ -560,7 +655,7 @@ static void show_splash(lv_group_t *group)
     couch_theme_init();
     lv_obj_t *im = lv_image_create(lv_screen_active());
     lv_image_set_src(im, &icon_sofa_lg);
-    lv_obj_set_style_image_recolor(im, lv_color_hex(C_FOREGROUND), 0);
+    lv_obj_set_style_image_recolor(im, couch_rgb(C_FOREGROUND), 0);
     lv_obj_set_style_image_recolor_opa(im, LV_OPA_COVER, 0);
     lv_obj_center(im);
 
@@ -591,11 +686,11 @@ static void build_ui(lv_group_t *group)
             lv_obj_remove_style_all(bar);
             lv_obj_set_size(bar, 140, 80);
             lv_obj_set_pos(bar, i * 148, 0);
-            lv_obj_set_style_bg_color(bar, lv_color_hex(probe[i]), 0);
+            lv_obj_set_style_bg_color(bar, couch_rgb(probe[i]), 0);
             lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
             lv_obj_t *t = lv_label_create(bar);
             lv_label_set_text(t, pname[i]);
-            lv_obj_set_style_text_color(t, lv_color_hex(0x000000), 0);
+            lv_obj_set_style_text_color(t, couch_rgb(0x000000), 0);
             lv_obj_center(t);
         }
     }
@@ -628,12 +723,12 @@ static void build_ui(lv_group_t *group)
 
     batt_lbl = lv_label_create(statusbar);
     lv_label_set_text(batt_lbl, "");
-    lv_obj_set_style_text_color(batt_lbl, lv_color_hex(C_MUTED_FOREGROUND), 0);
+    lv_obj_set_style_text_color(batt_lbl, couch_rgb(C_MUTED_FOREGROUND), 0);
     lv_obj_set_style_text_font(batt_lbl, &lv_font_montserrat_20, 0);
 
     clock_lbl = lv_label_create(statusbar);
     lv_label_set_text(clock_lbl, "--:--");
-    lv_obj_set_style_text_color(clock_lbl, lv_color_hex(C_MUTED_FOREGROUND), 0);
+    lv_obj_set_style_text_color(clock_lbl, couch_rgb(C_MUTED_FOREGROUND), 0);
     lv_obj_set_style_text_font(clock_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_pad_left(clock_lbl, 9, 0);
 
@@ -713,10 +808,15 @@ int main(void)
 
     ram_buf = malloc(fb_bytes);          /* cached: drawing here is far faster */
     if (!ram_buf) { perror("malloc"); return 1; }
+    /* mtkfb composites, so a pixel with alpha 0 is invisible. Set it once. */
+    memset(ram_buf, 0xFF, fb_bytes);
     printf("couch-gui: drawing in RAM, copying dirty rows to the visible page (no ioctl)\n");
 
     lv_display_t *disp = lv_display_create(scr_w, scr_h);
-    lv_display_set_color_format(disp, LV_COLOR_FORMAT_ARGB8888);
+    /* XRGB8888, not ARGB8888: the blend path for XRGB writes three colour
+     * bytes and leaves the fourth alone, which is what lets the alpha we set
+     * below stand for the life of the buffer. */
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_XRGB8888);
     lv_display_set_buffers(disp, ram_buf, NULL, fb_bytes, LV_DISPLAY_RENDER_MODE_DIRECT);
     lv_display_set_flush_cb(disp, flush_cb);
 

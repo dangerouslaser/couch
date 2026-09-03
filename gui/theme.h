@@ -45,6 +45,22 @@ typedef enum {
     BTN_DESTRUCTIVE,
 } couch_btn_variant_t;
 
+/* The panel reads the low byte as red (fb_var_screeninfo: red=0/8) while LVGL
+ * lays out a 32-bit pixel as B,G,R,X in memory. Rather than walk every pixel of
+ * every frame swapping them - which cost more than the memcpy that followed it,
+ * and was invisible in the flush timing because it happened before the clock
+ * started - swap the two channels once, here, when a colour is created.
+ * Blending is per-channel and linear, so consistently swapped inputs produce
+ * correctly swapped output.
+ *
+ * Use this instead of lv_color_hex() everywhere in this app. */
+static inline lv_color_t couch_rgb(uint32_t hex)
+{
+    return lv_color_make((uint8_t)(hex & 0xff),           /* blue  -> red slot  */
+                         (uint8_t)((hex >> 8) & 0xff),
+                         (uint8_t)((hex >> 16) & 0xff));  /* red   -> blue slot */
+}
+
 void      couch_theme_init(void);
 lv_obj_t *couch_screen(void);
 lv_obj_t *couch_card(lv_obj_t *parent);

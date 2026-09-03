@@ -163,6 +163,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new().map_err(|e| format!("App::new: {e:?}"))?;
     app.set_clock(SharedString::from("9:31 PM"));
     app.set_battery(SharedString::from("100%"));
+
+    // COUCH_STRESS drives a full-screen slide between two pages, which forces
+    // a complete repaint every frame instead of one dirty row - the case where
+    // a 3x per-frame difference stops being academic.
+    let stress = std::env::var("COUCH_STRESS").is_ok();
+    app.set_stress(stress);
+    if stress {
+        println!("slint-fb: stress mode, full-screen transitions");
+    }
     app.show().map_err(|e| format!("show: {e:?}"))?;
 
     let mut ram = vec![Abgr::default(); (w * h) as usize];
@@ -175,6 +184,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const REPEAT_DELAY_MS: u64 = 400;
     const REPEAT_RATE_MS: u64 = 70;
     let (mut held, mut held_since, mut last_repeat) = (0u16, 0u64, 0u64);
+
+    let (mut flip_at, mut flipped) = (now_us() + 500_000, false);
+    // COUCH_NAV walks the focus ring on a timer, so the small-dirty-region case
+    // is measurable without someone pressing buttons, identically on both.
+    let nav = std::env::var("COUCH_NAV").is_ok();
+    let (mut nav_at, mut nav_sel) = (now_us() + 250_000, 0i32);
+    if nav { println!("slint-fb: nav mode, timed focus moves"); }
 
     let (mut frames, mut render_us, mut copy_us) = (0u64, 0u64, 0u64);
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
@@ -215,25 +231,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             window.dispatch_event(WindowEvent::KeyReleased { text });
         }
 
+        // Toggle the track every 500ms; the 400ms animation on `off` does the
+        // rest, leaving a short pause so each transition is measured cleanly.
+        if stress && now_us() >= flip_at {
+            flipped = !flipped;
+            app.set_off(if flipped { -480.0 } else { 0.0 });
+            flip_at = now_us() + 500_000;
+        }
+
+        if nav && now_us() >= nav_at {
+            nav_sel = (nav_sel + 1) % 6;
+            app.set_sel(nav_sel);
+            nav_at = now_us() + 250_000;
+        }
+
         slint::platform::update_timers_and_animations();
 
         let t0 = now_us();
         let drawn = window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut ram, w as usize);
             let t1 = now_us();
-            // Copy only what changed, row by row, exactly like couch-gui.
-            let (rx, ry) = (region.bounding_box_origin().x.max(0) as u32,
-                            region.bounding_box_origin().y.max(0) as u32);
-            let size = region.bounding_box_size();
-            let (rw, rh) = (size.width, size.height);
-            for y in ry..(ry + rh).min(h) {
-                let src = (y * w + rx) as usize;
-                let dst = (y * (stride / 4) + rx) as usize;
-                let n = (rw.min(w - rx)) as usize;
-                let s = unsafe {
-                    std::slice::from_raw_parts(ram.as_ptr().add(src) as *const u32, n)
-                };
-                fb_px[dst..dst + n].copy_from_slice(s);
+            // Copy the region's actual rectangles, not its bounding box. They
+            // do not overlap, and the difference is large: moving focus from
+            // the last button back to the first row dirties two small strips
+            // at opposite ends of the screen, whose bounding box is very nearly
+            // the whole panel.
+            for (pos, size) in region.iter() {
+                let (rx, ry) = (pos.x.max(0) as u32, pos.y.max(0) as u32);
+                let (rw, rh) = (size.width, size.height);
+                for y in ry..(ry + rh).min(h) {
+                    let src = (y * w + rx) as usize;
+                    let dst = (y * (stride / 4) + rx) as usize;
+                    let n = (rw.min(w.saturating_sub(rx))) as usize;
+                    if n == 0 { continue; }
+                    let sl = unsafe {
+                        std::slice::from_raw_parts(ram.as_ptr().add(src) as *const u32, n)
+                    };
+                    fb_px[dst..dst + n].copy_from_slice(sl);
+                }
             }
             render_us += t1 - t0;
             copy_us += now_us() - t1;

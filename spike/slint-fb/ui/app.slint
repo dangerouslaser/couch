@@ -2,14 +2,15 @@
 // measures the same work: same tokens, same row height, same focus treatment.
 struct Row { title: string, value: string }
 
-export component App inherits Window {
+component Page inherits Rectangle {
+    in property <string> heading;
+    in property <int> sel;
+    in property <string> clock: "";
+    in property <string> battery: "";
+
     width: 480px;
     height: 800px;
     background: #09090b;                    // C_BACKGROUND
-
-    in-out property <int> sel: 0;
-    in-out property <string> clock: "--:--";
-    in-out property <string> battery: "";
 
     property <[Row]> rows: [
         { title: "Watch TV",     value: "" },
@@ -18,18 +19,9 @@ export component App inherits Window {
         { title: "Roller Blind", value: "open" },
     ];
 
-    fs := FocusScope {
-        key-pressed(e) => {
-            if (e.text == Key.UpArrow)   { root.sel = max(0, root.sel - 1); return accept; }
-            if (e.text == Key.DownArrow) { root.sel = min(5, root.sel + 1); return accept; }
-            return reject;
-        }
-    }
-    init => { fs.focus(); }
-
     Text {
         x: 16px; y: 16px;
-        text: "Living Room";
+        text: root.heading;
         font-size: 28px;
         color: #fafafa;                     // C_FOREGROUND
     }
@@ -52,27 +44,26 @@ export component App inherits Window {
         border-color: #d4d4d8;                               // C_RING
 
         Text {
-            x: 20px;
+            x: 20px; height: parent.height;
             vertical-alignment: center;
-            height: parent.height;
             text: row.title;
             font-size: 20px;
             color: #fafafa;
         }
         Text {
-            x: parent.width - 100px; width: 80px;
+            x: parent.width - 100px; width: 80px; height: parent.height;
             horizontal-alignment: right;
             vertical-alignment: center;
-            height: parent.height;
             text: row.value;
             font-size: 14px;
             color: #a1a1aa;
         }
     }
 
-    // The two footer buttons, including the white primary that made the focus
-    // ring hard to see in the C version.
-    Rectangle {                                              // ring, outside
+    // A Rectangle's border draws inside the shape, so on the white primary
+    // button the ring vanished against its own fill - the trap the C version
+    // hit too, solved there with an outline outside the shape.
+    Rectangle {
         x: 12px; y: 716px; width: 224px; height: 68px;
         border-radius: 15px;
         background: transparent;
@@ -83,9 +74,13 @@ export component App inherits Window {
         x: 16px; y: 720px; width: 216px; height: 60px;
         border-radius: 12px;
         background: #fafafa;                                 // C_PRIMARY
-        Text { text: "All Off"; font-size: 20px; color: #18181b; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+        Text {
+            text: "All Off"; font-size: 20px; color: #18181b;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
     }
-    Rectangle {                                              // ring, outside
+    Rectangle {
         x: 244px; y: 716px; width: 224px; height: 68px;
         border-radius: 15px;
         background: transparent;
@@ -98,6 +93,49 @@ export component App inherits Window {
         background: transparent;
         border-width: 1px;
         border-color: #27272a;                               // C_BORDER
-        Text { text: "Scenes"; font-size: 20px; color: #fafafa; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+        Text {
+            text: "Scenes"; font-size: 20px; color: #fafafa;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}
+
+export component App inherits Window {
+    width: 480px;
+    height: 800px;
+    background: #09090b;
+
+    in-out property <int> sel: 0;
+    in-out property <string> clock: "--:--";
+    in-out property <string> battery: "";
+
+    // Stress mode: two full pages on a track that slides the whole screen, so
+    // every frame is a full-screen redraw rather than one dirty row.
+    in-out property <bool> stress: false;
+    in-out property <length> off: 0px;
+    animate off { duration: 400ms; easing: ease-in-out; }
+
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow)   { root.sel = max(0, root.sel - 1); return accept; }
+            if (e.text == Key.DownArrow) { root.sel = min(5, root.sel + 1); return accept; }
+            return reject;
+        }
+    }
+    init => { fs.focus(); }
+
+    if !root.stress: Page {
+        x: 0px; y: 0px;
+        heading: "Living Room";
+        sel: root.sel;
+        clock: root.clock;
+        battery: root.battery;
+    }
+
+    if root.stress: Rectangle {
+        x: root.off; y: 0px; width: 960px; height: 800px;
+        Page { x: 0px;   heading: "Living Room"; sel: root.sel; clock: root.clock; battery: root.battery; }
+        Page { x: 480px; heading: "Kitchen";     sel: 2;        clock: root.clock; battery: root.battery; }
     }
 }
