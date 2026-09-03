@@ -1,0 +1,22 @@
+#!/bin/sh
+# Reboot straight back into Linux, skipping Android entirely.
+#
+# lk reads the boot-control block at the start of para to decide what to boot,
+# so writing "boot-recovery" there and rebooting lands us back in Linux. init
+# clears the BCB on the way up, so it is a one-shot and a later reboot still
+# returns to Android.
+cd "$(dirname "$0")/.."
+python3 tools/sercmd.py 'printf "boot-recovery" | dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1
+echo "rebooting straight back into Linux..."
+sleep 22
+i=0
+while [ $i -lt 30 ]; do
+    if ls /dev/cu.usbmodem* >/dev/null 2>&1; then
+        sleep 2
+        python3 tools/sercmd.py 'touch /tmp/stay; echo CLAIMED'
+        exit 0
+    fi
+    sleep 2; i=$((i+1))
+done
+echo "did not come back; check the screen or use tools/markers.sh from Android"
+exit 1

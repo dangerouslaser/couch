@@ -21,15 +21,18 @@
 #define CW 8
 #define CH 16
 
-static unsigned char *fb;        /* mapped framebuffer */
 static unsigned char *shadow;    /* what we draw into */
 static int W, H, bpp, stride, fblen, shlen;
 static int cols, rows, cur;
-static int nbuf, curbuf;         /* hardware buffers available, and the live one */
 static int fbfd;
-static struct fb_var_screeninfo var;
 
-static unsigned int rgb(int r, int g, int b) { return (r << 16) | (g << 8) | b; }
+/* mtkfb composites ARGB8888: a pixel with alpha 0 is fully transparent, so it
+ * reads back correctly from /dev/fb0 and is never visible on the panel.
+ *
+ * The channel order is ARGB despite fb_var reporting red=0/8 blue=16/8, which
+ * would imply ABGR. Trusting those offsets renders blue as orange. */
+static unsigned int rgb(int r, int g, int b)
+{ return 0xFF000000u | (r << 16) | (g << 8) | b; }
 
 static void put_px(int x, int y, unsigned int c)
 {
@@ -67,17 +70,29 @@ static void scroll(unsigned int bg)
    panel ignores writes to the buffer it is already showing. */
 static void flip(void)
 {
-    if (nbuf < 2) {            /* no room to flip: write in place and hope */
-        memcpy(fb, shadow, shlen);
-        ioctl(fbfd, FBIOPAN_DISPLAY, &var);
-        return;
+    /* Publish with write(), not mmap.
+     *
+     * mtkfb drives a MIPI command-mode panel: pixels reach the glass only when
+     * the driver pushes a frame. Writes through an mmap never trigger that, so
+     * the buffer ends up holding a perfectly correct image that is never shown -
+     * readable back from /dev/fb0, invisible on the panel. write() does trigger
+     * it, which is why plain dd displayed fine all along. */
+    /* Push in 4096-byte chunks. mtkfb transfers to the panel per write(), so a
+     * single 1.5MB write lands in memory and never reaches the glass - which is
+     * why plain dd displayed and one big write did not. */
+    lseek(fbfd, 0, SEEK_SET);
+    ssize_t left = shlen;
+    const unsigned char *p = shadow;
+    while (left > 0) {
+        ssize_t want = left < 4096 ? left : 4096;
+        ssize_t n = write(fbfd, p, want);
+        if (n <= 0) break;
+        p += n; left -= n;
     }
-    curbuf = (curbuf + 1) % nbuf;
-    memcpy(fb + (long)curbuf * shlen, shadow, shlen);
-    var.xoffset = 0;
-    var.yoffset = curbuf * H;
-    if (ioctl(fbfd, FBIOPAN_DISPLAY, &var) < 0)
-        ioctl(fbfd, FBIOPUT_VSCREENINFO, &var);
+    /* This panel switches its own backlight off when idle, and a dark screen is
+     * indistinguishable from a crashed one. */
+    int b = open("/sys/class/leds/lcd-backlight/brightness", O_WRONLY);
+    if (b >= 0) { write(b, "255\n", 4); close(b); }
 }
 
 static void draw_line(const char *s)
@@ -116,23 +131,28 @@ int main(int argc, char **argv)
 
     fbfd = fd;
     shlen = stride * H;
-    nbuf  = var.yres_virtual / H;
-    if (nbuf < 1) nbuf = 1;
-    if (nbuf > 3) nbuf = 3;
-    fblen = shlen * nbuf;
-
-    fb = mmap(NULL, fblen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (fb == MAP_FAILED) { perror("mmap"); return 1; }
     shadow = malloc(shlen);
     if (!shadow) { perror("malloc"); return 1; }
 
     unsigned int bg = rgb(0x0a, 0x0c, 0x12);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) put_px(x, y, bg);
-    curbuf = 0;
+
+    FILE *g = fopen("/tmp/fbcon.geom", "w");
+    if (g) {
+        fprintf(g, "xres=%u yres=%u xres_virtual=%u yres_virtual=%u\n",
+                var.xres, var.yres, var.xres_virtual, var.yres_virtual);
+        fprintf(g, "bpp=%u line_length=%u smem_len=%u\n",
+                var.bits_per_pixel, fix.line_length, fix.smem_len);
+        fprintf(g, "red=%u/%u green=%u/%u blue=%u/%u transp=%u/%u\n",
+                var.red.offset, var.red.length, var.green.offset, var.green.length,
+                var.blue.offset, var.blue.length, var.transp.offset, var.transp.length);
+        fprintf(g, "cols=%d rows=%d stride_used=%d\n", cols, rows, stride);
+        fclose(g);
+    }
 
     char banner[128];
-    snprintf(banner, sizeof banner, "== HA100 Linux %dx%d %dbpp %dx%d %dbuf ==",
-             W, H, bpp, cols, rows, nbuf);
+    snprintf(banner, sizeof banner, "== HA100 Linux %dx%d %dbpp %dx%d ==",
+             W, H, bpp, cols, rows);
     draw_line(banner);
     flip();
 

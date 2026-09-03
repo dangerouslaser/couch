@@ -49,6 +49,31 @@ python3 tools/sercmd.py 'uname -a'    # run a command on the device
   Escape via lk's boot menu: hold Volume Up at power-on, **Volume Up moves the
   selector, Volume Down selects**, choose `[Normal Boot]`.
 
+## Getting anything onto the screen
+
+There is no `CONFIG_VT`, so no kernel fbcon and no console. `src/fbcon.c` draws
+init's stdout with the kernel's own 8x16 font. Four separate bugs each produce an
+identical blank screen, so fixing them one at a time looks like no progress:
+
+1. **The panel switches its own backlight off when idle.** An early build blinked
+   the backlight as a heartbeat and was accidentally keeping the screen alive.
+   init now re-asserts brightness every 5s, and fbcon does after every frame.
+2. **Alpha.** mtkfb composites ARGB8888. Colours built as `0x00RRGGBB` have alpha
+   0, so they are perfectly correct in memory, readable back from `/dev/fb0`, and
+   completely transparent on the glass.
+3. **Write size.** mtkfb transfers to the panel per `write()`. A single 1.5MB
+   write lands in memory and never reaches the display; 4096-byte chunks do.
+   This is why plain `dd` displayed all along and fbcon never did.
+4. **The font.** Extracting glyphs from `lib/fonts/font_8x16.c` with a naive
+   `0x..` regex also matches the hex inside each per-glyph comment
+   (`/* 65 0x41 'A' */`), shifting every glyph by one byte. Strip comments first,
+   then assert that space is blank before writing the header.
+
+One more trap: `fb_var_screeninfo` reports `red=0/8 green=8/8 blue=16/8`, implying
+ABGR. It is actually ARGB - trust it and blue renders as orange.
+
+`tools/sercmd.py 'cat /tmp/fbcon.geom'` dumps what the driver reported.
+
 ## Four things that will waste your day
 
 1. **No `CONFIG_VT`.** There is no virtual terminal, so `exec >/dev/console` fails and
