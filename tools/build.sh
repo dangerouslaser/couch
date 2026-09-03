@@ -1,0 +1,30 @@
+#!/bin/sh
+# Build a bootable Linux image: stock kernel + our initramfs.
+set -e
+cd "$(dirname "$0")/.."
+. tools/env.sh
+mkdir -p build
+
+[ -f build/kernel.bin ] || {
+    echo "extracting the stock kernel from the backup..."
+    [ -f "$BACKUP_DIR/boot.img" ] || { echo "no $BACKUP_DIR/boot.img - run tools/backup.sh"; exit 1; }
+    python3 tools/bootimg.py unpack "$BACKUP_DIR/boot.img" build
+}
+
+[ -f build/busybox-armv7l ] || {
+    echo "fetching static armv7 busybox..."
+    curl -sL -o build/busybox-armv7l \
+      https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv7l
+}
+
+rm -rf build/tree
+mkdir -p build/tree/extra
+cp initramfs/init build/tree/init
+cp build/busybox-armv7l build/tree/busybox
+# Anything staged in initramfs/extra/ ships inside the image (modules, firmware).
+[ -d initramfs/extra ] && cp -R initramfs/extra/. build/tree/extra/ 2>/dev/null || true
+
+python3 tools/mkcpio.py build/tree build/initramfs.cpio
+gzip -9 -c build/initramfs.cpio > build/initramfs.cpio.gz
+python3 tools/bootimg.py pack build/kernel.bin build/initramfs.cpio.gz \
+    build/linux-recovery.img "$BACKUP_DIR/boot.img"

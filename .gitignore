@@ -1,0 +1,8 @@
+# Device images and dumps live outside the repo (see BACKUP_DIR in tools/env.sh).
+*.img
+*.bin
+*.cpio
+*.cpio.gz
+*.tar.gz
+build/
+busybox-armv7l

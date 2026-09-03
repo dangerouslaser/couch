@@ -1,0 +1,70 @@
+#!/bin/busybox sh
+# Sanytron HA100 (MT6580) - Linux bring-up, stage 3.
+# Stage 2 configured the acm function but f_acm/instances was 0, so the gadget
+# advertised a configuration with no endpoints and the host could never finish
+# enumeration ("cfg 1 speeds:" with nothing after it). Set the port count first.
+#
+# Also: this build reboots itself back to Android after 4 minutes unless a shell
+# claims it with "touch /tmp/stay", so iterating needs no physical power cycle.
+
+BB=/bin/busybox
+LOG=/dev/mmcblk0p9
+BASE=24576
+AUSB=/sys/class/android_usb/android0
+
+mark() { $BB echo "$2" | $BB dd of=$LOG bs=512 seek=$1 count=1 conv=notrunc 2>/dev/null; }
+
+mark $((BASE+0)) "S0 init entered"
+$BB mount -t proc proc /proc  && mark $((BASE+1)) "S1 proc"
+$BB mount -t sysfs sysfs /sys && mark $((BASE+2)) "S2 sysfs"
+$BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
+mark $((BASE+3)) "S3 BCB cleared"
+$BB mount -t tmpfs tmpfs /tmp && mark $((BASE+4)) "S4 tmpfs"
+$BB --install -s /bin        && mark $((BASE+5)) "S5 applets"
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+# Escape hatch: return to Android on our own unless a shell tells us to stay.
+( $BB sleep 240; [ -f /tmp/stay ] || $BB reboot -f ) &
+
+$BB echo 1 > /sys/devices/platform/mt_usb/cmode 2>/dev/null
+$BB echo 0 > $AUSB/enable 2>/dev/null
+
+# THE FIX: give the acm function an actual port before binding it.
+$BB echo 1 > $AUSB/f_acm/instances 2>/dev/null
+mark $((BASE+6)) "S6 acm instances=$($BB cat $AUSB/f_acm/instances 2>/dev/null)"
+
+$BB echo 0e8d > $AUSB/idVendor 2>/dev/null
+$BB echo 201c > $AUSB/idProduct 2>/dev/null
+$BB echo acm  > $AUSB/functions 2>/dev/null
+$BB echo 1    > $AUSB/enable 2>/dev/null
+$BB sleep 6
+mark $((BASE+7)) "S7 fn=$($BB cat $AUSB/functions 2>/dev/null) state=$($BB cat $AUSB/state 2>/dev/null)"
+
+# If the host still has not configured us, fall back through other functions.
+if [ "$($BB cat $AUSB/state 2>/dev/null)" != "CONFIGURED" ]; then
+    for f in gser mass_storage rndis; do
+        $BB echo 0 > $AUSB/enable 2>/dev/null
+        $BB echo $f > $AUSB/functions 2>/dev/null
+        $BB echo 1 > $AUSB/enable 2>/dev/null
+        $BB sleep 5
+        ST=$($BB cat $AUSB/state 2>/dev/null)
+        mark $((BASE+8)) "S8 fallback $f -> $ST"
+        [ "$ST" = "CONFIGURED" ] && break
+    done
+else
+    mark $((BASE+8)) "S8 not needed, acm configured"
+fi
+
+( while true; do $BB sh </dev/ttyGS0 >/dev/ttyGS0 2>&1; $BB sleep 1; done ) &
+mark $((BASE+9)) "S9 shell on ttyGS0, state=$($BB cat $AUSB/state 2>/dev/null)"
+
+$BB sleep 2
+$BB dmesg | $BB dd of=$LOG bs=512 seek=28672 conv=notrunc 2>/dev/null
+mark $((BASE+10)) "S10 dmesg captured"
+
+while true; do
+    $BB echo 0   > /sys/class/leds/lcd-backlight/brightness
+    $BB sleep 1
+    $BB echo 255 > /sys/class/leds/lcd-backlight/brightness
+    $BB sleep 1
+done
