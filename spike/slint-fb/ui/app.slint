@@ -1,0 +1,103 @@
+// A deliberate like-for-like copy of couch-gui's room screen, so the spike
+// measures the same work: same tokens, same row height, same focus treatment.
+struct Row { title: string, value: string }
+
+export component App inherits Window {
+    width: 480px;
+    height: 800px;
+    background: #09090b;                    // C_BACKGROUND
+
+    in-out property <int> sel: 0;
+    in-out property <string> clock: "--:--";
+    in-out property <string> battery: "";
+
+    property <[Row]> rows: [
+        { title: "Watch TV",     value: "" },
+        { title: "All Lights",   value: "off" },
+        { title: "Ceiling Only", value: "off" },
+        { title: "Roller Blind", value: "open" },
+    ];
+
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow)   { root.sel = max(0, root.sel - 1); return accept; }
+            if (e.text == Key.DownArrow) { root.sel = min(5, root.sel + 1); return accept; }
+            return reject;
+        }
+    }
+    init => { fs.focus(); }
+
+    Text {
+        x: 16px; y: 16px;
+        text: "Living Room";
+        font-size: 28px;
+        color: #fafafa;                     // C_FOREGROUND
+    }
+    Text {
+        x: 300px; y: 24px; width: 164px;
+        horizontal-alignment: right;
+        text: root.battery + "  " + root.clock;
+        font-size: 20px;
+        color: #a1a1aa;                     // C_MUTED_FOREGROUND
+    }
+
+    for row[i] in root.rows: Rectangle {
+        x: 16px;
+        y: 88px + i * 68px;
+        width: 448px;
+        height: 60px;
+        border-radius: 12px;                // R_LG
+        background: root.sel == i ? #27272a : transparent;   // C_MUTED
+        border-width: root.sel == i ? 3px : 0px;             // RING_W
+        border-color: #d4d4d8;                               // C_RING
+
+        Text {
+            x: 20px;
+            vertical-alignment: center;
+            height: parent.height;
+            text: row.title;
+            font-size: 20px;
+            color: #fafafa;
+        }
+        Text {
+            x: parent.width - 100px; width: 80px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            height: parent.height;
+            text: row.value;
+            font-size: 14px;
+            color: #a1a1aa;
+        }
+    }
+
+    // The two footer buttons, including the white primary that made the focus
+    // ring hard to see in the C version.
+    Rectangle {                                              // ring, outside
+        x: 12px; y: 716px; width: 224px; height: 68px;
+        border-radius: 15px;
+        background: transparent;
+        border-width: root.sel == 4 ? 3px : 0px;
+        border-color: #d4d4d8;
+    }
+    Rectangle {
+        x: 16px; y: 720px; width: 216px; height: 60px;
+        border-radius: 12px;
+        background: #fafafa;                                 // C_PRIMARY
+        Text { text: "All Off"; font-size: 20px; color: #18181b; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+    }
+    Rectangle {                                              // ring, outside
+        x: 244px; y: 716px; width: 224px; height: 68px;
+        border-radius: 15px;
+        background: transparent;
+        border-width: root.sel == 5 ? 3px : 0px;
+        border-color: #d4d4d8;
+    }
+    Rectangle {
+        x: 248px; y: 720px; width: 216px; height: 60px;
+        border-radius: 12px;
+        background: transparent;
+        border-width: 1px;
+        border-color: #27272a;                               // C_BORDER
+        Text { text: "Scenes"; font-size: 20px; color: #fafafa; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+    }
+}

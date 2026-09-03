@@ -49,6 +49,14 @@ static uint32_t millis(void)
     return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
+/* Microsecond clock, for timing a whole frame rather than just its flush. */
+static uint64_t micros(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
 static void backlight_on(void)
 {
     int fd = open(BACKLIGHT, O_WRONLY);
@@ -66,6 +74,10 @@ static void backlight_on(void)
  * LVGL may call this several times per refresh, so accumulate the dirty row
  * span and push once when the last area arrives. */
 static uint64_t flush_us, flush_n, flush_bytes;
+/* flush_us covers only the copy to the panel. refr_us covers rasterising the
+ * frame as well, which is what a different toolkit would have to be compared
+ * against - quoting the flush alone flatters this renderer enormously. */
+static uint64_t refr_us, refr_n;
 static uint64_t in_lat_us, in_lat_n, in_lat_max;
 static int verbose;   /* COUCH_DEBUG=1: per-key logging, off by default */
 static uint8_t *fb_map;          /* the visible page, mapped */
@@ -755,19 +767,24 @@ int main(void)
     uint32_t last_bl = 0, last_stat = 0;
     for (;;) {
         int had_input = keypad_poll(group);
+        uint64_t frame_t0 = micros();
+        uint64_t flushed_before = flush_n;
         lv_timer_handler();
         /* Render straight away on input instead of waiting for the refresh
          * tick; otherwise every press pays up to a frame of latency. */
         if (had_input) lv_refr_now(NULL);
+        if (flush_n > flushed_before) { refr_us += micros() - frame_t0; refr_n++; }
         usleep(had_input ? 1000 : 5000);
 
         if (millis() - last_stat > 5000 && flush_n) {
-            printf("couch-gui: %llu frames, %llu KB, %llu us/frame | input %llu us avg, %llu us max (n=%llu)\n",
+            printf("couch-gui: %llu frames, %llu KB, %llu us/frame flush, %llu us/frame total | input %llu us avg, %llu us max (n=%llu)\n",
                    (unsigned long long)flush_n, (unsigned long long)(flush_bytes / 1024),
                    (unsigned long long)(flush_us / flush_n),
+                   (unsigned long long)(refr_n ? refr_us / refr_n : 0),
                    (unsigned long long)(in_lat_n ? in_lat_us / in_lat_n : 0),
                    (unsigned long long)in_lat_max, (unsigned long long)in_lat_n);
             flush_us = flush_n = flush_bytes = 0;
+            refr_us = refr_n = 0;
             in_lat_us = in_lat_n = in_lat_max = 0;
             last_stat = millis();
         }

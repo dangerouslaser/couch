@@ -1,0 +1,14 @@
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/thiserror-1a37bd8ff655f777.d: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/build/thiserror-3d3520fe215f13c9/out/private.rs
+
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/libthiserror-1a37bd8ff655f777.rlib: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/build/thiserror-3d3520fe215f13c9/out/private.rs
+
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/libthiserror-1a37bd8ff655f777.rmeta: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/build/thiserror-3d3520fe215f13c9/out/private.rs
+
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs:
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/build/thiserror-3d3520fe215f13c9/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/build/thiserror-3d3520fe215f13c9/out

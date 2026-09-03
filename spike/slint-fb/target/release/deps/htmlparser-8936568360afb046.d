@@ -1,0 +1,11 @@
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/htmlparser-8936568360afb046.d: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/error.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/stream.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/strspan.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/xmlchar.rs
+
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/libhtmlparser-8936568360afb046.rlib: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/error.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/stream.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/strspan.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/xmlchar.rs
+
+/Users/bryanhoban/Projects/couch/spike/slint-fb/target/release/deps/libhtmlparser-8936568360afb046.rmeta: /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/lib.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/error.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/stream.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/strspan.rs /Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/xmlchar.rs
+
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/lib.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/error.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/stream.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/strspan.rs:
+/Users/bryanhoban/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/htmlparser-0.2.1/src/xmlchar.rs:
