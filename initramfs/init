@@ -45,7 +45,7 @@ main() {
     $BB mkdir -p $ALPINE
     if $BB mount -t ext4 /dev/mmcblk0p22 $ALPINE 2>/dev/null && [ -f $ALPINE/etc/alpine-release ]; then
         HAVE_ALPINE=yes
-        $BB mkdir -p $ALPINE/proc $ALPINE/sys $ALPINE/dev $ALPINE/tmp $ALPINE/opt/ha100
+        $BB mkdir -p $ALPINE/proc $ALPINE/sys $ALPINE/dev $ALPINE/tmp $ALPINE/opt/couch
         $BB mount -t proc proc $ALPINE/proc 2>/dev/null
         $BB mount -t sysfs sysfs $ALPINE/sys 2>/dev/null
         $BB mount -o bind /dev $ALPINE/dev 2>/dev/null
@@ -75,7 +75,7 @@ main() {
     mark $((BASE+3)) "S3 shell up"
 
     # --- hand off to the pushable stage -----------------------------------------
-    S2=$ALPINE/opt/ha100/stage2.sh
+    S2=$ALPINE/opt/couch/stage2.sh
     if [ -f "$S2" ]; then
         $BB sh "$S2"
     else
@@ -98,6 +98,6 @@ mark $((BASE+0)) "S0 init entered"
 
 # Prefer a pushed fbcon so the console can be fixed without reflashing.
 FBCON=/extra/fbcon
-[ -x $ALPINE/opt/ha100/fbcon ] && FBCON=$ALPINE/opt/ha100/fbcon
+[ -x $ALPINE/opt/couch/fbcon ] && FBCON=$ALPINE/opt/couch/fbcon
 main 2>&1 | $FBCON /dev/fb0
 while true; do $BB sleep 3600; done

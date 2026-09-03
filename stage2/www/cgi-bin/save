@@ -17,7 +17,7 @@ SSID=$(field ssid)
 PSK=$(field psk)
 [ -n "$SSID" ] || { echo "ERR no network chosen"; exit 0; }
 
-SAVED=/opt/ha100/networks.conf
+SAVED=/opt/couch/networks.conf
 touch $SAVED; chmod 600 $SAVED
 # Replace any previous entry for this network rather than accumulating them.
 awk -v s="$SSID" '
@@ -38,4 +38,4 @@ rm -f $SAVED.tmp
 echo "OK Saved. The remote is joining \"$SSID\" and this setup network will disappear."
 # Hand back to stage2 asynchronously so this response reaches the browser first:
 # switching the radio out of AP mode tears down the connection we replied over.
-( sleep 2; /opt/ha100/join.sh "$SSID" >/tmp/join.log 2>&1 ) &
+( sleep 2; /opt/couch/join.sh "$SSID" >/tmp/join.log 2>&1 ) &

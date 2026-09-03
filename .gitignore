@@ -6,3 +6,5 @@
 *.tar.gz
 build/
 busybox-armv7l
+firmware/*.bin
+firmware/*.img

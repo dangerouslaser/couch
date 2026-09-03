@@ -53,6 +53,8 @@ c.chardev("dev/console", 5,   1)
 c.chardev("dev/tty",     5,   0, 0o666)
 c.chardev("dev/ttyGS0",  233, 0)
 c.chardev("dev/ttyMT0",  204, 209)
+c.chardev("dev/ttyMT1",  204, 210)
+c.chardev("dev/ttyMT2",  204, 211)  # WMT STP transport
 c.chardev("dev/fb0",     29,  0)
 c.chardev("dev/irtx",    243, 0)
 c.blockdev("dev/mmcblk0p9",  179, 9)    # recovery: our own scratch log area

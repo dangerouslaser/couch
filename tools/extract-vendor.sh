@@ -19,12 +19,14 @@ rm -rf $OUT; mkdir -p $OUT/vendor/lib/modules $OUT/vendor/firmware $OUT/vendor/b
 [ -f "$BACKUP_DIR/system.img" ] || { echo "need $BACKUP_DIR/system.img (tools/backup.sh)"; exit 1; }
 
 VENDOR_FILES="lib/modules/wmt_drv.ko lib/modules/wmt_chrdev_wifi.ko lib/modules/wlan_drv.ko \
-              firmware/WIFI_RAM_CODE_6580 firmware/WMT_SOC.cfg \
-              firmware/ROMv2_lm_patch_1_0_hdr.bin firmware/ROMv2_lm_patch_1_1_hdr.bin \
               bin/wmt_loader bin/wmt_launcher"
+# The whole firmware directory, not a hand-picked subset. It is only ~6MB, and
+# picking files by name left the chip failing to power up ("pwr_on fail(-3)")
+# because the patch set the launcher downloads is not obvious from filenames.
+VENDOR_DIRS="firmware"
 # The MTK binaries are bionic, so they need Android's linker and libc, at their
 # real paths - PT_INTERP is baked in as /system/bin/linker.
-SYSTEM_FILES="bin/linker lib/libc.so lib/libm.so lib/libdl.so lib/libc++.so \
+SYSTEM_FILES="xbin/strace bin/linker lib/libc.so lib/libm.so lib/libdl.so lib/libc++.so \
               lib/liblog.so lib/libcutils.so lib/libbacktrace.so lib/libunwind.so \
               lib/libutils.so lib/libnetd_client.so lib/libbase.so lib/liblzma.so"
 
@@ -41,6 +43,10 @@ if docker info >/dev/null 2>&1; then
             debugfs -R "dump /$f /w/'"$OUT"'/vendor/$f" /img/vendor.img >/dev/null 2>&1 \
               && [ -s "/w/'"$OUT"'/vendor/$f" ] && ok=$((ok+1)) || echo "  missing vendor/$f"
         done
+        for d in '"$VENDOR_DIRS"'; do
+            debugfs -R "rdump /$d /w/'"$OUT"'/vendor" /img/vendor.img >/dev/null 2>&1 \
+              && ok=$((ok+1)) || echo "  missing vendor/$d/"
+        done
         for f in '"$SYSTEM_FILES"'; do
             debugfs -R "dump /$f /w/'"$OUT"'/system/$f" /img/system.img >/dev/null 2>&1 \
               && [ -s "/w/'"$OUT"'/system/$f" ] && ok=$((ok+1)) || echo "  optional system/$f absent"
@@ -54,6 +60,11 @@ elif $ADB shell true >/dev/null 2>&1; then
     for f in $VENDOR_FILES; do
         if $ADB pull "/vendor/$f" "$OUT/vendor/$f" >/dev/null 2>&1; then ok=$((ok+1));
         else echo "  missing vendor/$f"; fi
+    done
+    for d in $VENDOR_DIRS; do
+        $ADB pull "/vendor/$d" "$OUT/vendor/" >/dev/null 2>&1 \
+            && ok=$((ok + $(ls "$OUT/vendor/$d" | wc -l | tr -d " "))) \
+            || echo "  missing vendor/$d/"
     done
     for f in $SYSTEM_FILES; do
         $ADB pull "/system/$f" "$OUT/system/$f" >/dev/null 2>&1 && ok=$((ok+1)) \
