@@ -12,3 +12,6 @@ gui/couch-gui
 gui/evdump
 gui/fbprobe
 src/font_8x16.c
+gui/icons/svg/
+gui/icons/png/
+build/fb.raw
