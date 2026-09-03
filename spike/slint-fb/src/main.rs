@@ -189,6 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // COUCH_NAV walks the focus ring on a timer, so the small-dirty-region case
     // is measurable without someone pressing buttons, identically on both.
     let nav = std::env::var("COUCH_NAV").is_ok();
+    let region_debug = std::env::var("COUCH_REGION").is_ok();
     let (mut nav_at, mut nav_sel) = (now_us() + 250_000, 0i32);
     if nav { println!("slint-fb: nav mode, timed focus moves"); }
 
@@ -251,6 +252,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let drawn = window.draw_if_needed(|renderer| {
             let region = renderer.render(&mut ram, w as usize);
             let t1 = now_us();
+            // COUCH_REGION reports what Slint actually marked dirty, which is
+            // the only way to tell a partial-render problem from a copy problem.
+            if region_debug {
+                let (mut n, mut px) = (0u32, 0u64);
+                for (_, sz) in region.iter() { n += 1; px += (sz.width * sz.height) as u64; }
+                println!("slint-fb: region {} rect(s), {} px = {}% of screen",
+                         n, px, px * 100 / (w as u64 * h as u64));
+            }
             // Copy the region's actual rectangles, not its bounding box. They
             // do not overlap, and the difference is large: moving focus from
             // the last button back to the first row dirties two small strips
