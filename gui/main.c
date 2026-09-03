@@ -77,7 +77,7 @@ static uint64_t flush_us, flush_n, flush_bytes;
 /* flush_us covers only the copy to the panel. refr_us covers rasterising the
  * frame as well, which is what a different toolkit would have to be compared
  * against - quoting the flush alone flatters this renderer enormously. */
-static uint64_t refr_us, refr_n;
+static uint64_t refr_us, refr_n, refr_max;
 static uint64_t in_lat_us, in_lat_n, in_lat_max;
 static int verbose;   /* COUCH_DEBUG=1: per-key logging, off by default */
 static uint8_t *fb_map;          /* the visible page, mapped */
@@ -630,6 +630,142 @@ static void build_stress_ui(void)
 /* COUCH_NAV walks the focus ring on a timer, so the small-dirty-region case is
  * measurable without someone sitting there pressing buttons - and identically
  * on both builds. */
+/* ---- media scene --------------------------------------------------------
+ * Full-bleed fanart crossfading behind a scrim, a clearlogo composited with
+ * real alpha, metadata and a transport bar. Unlike the room screen this is
+ * dominated by image blending rather than flat fills, which is the workload a
+ * media remote actually spends its time on. COUCH_MEDIA. */
+extern const uint8_t couch_fanart_a[], couch_fanart_b[], couch_clearlogo[];
+
+#define FANART_DSC(sym) {                      \
+    .header.magic  = LV_IMAGE_HEADER_MAGIC,    \
+    .header.cf     = LV_COLOR_FORMAT_ARGB8888, \
+    .header.w      = 480,                      \
+    .header.h      = 800,                      \
+    .header.stride = 480 * 4,                  \
+    .data_size     = 480 * 800 * 4,            \
+    .data          = (sym),                    \
+}
+static const lv_image_dsc_t img_fanart_a = FANART_DSC(couch_fanart_a);
+static const lv_image_dsc_t img_fanart_b = FANART_DSC(couch_fanart_b);
+static const lv_image_dsc_t img_clearlogo = {
+    .header.magic  = LV_IMAGE_HEADER_MAGIC,
+    .header.cf     = LV_COLOR_FORMAT_ARGB8888,
+    .header.w      = 360,
+    .header.h      = 130,
+    .header.stride = 360 * 4,
+    .data_size     = 360 * 130 * 4,
+    .data          = couch_clearlogo,
+};
+
+static void media_opa(void *o, int32_t v) { lv_obj_set_style_image_opa((lv_obj_t *)o, (lv_opa_t)v, 0); }
+static void media_width(void *o, int32_t v) { lv_obj_set_width((lv_obj_t *)o, v); }
+
+static lv_obj_t *plain_box(lv_obj_t *parent, int x, int y, int w, int h)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_pos(o, x, y);
+    return o;
+}
+
+static lv_obj_t *media_label(lv_obj_t *p, const char *txt, const lv_font_t *f,
+                             uint32_t colour, int x, int y)
+{
+    lv_obj_t *l = lv_label_create(p);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_obj_set_style_text_color(l, couch_rgb(colour), 0);
+    lv_obj_set_pos(l, x, y);
+    return l;
+}
+
+static void build_media_ui(void)
+{
+    couch_theme_init();
+    lv_obj_t *scr = lv_screen_active();
+    /* The theme pads the screen for the room layout; a full-bleed backdrop
+     * must start at the physical corner, not inside that padding. */
+    lv_obj_set_style_pad_all(scr, 0, 0);
+
+    lv_obj_t *back_a = lv_image_create(scr);
+    lv_image_set_src(back_a, &img_fanart_a);
+    lv_obj_set_pos(back_a, 0, 0);
+
+    lv_obj_t *back_b = lv_image_create(scr);
+    lv_image_set_src(back_b, &img_fanart_b);
+    lv_obj_set_pos(back_b, 0, 0);
+    lv_obj_set_style_image_opa(back_b, LV_OPA_TRANSP, 0);
+
+    /* Scrim: a flat 70% black, matching the spike. A gradient would be nicer
+     * but the two must do identical work to be worth comparing. */
+    lv_obj_t *scrim = plain_box(scr, 0, 360, 480, 440);
+    lv_obj_set_style_bg_color(scrim, couch_rgb(0x000000), 0);
+    lv_obj_set_style_bg_opa(scrim, 179, 0);
+
+    lv_obj_t *logo = lv_image_create(scr);
+    lv_image_set_src(logo, &img_clearlogo);
+    lv_obj_set_pos(logo, 60, 430);
+
+    media_label(scr, "The Long Way Home", &lv_font_montserrat_20, C_FOREGROUND, 24, 578);
+    media_label(scr, "2024  -  Drama  -  1h 48m  -  4K HDR", &lv_font_montserrat_14,
+                C_MUTED_FOREGROUND, 24, 612);
+
+    lv_obj_t *track = plain_box(scr, 24, 654, 432, 6);
+    lv_obj_set_style_radius(track, 3, 0);
+    lv_obj_set_style_bg_color(track, couch_rgb(0xffffff), 0);
+    lv_obj_set_style_bg_opa(track, 51, 0);
+
+    lv_obj_t *fill = plain_box(scr, 24, 654, 0, 6);
+    lv_obj_set_style_radius(fill, 3, 0);
+    lv_obj_set_style_bg_color(fill, couch_rgb(0xfafafa), 0);
+    lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
+
+    media_label(scr, "0:42:17", &lv_font_montserrat_14, C_MUTED_FOREGROUND, 24, 668);
+    media_label(scr, "1:48:00", &lv_font_montserrat_14, C_MUTED_FOREGROUND, 380, 668);
+
+    lv_obj_t *hl = plain_box(scr, 60, 706, 108, 64);
+    lv_obj_set_style_radius(hl, 14, 0);
+    lv_obj_set_style_bg_color(hl, couch_rgb(0xffffff), 0);
+    lv_obj_set_style_bg_opa(hl, 31, 0);
+    lv_obj_set_style_border_width(hl, 3, 0);
+    lv_obj_set_style_border_color(hl, couch_rgb(C_RING), 0);
+
+    static const char *keys[] = { "<<", "> ||", ">>" };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *l = media_label(scr, keys[i], &lv_font_montserrat_20, C_FOREGROUND, 0, 0);
+        lv_obj_set_size(l, 108, 64);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(l, 60 + i * 124, 706 + 20);
+    }
+
+    lv_anim_t fade;
+    lv_anim_init(&fade);
+    lv_anim_set_var(&fade, back_b);
+    lv_anim_set_exec_cb(&fade, media_opa);
+    lv_anim_set_values(&fade, 0, 255);
+    lv_anim_set_duration(&fade, 1200);
+    lv_anim_set_playback_duration(&fade, 1200);
+    lv_anim_set_repeat_delay(&fade, 300);
+    lv_anim_set_playback_delay(&fade, 300);
+    lv_anim_set_repeat_count(&fade, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&fade, lv_anim_path_ease_in_out);
+    lv_anim_start(&fade);
+
+    lv_anim_t prog;
+    lv_anim_init(&prog);
+    lv_anim_set_var(&prog, fill);
+    lv_anim_set_exec_cb(&prog, media_width);
+    lv_anim_set_values(&prog, 0, 432);
+    lv_anim_set_duration(&prog, 5000);
+    lv_anim_set_repeat_count(&prog, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&prog);
+
+    printf("couch-gui: media scene, fanart crossfade\n");
+}
+
 static void nav_tick(lv_timer_t *t)
 {
     lv_group_focus_next((lv_group_t *)lv_timer_get_user_data(t));
@@ -640,7 +776,9 @@ static void splash_done(lv_timer_t *t)
     lv_group_t *group = lv_timer_get_user_data(t);
     lv_anim_delete_all();
     lv_obj_clean(lv_screen_active());
-    if (getenv("COUCH_STRESS")) {
+    if (getenv("COUCH_MEDIA")) {
+        build_media_ui();
+    } else if (getenv("COUCH_STRESS")) {
         build_stress_ui();
     } else if (in_setup_mode()) {
         build_setup_ui();
@@ -873,18 +1011,23 @@ int main(void)
         /* Render straight away on input instead of waiting for the refresh
          * tick; otherwise every press pays up to a frame of latency. */
         if (had_input) lv_refr_now(NULL);
-        if (flush_n > flushed_before) { refr_us += micros() - frame_t0; refr_n++; }
+        if (flush_n > flushed_before) {
+            uint64_t d = micros() - frame_t0;
+            refr_us += d; refr_n++;
+            if (d > refr_max) refr_max = d;   /* the crossfade frames hide in the mean */
+        }
         usleep(had_input ? 1000 : 5000);
 
         if (millis() - last_stat > 5000 && flush_n) {
-            printf("couch-gui: %llu frames, %llu KB, %llu us/frame flush, %llu us/frame total | input %llu us avg, %llu us max (n=%llu)\n",
+            printf("couch-gui: %llu frames, %llu KB, %llu us/frame flush, %llu us/frame total, %llu us worst | input %llu us avg, %llu us max (n=%llu)\n",
                    (unsigned long long)flush_n, (unsigned long long)(flush_bytes / 1024),
                    (unsigned long long)(flush_us / flush_n),
                    (unsigned long long)(refr_n ? refr_us / refr_n : 0),
+                   (unsigned long long)refr_max,
                    (unsigned long long)(in_lat_n ? in_lat_us / in_lat_n : 0),
                    (unsigned long long)in_lat_max, (unsigned long long)in_lat_n);
             flush_us = flush_n = flush_bytes = 0;
-            refr_us = refr_n = 0;
+            refr_us = refr_n = refr_max = 0;
             in_lat_us = in_lat_n = in_lat_max = 0;
             last_stat = millis();
         }

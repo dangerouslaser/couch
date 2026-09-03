@@ -23,10 +23,15 @@ SRCS=$(find "$LVGL/src" -name '*.c' \
     ! -path '*/drivers/windows/*' ! -path '*/drivers/nuttx/*' \
     ! -path '*/drivers/qnx/*'     ! -path '*/drivers/libinput/*')
 
+# LVGL's NEON blenders are hand-written assembly, and the source glob above
+# only picks up C. Without this the NEON config links against nothing.
+NEON="$LVGL/src/draw/sw/blend/neon/lv_blend_neon.S"
+[ -f "$NEON" ] || NEON=
+
 echo "compiling $(echo "$SRCS" | wc -l | tr -d ' ') lvgl sources + main.c ..."
 "$CC" -static -Os -DLV_CONF_INCLUDE_SIMPLE \
     -I. -I../build -I"$LVGL" \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -o couch-gui main.c theme.c icons.c $SRCS -lm
+    -o couch-gui main.c theme.c icons.c media_assets.S $NEON $SRCS -lm
 "$STRIP" couch-gui
 echo "couch-gui: $(stat -f%z couch-gui) bytes"

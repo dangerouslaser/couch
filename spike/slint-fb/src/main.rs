@@ -168,7 +168,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a complete repaint every frame instead of one dirty row - the case where
     // a 3x per-frame difference stops being academic.
     let stress = std::env::var("COUCH_STRESS").is_ok();
+    let media = std::env::var("COUCH_MEDIA").is_ok();
     app.set_stress(stress);
+    app.set_media(media);
+    if media { println!("slint-fb: media scene, fanart crossfade"); }
     if stress {
         println!("slint-fb: stress mode, full-screen transitions");
     }
@@ -186,6 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut held, mut held_since, mut last_repeat) = (0u16, 0u64, 0u64);
 
     let (mut flip_at, mut flipped) = (now_us() + 500_000, false);
+    let (mut fade_at, mut faded) = (now_us() + 1_500_000, false);
+    let mut progress = 0.0f32;
     // COUCH_NAV walks the focus ring on a timer, so the small-dirty-region case
     // is measurable without someone pressing buttons, identically on both.
     let nav = std::env::var("COUCH_NAV").is_ok();
@@ -194,6 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if nav { println!("slint-fb: nav mode, timed focus moves"); }
 
     let (mut frames, mut render_us, mut copy_us) = (0u64, 0u64, 0u64);
+    let mut frame_max = 0u64;   /* the crossfade frames hide in the mean */
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
     let mut last_stat = now_us();
 
@@ -246,6 +252,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nav_at = now_us() + 250_000;
         }
 
+        if media {
+            // Crossfade every 1.5s, and creep the progress bar every frame so
+            // the scene is never static.
+            if now_us() >= fade_at {
+                faded = !faded;
+                app.set_fade(if faded { 1.0 } else { 0.0 });
+                fade_at = now_us() + 1_500_000;
+            }
+            progress = (progress + 0.0015) % 1.0;
+            app.set_progress(progress);
+        }
+
         slint::platform::update_timers_and_animations();
 
         let t0 = now_us();
@@ -279,8 +297,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fb_px[dst..dst + n].copy_from_slice(sl);
                 }
             }
+            let total = now_us() - t0;
             render_us += t1 - t0;
             copy_us += now_us() - t1;
+            if total > frame_max { frame_max = total; }
             frames += 1;
         });
         if !drawn {
@@ -289,12 +309,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if now_us() - last_stat > 5_000_000 && frames > 0 {
             println!(
-                "slint-fb: {} frames, {} us/frame render, {} us/frame copy | input {} us avg, {} us max (n={})",
-                frames, render_us / frames, copy_us / frames,
+                "slint-fb: {} frames, {} us/frame render, {} us/frame copy, {} us worst | input {} us avg, {} us max (n={})",
+                frames, render_us / frames, copy_us / frames, frame_max,
                 if in_n > 0 { in_sum / in_n } else { 0 }, in_max, in_n
             );
             last_stat = now_us();
-            frames = 0; render_us = 0; copy_us = 0;
+            frames = 0; render_us = 0; copy_us = 0; frame_max = 0;
         }
     }
 }

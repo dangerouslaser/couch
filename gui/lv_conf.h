@@ -181,6 +181,10 @@
         #define LV_DRAW_SW_CIRCLE_CACHE_SIZE 4
     #endif
 
+    /* NEON would be the obvious win on this Cortex-A7, and LVGL ships NEON
+     * blenders - but lv_blend_neon.S is written in GNU as macro syntax that
+     * LLVM's integrated assembler rejects, and the NDK is LLVM-only, so there
+     * is no gas to fall back to. Left off until that is resolved. */
     #define  LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_NONE
 
     #if LV_USE_DRAW_SW_ASM == LV_DRAW_SW_ASM_CUSTOM
