@@ -7,6 +7,11 @@
 # returns to Android.
 cd "$(dirname "$0")/.."
 LAYOUT=$(cat build/layout 2>/dev/null || echo android-in-boot)
+
+# If there is no serial port we are in Android, not Linux: go via adb instead.
+if ! ls /dev/cu.usbmodem* >/dev/null 2>&1; then
+    exec sh "$(dirname "$0")/boot.sh"
+fi
 if [ "$LAYOUT" = "linux-in-boot" ]; then
     # Linux is the normal boot target: clear the flag and just reboot.
     python3 tools/sercmd.py 'dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1

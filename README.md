@@ -122,32 +122,47 @@ Use busybox's `tar`, not Android's toybox, so symlinks and permissions survive.
 init chroots into it rather than `switch_root`-ing into OpenRC, because OpenRC expects
 a devtmpfs this kernel does not have. The initramfs stays PID 1 and supervises.
 
-## WiFi: why it is parked
+## WiFi
 
-Everything needed is on the device — `/vendor/lib/modules/wlan_drv.ko`,
-`wmt_chrdev_wifi.ko`, `wmt_drv.ko`, firmware `WIFI_RAM_CODE_6580`, and
-`/vendor/bin/hw/wpa_supplicant` — but the bring-up chain fights back:
+Works. `tools/provision-alpine.sh` bakes `wpa_supplicant` and its dependencies
+into the base rootfs, because without them there is no network, and without a
+network `apk` cannot fetch them.
 
-* `wmt_loader` talks to `/dev/stpwmt`, which `wmt_drv` registers asynchronously.
-  Run it too early and it exits 2 with an empty log, which is easy to misread as
-  the chip being absent.
-* It also reads Android properties (`persist.mtk.wcn.combo.chipid` = `0x6580`).
-  With no property area every read returns empty. Restoring a snapshot of
-  `/dev/__properties__` fixes that — and is useful for every other vendor binary.
-* Once it gets *partway*, writing `/dev/wmtWifi` panics the kernel:
-  `osal_lock_sleepable_lock` -> `__list_add` on a mutex whose list head is NULL,
-  then `emergency_restart`. The device hard-resets.
+Five things had to be right, and four of them fail silently:
 
-`WIFI=1` at the top of `initramfs/init` re-enables the attempt. It is guarded: it
-checks the loader's exit code and greps dmesg for `pwr_on fail` / `p_ic_ops is NULL`
-and refuses rather than panicking.
+1. **Do not restore Android's property area before running `wmt_loader`.**
+   It reads `persist.mtk.wcn.combo.chipid`; if that is already set it assumes
+   detection has happened and exits without ever opening `/dev/wmtdetect`. The
+   snapshot that was meant to help WiFi was the thing preventing it. With no
+   properties it reads the id from hardware (`ioctl` returns `0x6580`) and hands
+   it to the driver. Restore the properties afterwards.
+2. **`stpwmt` (major 190) is registered only after successful detection**, so
+   waiting for the node before running the loader waits for something only the
+   loader can produce. There is no devtmpfs, so `mknod` it afterwards.
+3. **Use Alpine's `wpa_supplicant`, not `/vendor/bin/hw/wpa_supplicant`.** The
+   vendor build logs solely to Android's logd and exits silently with no output
+   at all when logd is not running - `-f` is not compiled in either.
+4. **Emit every stored network, not just the first.** The first entry in
+   Android's `WifiConfigStore.xml` is not necessarily the one in range.
+5. **Run `udhcpc` inside the chroot.** busybox udhcpc does nothing without
+   `/usr/share/udhcpc/default.script`; from the initramfs it takes the lease and
+   never applies it, which looks exactly like DHCP failing.
+
+Credentials are read from Android's own store on the device at runtime, so they
+never live in this repo or the boot image. userdata is **f2fs**, not ext4.
+
+Writing `/dev/wmtWifi` while the chip is half-initialised panics the kernel in
+`wmt_drv` (`__list_add` on an uninitialised mutex) and hard-resets the device.
+Get the order right and it is fine.
 
 ## Roadmap
 
 1. ~~Alpine rootfs~~ — done.
-2. **Move to the `boot` slot**, putting Android's boot image into `recovery` so lk's
-   menu still reaches it.
-3. WiFi, when the vendor chain is worth another round.
+2. ~~WiFi~~ — done.
+3. **Captive portal**: bring up an AP and a small web UI when no known network is
+   reachable, so WiFi can be configured without a USB shell.
+4. **Move to the `boot` slot**, putting Android's boot image into `recovery` so
+   lk's menu still reaches it. Tooling exists (`tools/swap-slots.sh`), not applied.
 
 The remote's existing control app is Android/Kotlin, so replacing Android outright
 means rewriting that UI against the raw framebuffer and evdev.
