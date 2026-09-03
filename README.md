@@ -296,6 +296,45 @@ Mainline is a different road: [u-boot-mt6580](https://github.com/predefine-mt658
 has active MT6580 work (clocks, eMMC, display PWM), but `mt76` does not cover
 MT6580's in-SoC CONSYS, so a mainline kernel means no WiFi at all.
 
+## The keypad debounces in the device tree
+
+Rapid taps were being swallowed: pressing DOWN 20 times as fast as possible put
+only **8** presses into userspace, and the app handled all 8. Nothing in LVGL or
+the read loop was dropping anything - the events never left the driver.
+
+The keypad is a `gpio-matrix-keypad`, and its device tree node says:
+
+```
+debounce-delay-ms = 0x32     /* 50ms */
+linux,no-autorepeat
+```
+
+50ms debounce applies to press *and* release, so a tap cycle costs ~100ms and
+tapping is capped near 10/second. `linux,no-autorepeat` separately means holding
+a key produces one event and nothing more, so the usual gesture for scrolling a
+list does nothing. Android synthesises key repeat in its input framework rather
+than relying on the driver, which is why it felt better; couch-gui does the same.
+
+Debounce cannot be worked around from userspace - you cannot recover events the
+kernel never generated. It lives in **`odmdtbo`**, the device-tree overlay lk
+applies at boot, so `tools/dtbpatch.py` walks the flattened tree and patches the
+value in place:
+
+```sh
+python3 tools/dtbpatch.py …          # 50 -> 8, one u32, size unchanged
+dd if=patched.img of=/dev/mmcblk0p12 # from Linux; no Android needed
+```
+
+Measured after: the same three-tap test gives 3 presses, 3 mapped keys, 3 focus
+moves. The 20-tap test went from 8 to 15.
+
+Take this one seriously though: `odmdtbo` is shared with Android, so unlike the
+recovery-slot work a bad overlay affects both systems and recovery means
+BootROM rather than a power cycle. Validate the FDT before writing (full node
+walk, balanced nesting, expected value), confirm the image size is unchanged so
+MediaTek's container header stays valid, and verify the partition readback
+hashes to the patched image. Keep `odmdtbo.img` from `tools/backup.sh`.
+
 ## Distribution
 
 The image is meant to be reusable, so it carries nothing device- or

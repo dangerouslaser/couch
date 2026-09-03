@@ -7,7 +7,7 @@
 # is already RGBA and needs no swizzling here.
 set -e
 cd "$(dirname "$0")/.."
-IP=${COUCH_IP:-192.168.1.225}
+IP=${COUCH_IP:-192.168.1.147}
 KEY=${COUCH_KEY:-$HOME/.ssh/couch_dev}
 OUT=${1:-build/screen.png}
 SSH="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
