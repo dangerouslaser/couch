@@ -7,7 +7,10 @@ def port():
     if not p: sys.exit("no /dev/cu.usbmodem* present")
     return p[0]
 
-def run(cmd, settle=1.5, timeout=6.0):
+# Commands that sleep go quiet mid-run, so the idle "settle" window has to be
+# longer than the longest sleep or we cut the reply off. SER_SETTLE raises it.
+def run(cmd, settle=float(os.environ.get("SER_SETTLE", 1.5)),
+        timeout=float(os.environ.get("SER_TIMEOUT", 6.0))):
     fd = os.open(port(), os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     try:
         a = termios.tcgetattr(fd)
