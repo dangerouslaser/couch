@@ -11,7 +11,8 @@ ADB="${ADB:-adb}"
 PART_BOOT=/dev/block/mmcblk0p8
 PART_RECOVERY=/dev/block/mmcblk0p9     # our Linux slot; Android's boot is untouched
 PART_PARA=/dev/block/mmcblk0p10        # BCB / misc
-PART_CACHE=/dev/block/mmcblk0p22       # 112MB, expendable: the Alpine rootfs target
+PART_CACHE=/dev/block/mmcblk0p22       # 112MB, expendable
+PART_ROOTFS=/dev/block/mmcblk0p23      # 5.5GB userdata: where Couch lives
 PART_EXPDB=/dev/block/mmcblk0p13       # 10MB MTK crash dumps: our marker/log scratch
 
 # Markers and kernel logs live in expdb, not the recovery slot: after the slot

@@ -43,7 +43,7 @@ main() {
 
     # --- Alpine rootfs ----------------------------------------------------------
     $BB mkdir -p $ALPINE
-    if $BB mount -t ext4 /dev/mmcblk0p22 $ALPINE 2>/dev/null && [ -f $ALPINE/etc/alpine-release ]; then
+    if $BB mount -t ext4 /dev/mmcblk0p23 $ALPINE 2>/dev/null && [ -f $ALPINE/etc/alpine-release ]; then
         HAVE_ALPINE=yes
         $BB mkdir -p $ALPINE/proc $ALPINE/sys $ALPINE/dev $ALPINE/tmp $ALPINE/opt/couch
         $BB mount -t proc proc $ALPINE/proc 2>/dev/null
@@ -53,7 +53,7 @@ main() {
         echo "= alpine $($BB cat $ALPINE/etc/alpine-release) on $ALPINE"
     else
         HAVE_ALPINE=no
-        echo "= alpine FAIL: no rootfs on cache"
+        echo "= alpine FAIL: no rootfs on userdata"
     fi
     mark $((BASE+2)) "S2 alpine=$HAVE_ALPINE"
 
