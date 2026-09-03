@@ -29,10 +29,16 @@ static int fbfd;
 /* mtkfb composites ARGB8888: a pixel with alpha 0 is fully transparent, so it
  * reads back correctly from /dev/fb0 and is never visible on the panel.
  *
- * The channel order is ARGB despite fb_var reporting red=0/8 blue=16/8, which
- * would imply ABGR. Trusting those offsets renders blue as orange. */
+ * The channel order is ABGR: this panel reads the low byte as red, exactly as
+ * fb_var_screeninfo reports (red=0/8, green=8/8, blue=16/8).
+ *
+ * An earlier version had this backwards. It was "confirmed" against a pale blue
+ * (#7ab8ff), where a red/blue swap is genuinely ambiguous by eye; a labelled
+ * test pattern of saturated primaries settled it in seconds. fbcon looked fine
+ * either way because its output is almost all light grey text, where swapping
+ * red and blue barely shifts the shade. */
 static unsigned int rgb(int r, int g, int b)
-{ return 0xFF000000u | (r << 16) | (g << 8) | b; }
+{ return 0xFF000000u | (b << 16) | (g << 8) | r; }
 
 static void put_px(int x, int y, unsigned int c)
 {

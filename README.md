@@ -73,8 +73,14 @@ identical blank screen, so fixing them one at a time looks like no progress:
    (`/* 65 0x41 'A' */`), shifting every glyph by one byte. Strip comments first,
    then assert that space is blank before writing the header.
 
-One more trap: `fb_var_screeninfo` reports `red=0/8 green=8/8 blue=16/8`, implying
-ABGR. It is actually ARGB - trust it and blue renders as orange.
+One more trap, and the driver is telling the truth here: `fb_var_screeninfo`
+reports `red=0/8 green=8/8 blue=16/8`, and the panel really does read the low
+byte as red. Write `0xAARRGGBB` and red and blue come out swapped.
+
+This was documented backwards for a while. The original check used a pale blue,
+where a red/blue swap is ambiguous by eye. Verify with labelled bars of
+saturated primaries instead - `COUCH_BARS=1 couch-gui` draws them - and read the
+result back with `tools/screenshot.sh` rather than describing it.
 
 `tools/sercmd.py 'cat /tmp/fbcon.geom'` dumps what the driver reported.
 
