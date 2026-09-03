@@ -14,8 +14,8 @@
 # stdout to the panel, which is why the body runs piped into it.
 
 BB=/bin/busybox
-LOG=/dev/mmcblk0p9
-BASE=24576
+LOG=/dev/mmcblk0p13      # expdb: scratch for markers and logs
+BASE=0
 AUSB=/sys/class/android_usb/android0
 ALPINE=/mnt/alpine
 

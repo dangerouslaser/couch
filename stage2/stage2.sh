@@ -7,8 +7,8 @@
 # serial shell and started fbcon, so a broken edit here still leaves a shell.
 
 BB=/bin/busybox
-LOG=/dev/mmcblk0p9
-BASE=24576
+LOG=/dev/mmcblk0p13      # expdb: scratch for markers and logs
+BASE=0
 mark() { $BB echo "$2" | $BB dd of=$LOG bs=512 seek=$1 count=1 conv=notrunc 2>/dev/null; }
 
 echo "= stage2 running from $(dirname "$0")"
@@ -45,7 +45,7 @@ else
     echo "= wifi parked"
 fi
 
-$BB dmesg | $BB dd of=$LOG bs=512 seek=26624 conv=notrunc 2>/dev/null
+$BB dmesg | $BB dd of=$LOG bs=512 seek=2048 conv=notrunc 2>/dev/null
 mark $((BASE+4)) "S4 stage2 done"
 echo ""
 echo "= READY  uptime $($BB cut -d. -f1 /proc/uptime)s"

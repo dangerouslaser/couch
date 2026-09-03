@@ -57,6 +57,7 @@ c.chardev("dev/fb0",     29,  0)
 c.chardev("dev/irtx",    243, 0)
 c.blockdev("dev/mmcblk0p9",  179, 9)    # recovery: our own scratch log area
 c.blockdev("dev/mmcblk0p10", 179, 10)   # para: the BCB we must clear
+c.blockdev("dev/mmcblk0p13", 179, 13)   # expdb: marker and log scratch
 c.blockdev("dev/mmcblk0p14", 179, 14)   # vendor: MTK modules, firmware, wpa_supplicant
 c.blockdev("dev/mmcblk0p21", 179, 21)   # system: bionic + the dynamic linker
 c.blockdev("dev/mmcblk0p22", 179, 22)   # cache: future Alpine rootfs

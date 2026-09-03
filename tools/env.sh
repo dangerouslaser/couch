@@ -12,8 +12,10 @@ PART_BOOT=/dev/block/mmcblk0p8
 PART_RECOVERY=/dev/block/mmcblk0p9     # our Linux slot; Android's boot is untouched
 PART_PARA=/dev/block/mmcblk0p10        # BCB / misc
 PART_CACHE=/dev/block/mmcblk0p22       # 112MB, expendable: the Alpine rootfs target
+PART_EXPDB=/dev/block/mmcblk0p13       # 10MB MTK crash dumps: our marker/log scratch
 
-# Marker area in the tail of the recovery partition, past our ~7.7MB image.
-MARKER_SECTOR=24576                    # 12MB
-DMESG_SECTOR=26624                     # 13MB
-DMESG2_SECTOR=28672                    # 14MB
+# Markers and kernel logs live in expdb, not the recovery slot: after the slot
+# swap, recovery holds Android's boot image and must not be scribbled on.
+MARKER_SECTOR=0
+DMESG_SECTOR=2048                      # 1MB in
+DMESG2_SECTOR=6144                     # 3MB in

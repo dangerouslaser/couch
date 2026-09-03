@@ -6,7 +6,13 @@
 # clears the BCB on the way up, so it is a one-shot and a later reboot still
 # returns to Android.
 cd "$(dirname "$0")/.."
-python3 tools/sercmd.py 'printf "boot-recovery" | dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1
+LAYOUT=$(cat build/layout 2>/dev/null || echo android-in-boot)
+if [ "$LAYOUT" = "linux-in-boot" ]; then
+    # Linux is the normal boot target: clear the flag and just reboot.
+    python3 tools/sercmd.py 'dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1
+else
+    python3 tools/sercmd.py 'printf "boot-recovery" | dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; sync; reboot -f' >/dev/null 2>&1
+fi
 echo "rebooting straight back into Linux..."
 sleep 22
 i=0
