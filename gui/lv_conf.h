@@ -185,10 +185,10 @@
      * blenders - but lv_blend_neon.S is written in GNU as macro syntax that
      * LLVM's integrated assembler rejects, and the NDK is LLVM-only, so there
      * is no gas to fall back to. Left off until that is resolved. */
-    #define  LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_NONE
+    #define  LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_CUSTOM
 
     #if LV_USE_DRAW_SW_ASM == LV_DRAW_SW_ASM_CUSTOM
-        #define  LV_DRAW_SW_ASM_CUSTOM_INCLUDE ""
+        #define  LV_DRAW_SW_ASM_CUSTOM_INCLUDE "lv_neon.h"
     #endif
 
     /* Enable drawing complex gradients in software: linear at an angle, radial or conical */
