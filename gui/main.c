@@ -123,6 +123,59 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 
 /* ---- a small remote-shaped UI, so the demo shows the real interaction ---- */
 
+/* ---- battery ------------------------------------------------------------
+ * The gauge is the kernel's, via /sys/class/power_supply. "status" is the
+ * authoritative charging signal: usb/online only reports that a cable is
+ * present, which it always is while the remote sits on a bench being
+ * debugged, so it would read as charging forever. */
+#define PS_BATTERY "/sys/class/power_supply/battery/"
+
+static lv_obj_t *batt_icon, *batt_lbl;
+
+static int read_first_line(const char *path, char *buf, size_t n)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char *got = fgets(buf, (int)n, f);
+    fclose(f);
+    if (!got) return 0;
+    buf[strcspn(buf, "\r\n")] = 0;
+    return 1;
+}
+
+static void battery_tick(lv_timer_t *t)
+{
+    char cap_s[32], st[32] = "";
+    (void)t;
+    if (!batt_lbl) return;
+
+    /* No gauge is better than a wrong one: hide the readout rather than
+     * showing a stale or invented figure. */
+    if (!read_first_line(PS_BATTERY "capacity", cap_s, sizeof cap_s)) {
+        if (verbose) printf("couch-gui: no battery gauge at %s\n", PS_BATTERY);
+        lv_obj_add_flag(batt_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(batt_icon, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    int cap = atoi(cap_s);
+    if (cap < 0)   cap = 0;
+    if (cap > 100) cap = 100;
+
+    read_first_line(PS_BATTERY "status", st, sizeof st);
+    int charging = (strcmp(st, "Charging") == 0 || strcmp(st, "Full") == 0);
+    if (verbose) printf("couch-gui: battery %d%% \"%s\" charging=%d\n", cap, st, charging);
+
+    lv_image_set_src(batt_icon, charging   ? &icon_battery_charging
+                              : cap >= 70  ? &icon_battery_full
+                              : cap >= 35  ? &icon_battery_medium
+                                           : &icon_battery_low);
+    lv_obj_set_style_image_recolor(batt_icon,
+        lv_color_hex(!charging && cap <= 15 ? C_DESTRUCTIVE : C_MUTED_FOREGROUND), 0);
+    lv_label_set_text_fmt(batt_lbl, "%d%%", cap);
+    lv_obj_remove_flag(batt_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(batt_icon, LV_OBJ_FLAG_HIDDEN);
+}
+
 static lv_obj_t *status;
 static lv_obj_t *clock_lbl;
 
@@ -373,6 +426,50 @@ static void setup_line(lv_obj_t *scr, const char *label, const char *value,
     lv_obj_align(v, LV_ALIGN_TOP_MID, 0, y + 26);
 }
 
+/* The portal demands a physical button press before it grants SSH access, but
+ * confirm.sh - which does the actual waiting - has no way to say so on the
+ * panel: its output goes to a log, and in setup mode the GUI owns the screen.
+ * Without this the page tells you to press a button while the remote itself
+ * shows nothing. Driven by the very files confirm.sh already uses. */
+static lv_obj_t *approve_card, *approve_text;
+static uint32_t approve_hide_at;
+
+static void approve_show(const char *msg, uint32_t hold_ms)
+{
+    lv_label_set_text(approve_text, msg);
+    lv_obj_remove_flag(approve_card, LV_OBJ_FLAG_HIDDEN);
+    approve_hide_at = hold_ms ? millis() + hold_ms : 0;
+}
+
+static void approve_tick(lv_timer_t *t)
+{
+    static int waiting;
+    (void)t;
+
+    if (access("/tmp/press.request", F_OK) == 0) {
+        if (!waiting) {
+            waiting = 1;
+            remove("/tmp/press.result");     /* stale verdict from last time */
+            approve_show("Press any button\nto approve SSH access", 0);
+        }
+        return;
+    }
+
+    if (waiting) {                           /* the request just went away */
+        char verdict[16] = "";
+        waiting = 0;
+        read_first_line("/tmp/press.result", verdict, sizeof verdict);
+        approve_show(strcmp(verdict, "ok") == 0 ? "SSH access approved"
+                                                : "Approval timed out", 3000);
+        return;
+    }
+
+    if (approve_hide_at && millis() >= approve_hide_at) {
+        approve_hide_at = 0;
+        lv_obj_add_flag(approve_card, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void build_setup_ui(void)
 {
     couch_theme_init();
@@ -414,6 +511,27 @@ static void build_setup_ui(void)
                &lv_font_montserrat_28, 468);
     setup_line(scr, "Then open", "http://192.168.4.1",
                &lv_font_montserrat_20, 556);
+
+    /* Hidden until the portal asks for an approval. Inverted against the dark
+     * theme so it reads as a demand for attention, not another line of text. */
+    approve_card = lv_obj_create(scr);
+    lv_obj_remove_style_all(approve_card);
+    lv_obj_remove_flag(approve_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(approve_card, 432, 116);
+    lv_obj_set_style_bg_color(approve_card, lv_color_hex(C_PRIMARY), 0);
+    lv_obj_set_style_bg_opa(approve_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(approve_card, R_LG, 0);
+    lv_obj_align(approve_card, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_add_flag(approve_card, LV_OBJ_FLAG_HIDDEN);
+
+    approve_text = lv_label_create(approve_card);
+    lv_label_set_text(approve_text, "");
+    lv_obj_set_style_text_color(approve_text, lv_color_hex(C_PRIMARY_FG), 0);
+    lv_obj_set_style_text_font(approve_text, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_align(approve_text, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(approve_text);
+
+    lv_timer_create(approve_tick, 400, NULL);
 }
 
 static void splash_done(lv_timer_t *t)
@@ -475,13 +593,43 @@ static void build_ui(lv_group_t *group)
     lv_obj_t *h = couch_h1(scr, "Living Room");
     lv_obj_align(h, LV_ALIGN_TOP_LEFT, 0, top);
 
-    clock_lbl = lv_label_create(scr);
+    /* Battery then clock, in a row: the clock's width changes between "9:05 PM"
+     * and "12:05 PM", and a row keeps that from shifting the battery about. */
+    lv_obj_t *statusbar = lv_obj_create(scr);
+    lv_obj_remove_style_all(statusbar);
+    lv_obj_remove_flag(statusbar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(statusbar, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(statusbar, LV_FLEX_FLOW_ROW);
+    /* START on the main axis, not END: with LV_SIZE_CONTENT the container
+     * measures itself from the flow, and END makes it collapse to the width of
+     * the last child, laying the earlier ones out at negative x where they are
+     * clipped against the parent and vanish. The row is put on the right by
+     * aligning the container itself, below. */
+    lv_obj_set_flex_align(statusbar, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(statusbar, 5, 0);
+    lv_obj_align(statusbar, LV_ALIGN_TOP_RIGHT, 0, top + 4);
+
+    batt_icon = lv_image_create(statusbar);
+    lv_image_set_src(batt_icon, &icon_battery_full);
+    lv_obj_set_style_image_recolor_opa(batt_icon, LV_OPA_COVER, 0);
+
+    batt_lbl = lv_label_create(statusbar);
+    lv_label_set_text(batt_lbl, "");
+    lv_obj_set_style_text_color(batt_lbl, lv_color_hex(C_MUTED_FOREGROUND), 0);
+    lv_obj_set_style_text_font(batt_lbl, &lv_font_montserrat_20, 0);
+
+    clock_lbl = lv_label_create(statusbar);
     lv_label_set_text(clock_lbl, "--:--");
     lv_obj_set_style_text_color(clock_lbl, lv_color_hex(C_MUTED_FOREGROUND), 0);
     lv_obj_set_style_text_font(clock_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_align(clock_lbl, LV_ALIGN_TOP_RIGHT, 0, top + 8);
+    lv_obj_set_style_pad_left(clock_lbl, 9, 0);
+
     lv_timer_create(clock_tick, 1000, NULL);
     clock_tick(NULL);
+    /* The gauge moves in percent, not seconds. */
+    lv_timer_create(battery_tick, 15000, NULL);
+    battery_tick(NULL);
 
     lv_obj_t *card = couch_group(scr);
     lv_obj_set_size(card, LV_PCT(100), 4 * (ROW_H + GAP) + 2 * GAP);
@@ -569,6 +717,11 @@ int main(void)
     keypad_open("/dev/input/event1");   /* mt_gpio_kpd */
     keypad_open("/dev/input/event2");   /* mtk-kpd     */
     printf("couch-gui: %d keypad device(s)\n", kpd_n);
+
+    /* Claim the panel before drawing anything: fbcon keeps printing boot
+     * output otherwise, and since we only repaint what changed, its text
+     * survives on top of the UI instead of being covered by the splash. */
+    close(open("/tmp/couch.gui", O_WRONLY | O_CREAT | O_TRUNC, 0644));
 
     show_splash(group);
     /* LV_EVENT_KEY fires on the focused object, so a callback on the screen

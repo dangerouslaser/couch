@@ -14,7 +14,8 @@ mkdir -p "$SVG" "$PNG" "$OUT"
 
 ICONS="tv lightbulb blinds power volume-2 volume-x play pause skip-forward \
        skip-back square settings wifi house chevron-right chevron-left \
-       thermometer sun moon speaker cast monitor film lock"
+       thermometer sun moon speaker cast monitor film lock \
+       battery battery-low battery-medium battery-full battery-charging"
 
 BASE=https://raw.githubusercontent.com/lucide-icons/lucide/main/icons
 

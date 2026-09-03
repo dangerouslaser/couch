@@ -163,8 +163,15 @@ int main(int argc, char **argv)
     flip();
 
     char line[512];
+    int muted = 0;
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\r\n")] = 0;
+        /* Once couch-gui has the panel, keep draining stdin - init writes into
+         * this pipe and would block if nobody read it - but stop painting. The
+         * GUI repaints only the areas it knows changed, so anything drawn here
+         * afterwards sits on top of it and stays there. */
+        if (!muted && access("/tmp/couch.gui", F_OK) == 0) muted = 1;
+        if (muted) continue;
         draw_line(line);
         flip();
     }

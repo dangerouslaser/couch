@@ -2,6 +2,11 @@
 #pragma once
 #include "lvgl/lvgl.h"
 
+extern const lv_image_dsc_t icon_battery_charging;
+extern const lv_image_dsc_t icon_battery_full;
+extern const lv_image_dsc_t icon_battery_low;
+extern const lv_image_dsc_t icon_battery_medium;
+extern const lv_image_dsc_t icon_battery;
 extern const lv_image_dsc_t icon_blinds;
 extern const lv_image_dsc_t icon_cast;
 extern const lv_image_dsc_t icon_chevron_left;
