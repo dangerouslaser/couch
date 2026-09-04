@@ -61,16 +61,35 @@ missing. Whatever else is hard about this, sourcing the blobs is not.
     Slint -> GLES2 -> libhybris -> gralloc + libGLES_mali -> kernel  (route A)
     Slint -> GLES2 -> libhybris -> gralloc + HWC + libGLES_mali      (route B)
 
-**Route A (no HWC)** is far smaller: allocate buffers with gralloc, render with
-Mali, present by posting to the framebuffer. Its risk is concentrated in one
-place - `gralloc.mt6580.so` contains `fb_post`, but also the string:
+**Route A (no HWC) is dead.** `tools/../src/fbprobe.c` answers it directly: the
+module loads, identifies itself, and opens its allocator - but there is no
+framebuffer device at all.
 
-    "POST a ION_FB_HEAP buffer, not implementation yet. Show the 1st frame instead."
+    ok   dlopen /mnt/v/lib/hw/gralloc.mt6580.so
+    ok   HMI  id=gralloc name=Graphics Memory Allocator Module
+    ok   gpu0 (allocator) rc=0 dev=0xb6ca9000
+    FAIL fb (framebuffer device) rc=-22
 
-If that path is a stub in this build, presentation has to come from somewhere
-else: either blit the rendered GL buffer back to `/dev/fb0` by hand (losing some
-of the win, but not all - the compositing would still be on the GPU), or fall
-through to route B.
+-22 is EINVAL: this gralloc has no "fb" device to open. That matches Android 8,
+which retired the framebuffer HAL in favour of hwcomposer. The `fb_post` string
+in the binary is dead code.
+
+Two things that probe did establish, both of them useful:
+
+- **The allocator works.** gralloc can hand out graphics buffers, which is the
+  half of the stack a GPU path actually needs.
+- **libhybris is not required to run these blobs.** The probe is an ordinary
+  bionic executable running natively under `/system/bin/linker` - this is an
+  Android kernel, so they simply run. libhybris is only needed later to let a
+  *musl* Rust binary link against them.
+
+**Route A-prime** falls out of that, and is the interesting one: let the GPU
+composite into a gralloc buffer and copy the result to `/dev/fb0` ourselves.
+`libGLES_mali` advertises `EGL_ANDROID_image_native_buffer` and
+`EGL_KHR_image_base`, so a gralloc buffer can be wrapped as an EGLImage and used
+as an FBO render target - no window system, no hwcomposer, no binder. The final
+copy costs 1.32ms at the 2.2 GB/s measured to the framebuffer, which is
+affordable inside a 16ms budget when the compositing itself has become free.
 
 **Route B (with HWC)** is the Halium/Ubuntu Touch shape and is known to work on
 MediaTek parts, but it means bringing up binder, HIDL and enough of libgui for
@@ -78,12 +97,11 @@ MediaTek parts, but it means bringing up binder, HIDL and enough of libgui for
 
 ## Unknowns to resolve before committing
 
-1. Is `fb_post` in this gralloc actually functional, or a stub? Decides A vs B.
-   Answerable with a small C probe that dlopens gralloc through hybris, opens
-   the framebuffer device and posts one buffer.
-2. Does `libGLES_mali` contain a non-Android EGL platform, or only ANativeWindow?
-   Its `__egl_platform_*` symbols carry `_android` variants; a generic one is not
-   confirmed.
+1. ~~Is `fb_post` functional?~~ **Answered: there is no fb device (EINVAL).**
+   Route A is out; route A-prime or B.
+2. Can EGL initialise with no window system, and can a gralloc buffer be bound
+   as an FBO render target via `EGL_ANDROID_image_native_buffer`? This is the
+   next probe, and it decides whether route A-prime works.
 3. Does libhybris build against musl? It is normally built for glibc, Alpine does
    not package it, and it ships its own linker - so this is a real porting task,
    not a package install.
