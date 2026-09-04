@@ -134,7 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_area_index(index as i32);
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
-            app.set_focus_index(app.get_activities().row_count() as i32);
+            app.set_focus_row(if app.get_activities().row_count() > 0 { 1 } else { 0 });
+            app.set_focus_col(0);
             app.invoke_reset_scroll();
         }
     };
@@ -148,6 +149,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0);
     put_front(&app, first);
     pending.set(first);
+
+    // COUCH_FOCUS parks focus on a row - 0 is the activity strip, then one per
+    // room, then the scenes row - so any focus position can be photographed
+    // without driving the keypad.
+    if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
+        app.set_focus_row(n);
+        app.set_focus_col(0);
+        app.invoke_settle_focus();
+    }
 
     {
         let weak = app.as_weak();
@@ -190,7 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    app.on_activated(|index| println!("couch-gui: activated stop {index}"));
+    app.on_activated(|row, col| println!("couch-gui: activated row {row} col {col}"));
     app.on_back(|| println!("couch-gui: back"));
     app.on_home(|| println!("couch-gui: home"));
 
@@ -272,11 +282,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if nav && now >= nav_at {
-            let n = app.get_rooms().row_count() as i32
-                + app.get_activities().row_count() as i32
-                + app.get_scenes().row_count() as i32;
-            if n > 0 {
-                app.set_focus_index((app.get_focus_index() + 1) % n);
+            let rows = app.get_rooms().row_count() as i32
+                + if app.get_activities().row_count() > 0 { 1 } else { 0 }
+                + 1;
+            if rows > 0 {
+                app.set_focus_row((app.get_focus_row() + 1) % rows);
+                app.set_focus_col(0);
+                app.invoke_settle_focus();
             }
             nav_at = now + 700_000;
         }

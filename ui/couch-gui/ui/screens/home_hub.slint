@@ -66,30 +66,34 @@ component RoomIcon inherits Rectangle {
 }
 
 component AreaPane inherits Rectangle {
-    in property <int> activities-count;
     in property <[RoomRow]> rooms;
     in property <[SceneCell]> scenes;
-    in property <int> focus-index;
-    in property <int> pressed-index: -1;
-    property <int> scene-base: root.activities-count + root.rooms.length;
+    // Row 0 is the activity strip when there is one; rooms follow; the scenes
+    // row is last. The column only means anything on the horizontal rows.
+    in property <int> focus-row;
+    in property <int> focus-col;
+    in property <int> first-room-row;
+    in property <int> scenes-row;
+    in property <bool> has-activities;
 
     // The area list scrolls rather than paginating. Everything else on the hub
     // stays put, so the strip, the labels and the scenes never move - only the
     // rows travel under a fixed window.
     property <length> row-pitch: 101px;      // 90px row + 11px gap
     property <length> ring-bleed: 6px;       // ring offset + width
-    property <length> rows-h: root.activities-count > 0 ? 393px : 494px;
+    property <length> rows-h: root.has-activities ? 393px : 494px;
     in-out property <length> scroll: 0px;
     property <length> max-scroll: max(0px, root.rooms.length * root.row-pitch
                                            - 11px - root.rows-h);
+    // The row list is a single vertical stop per room, so no column applies.
 
     // Minimal scrolling: move only far enough to bring the focused row fully
     // into the window, and not at all while it is already there. Recomputing
     // from the index alone would scroll on moves that did not need it.
     public function ensure-visible() {
-        if (root.focus-index < root.activities-count) { return; }
-        if (root.focus-index >= root.scene-base) { return; }
-        self.row-into-view((root.focus-index - root.activities-count) * root.row-pitch);
+        if (root.focus-row < root.first-room-row) { return; }
+        if (root.focus-row >= root.scenes-row) { return; }
+        self.row-into-view((root.focus-row - root.first-room-row) * root.row-pitch);
     }
     function row-into-view(row-y: length) {
         if (row-y < root.scroll) {
@@ -121,15 +125,13 @@ component AreaPane inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for area[i] in root.rooms: Rectangle {
                 height: 90px;
-                background: root.pressed-index == root.activities-count + i
-                    ? Theme.surface-press
-                    : (area.idle ? Theme.surface-idle : Theme.surface);
+                background: area.idle ? Theme.surface-idle : Theme.surface;
                 border-width: 1px;
                 border-color: area.idle ? Theme.border-idle : Theme.border;
                 border-radius: Theme.r-row;
 
                 FocusRing {
-                    focused: root.focus-index == root.activities-count + i;
+                    focused: root.focus-row == root.first-room-row + i;
                     radius-inner: Theme.r-row;
                     box-width: parent.width; box-height: parent.height;
                 }
@@ -219,14 +221,13 @@ component AreaPane inherits Rectangle {
             padding-left: root.ring-bleed;
             padding-right: root.ring-bleed;
             for scene[i] in root.scenes: Rectangle {
-                background: root.pressed-index == root.scene-base + i
-                    ? Theme.surface-press : Theme.surface;
+                background: Theme.surface;
                 border-width: 1px;
                 border-color: Theme.border;
                 border-radius: Theme.r-card;
 
                 FocusRing {
-                    focused: root.focus-index == root.scene-base + i;
+                    focused: root.focus-row == root.scenes-row && root.focus-col == i;
                     radius-inner: Theme.r-card;
                     box-width: parent.width; box-height: parent.height;
                 }
@@ -277,10 +278,12 @@ export component HomeHub inherits Rectangle {
     in property <[RoomRow]> rooms-next;
     in property <[SceneCell]> scenes-next;
 
-    in property <int> focus-index;
-    in property <int> pressed-index: -1;
-    out property <int> stop-count: root.activities.length + root.rooms.length
-        + root.scenes.length;
+    in property <int> focus-row;
+    in property <int> focus-col;
+    in property <int> first-room-row;
+    in property <int> scenes-row;
+    // Whether left and right will change area from where focus currently is.
+    in property <bool> area-keys-active;
 
     property <length> ring-bleed: 6px;
     // Measured off our own height rather than the parent's, which a component
@@ -303,15 +306,28 @@ export component HomeHub inherits Rectangle {
     }
     callback settled();
 
+    // The transition is split in two so the incoming page is built before
+    // anything moves. Creating the pane and starting the animation in the same
+    // frame put the whole cost of instantiating a page - repeater items, text
+    // layout, the lot - inside the first animated frame, which is exactly where
+    // it is most visible as a stutter.
     public function slide(dir: int) {
         root.from-right = dir > 0;
-        // Park at the start without animating, then animate home.
-        root.jumping = true;
-        root.strip-x = 0px;
-        root.jumping = false;
-        root.strip-x = dir > 0 ? -root.width : root.width;
         root.sliding = true;
-        settle-timer.running = true;
+        prep-timer.running = true;
+    }
+
+    prep-timer := Timer {
+        interval: 16ms;
+        running: false;
+        triggered() => {
+            self.running = false;
+            root.jumping = true;
+            root.strip-x = 0px;
+            root.jumping = false;
+            root.strip-x = root.from-right ? -root.width : root.width;
+            settle-timer.running = true;
+        }
     }
 
     settle-timer := Timer {
@@ -347,13 +363,13 @@ export component HomeHub inherits Rectangle {
             padding-left: Theme.pad-side;
             padding-right: Theme.pad-side;
             for act[i] in root.activities: Rectangle {
-                background: root.pressed-index == i ? Theme.surface-press : Theme.surface-raised;
+                background: Theme.surface-raised;
                 border-width: 1px;
                 border-color: Theme.border-raised;
                 border-radius: Theme.r-card;
 
                 FocusRing {
-                    focused: root.focus-index == i;
+                    focused: root.focus-row < root.first-room-row && root.focus-col == i;
                     radius-inner: Theme.r-card;
                     box-width: parent.width; box-height: parent.height;
                 }
@@ -420,7 +436,8 @@ export component HomeHub inherits Rectangle {
                 Image {
                     source: @image-url("../../assets/chevron-left.png");
                     width: 18px; height: 18px;
-                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    colorize: root.area-count > 1 && root.area-keys-active
+                        ? Theme.text-secondary : Theme.text-disabled;
                     y: (parent.height - self.height) / 2;
                 }
                 Text {
@@ -435,7 +452,8 @@ export component HomeHub inherits Rectangle {
                 Image {
                     source: @image-url("../../assets/chevron-right.png");
                     width: 18px; height: 18px;
-                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    colorize: root.area-count > 1 && root.area-keys-active
+                        ? Theme.text-secondary : Theme.text-disabled;
                     y: (parent.height - self.height) / 2;
                 }
             }
@@ -461,21 +479,25 @@ export component HomeHub inherits Rectangle {
                     x: 0px;
                     width: root.width;
                     height: root.pane-h;
-                    activities-count: root.activities.length;
+                    has-activities: root.activities.length > 0;
                     rooms: root.rooms;
                     scenes: root.scenes;
-                    focus-index: root.focus-index;
-                    pressed-index: root.pressed-index;
+                    focus-row: root.focus-row;
+                    focus-col: root.focus-col;
+                    first-room-row: root.first-room-row;
+                    scenes-row: root.scenes-row;
                 }
                 if root.sliding: AreaPane {
                     x: root.from-right ? root.width : -root.width;
                     width: root.width;
                     height: root.pane-h;
-                    activities-count: root.activities.length;
+                    has-activities: root.activities.length > 0;
                     rooms: root.rooms-next;
                     scenes: root.scenes-next;
-                    focus-index: -1;
-                    pressed-index: -1;
+                    focus-row: -1;
+                    focus-col: -1;
+                    first-room-row: root.first-room-row;
+                    scenes-row: root.scenes-row;
                 }
             }
         }

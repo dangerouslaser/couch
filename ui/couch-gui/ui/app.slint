@@ -39,9 +39,13 @@ export component App inherits Window {
     // ring is explicitly authored in reading order rather than derived from
     // geometry. It also makes "restore focus per screen" a matter of keeping an
     // integer, which is what returning from a room view needs.
-    in-out property <int> focus-index: 0;
-    in-out property <int> pressed-index: -1;
-    callback activated(int);
+    // Focus is a row plus a column, not one flat ring. The horizontal rows -
+    // activities and scenes - own the horizontal axis, so up and down step
+    // between rows and left and right move within them. In the room list, which
+    // has no horizontal extent, left and right change area instead.
+    in-out property <int> focus-row: 0;
+    in-out property <int> focus-col: 0;
+    callback activated(int, int);
     callback back();
     callback home();
 
@@ -63,12 +67,35 @@ export component App inherits Window {
     // nothing: start the new area at the top.
     public function reset-scroll() { hub.reset-scroll(); }
 
+    property <int> act-count: root.activities.length;
+    property <int> first-room-row: root.act-count > 0 ? 1 : 0;
+    property <int> scenes-row: root.first-room-row + root.rooms.length;
+    property <int> row-count: root.scenes-row + 1;
+
     function move(delta: int) {
-        // Vertical only now. The handoff had both axes walking one ring, but
-        // areas need an axis of their own, and left/right cannot be both.
-        if (hub.stop-count > 0) {
-            root.focus-index = Math.mod(root.focus-index + delta + hub.stop-count, hub.stop-count);
-            hub.ensure-visible();
+        if (root.row-count <= 0) { return; }
+        root.focus-row = Math.mod(root.focus-row + delta + root.row-count, root.row-count);
+        // A row remembers nothing: entering it always starts at its first cell,
+        // which is predictable in a way that "wherever you were last" is not.
+        root.focus-col = 0;
+        hub.ensure-visible();
+    }
+
+    // Left and right mean different things depending on where focus is, so the
+    // pager chevrons dim when they are not what the keys will do.
+    property <bool> horizontal-is-area: root.focus-row >= root.first-room-row
+                                        && root.focus-row < root.scenes-row;
+
+    function step-horizontal(delta: int) {
+        if (root.horizontal-is-area) {
+            root.area-step(delta);
+            return;
+        }
+        if (root.focus-row < root.first-room-row) {
+            root.focus-col = Math.mod(root.focus-col + delta + root.act-count, root.act-count);
+        } else if (root.scenes.length > 0) {
+            root.focus-col = Math.mod(root.focus-col + delta + root.scenes.length,
+                                      root.scenes.length);
         }
     }
 
@@ -76,9 +103,9 @@ export component App inherits Window {
         key-pressed(e) => {
             if (e.text == Key.UpArrow)    { root.move(-1); return accept; }
             if (e.text == Key.DownArrow)  { root.move(1);  return accept; }
-            if (e.text == Key.LeftArrow)  { root.area-step(-1); return accept; }
-            if (e.text == Key.RightArrow) { root.area-step(1);  return accept; }
-            if (e.text == Key.Return)  { root.activated(root.focus-index); return accept; }
+            if (e.text == Key.LeftArrow)  { root.step-horizontal(-1); return accept; }
+            if (e.text == Key.RightArrow) { root.step-horizontal(1);  return accept; }
+            if (e.text == Key.Return)  { root.activated(root.focus-row, root.focus-col); return accept; }
             if (e.text == Key.Escape)  { root.back(); return accept; }
             if (e.text == Key.Home)    { root.home(); return accept; }
             return reject;
@@ -119,8 +146,11 @@ export component App inherits Window {
         area-count: root.area-count;
         area-dots: root.area-dots;
         scenes: root.scenes;
-        focus-index: root.focus-index;
-        pressed-index: root.pressed-index;
+        focus-row: root.focus-row;
+        focus-col: root.focus-col;
+        first-room-row: root.first-room-row;
+        scenes-row: root.scenes-row;
+        area-keys-active: root.horizontal-is-area;
     }
 
     VolumeOverlay {
