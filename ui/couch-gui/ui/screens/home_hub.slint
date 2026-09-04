@@ -1,0 +1,300 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "../components/focus_ring.slint";
+import { SectionLabel } from "../components/section_label.slint";
+
+export struct LiveActivity {
+    kind: int,          // 0 sonos (bars), 1 kodi (play triangle)
+    title: string,
+    // Subtitle halves, joined with a literal separator below: glyphs are
+    // embedded at compile time from strings that appear in .slint, so a
+    // separator living only in a runtime string is never embedded.
+    source: string,     // SONOS
+    place: string,      // KITCHEN
+}
+
+export struct AreaRow {
+    name: string,
+    devices: string,    // "5 devices"
+    detail: string,     // "Kodi, Hue, LG C3" - may be empty
+
+    active-count: int,
+    idle: bool,
+    offline: bool,
+    dimmed: bool,       // Study in the reference: idle and recessed further
+    glyph: int,         // 0 square, 1 rounded-top rect, 2 circle, 3 diamond
+}
+
+export struct SceneCell {
+    name: string,
+    active: bool,
+}
+
+// Glyphs are primitives where a Rectangle can express them - a square, a
+// circle, and a rounded-top rect all can, since Slint has per-corner radii.
+// A square on its point and a play triangle cannot, and Slint's Path element
+// is unavailable in this build: PathData is gated behind Slint's "std"
+// feature, which we cannot enable because it pulls in fontconfig. Those two
+// are alpha masks, tinted at runtime so the colour still comes from the theme.
+component AreaGlyph inherits Rectangle {
+    in property <int> shape;
+    in property <color> ink;
+    width: 20px;
+    height: 20px;
+
+    if root.shape == 0: Rectangle {          // living: square
+        width: 15px; height: 15px;
+        x: 2.5px; y: 2.5px;
+        border-radius: Theme.r-glyph;
+        border-width: 2.5px;
+        border-color: root.ink;
+    }
+    if root.shape == 1: Rectangle {          // bedroom: rounded top only
+        width: 17px; height: 12px;
+        x: 1.5px; y: 5px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        border-width: 2.5px;
+        border-color: root.ink;
+    }
+    if root.shape == 2: Rectangle {          // kitchen: circle
+        width: 17px; height: 17px;
+        x: 1.5px; y: 1.5px;
+        border-radius: 8.5px;
+        border-width: 2.5px;
+        border-color: root.ink;
+    }
+    if root.shape == 3: Image {              // study: square on its point
+        source: @image-url("../../assets/glyph-diamond.png");
+        width: 20px; height: 20px;
+        colorize: root.ink;
+    }
+}
+
+export component HomeHub inherits Rectangle {
+    in property <[LiveActivity]> activities;
+    in property <[AreaRow]> areas;
+    in property <[SceneCell]> scenes;
+    in property <int> focus-index;
+    in property <int> pressed-index: -1;
+
+    // Stops are a single linear ring in reading order: activities, then areas,
+    // then scenes. Declared here so the shell can wrap without knowing layout.
+    out property <int> stop-count: root.activities.length + root.areas.length + root.scenes.length;
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding-top: Theme.pad-top;
+        padding-left: Theme.pad-side;
+        padding-right: Theme.pad-side;
+        padding-bottom: Theme.pad-bottom;
+        spacing: 14px;
+
+        // --- live activity strip: hidden entirely when nothing is playing, so
+        // the AREAS label moves up rather than leaving empty cells ------------
+        if root.activities.length > 0: HorizontalLayout {
+            height: 66px;
+            spacing: 10px;
+            for act[i] in root.activities: Rectangle {
+                background: root.pressed-index == i ? Theme.surface-press : Theme.surface-raised;
+                border-width: 1px;
+                border-color: Theme.border-raised;
+                border-radius: Theme.r-card;
+
+                FocusRing {
+                    focused: root.focus-index == i;
+                    radius-inner: Theme.r-card;
+                    box-width: parent.width; box-height: parent.height;
+                }
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 12px;
+
+                    // Sonos: three bars, 4px wide, 12/20/8 tall, bottom aligned.
+                    // Kodi: a 14x18 play triangle.
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        if act.kind == 0: HorizontalLayout {
+                            spacing: 3px;
+                            alignment: start;
+                            Rectangle { width: 4px; height: 12px; background: Theme.accent;
+                                        y: parent.height - self.height; }
+                            Rectangle { width: 4px; height: 20px; background: Theme.accent;
+                                        y: parent.height - self.height; }
+                            Rectangle { width: 4px; height: 8px;  background: Theme.accent;
+                                        y: parent.height - self.height; }
+                        }
+                        if act.kind == 1: Image {
+                            source: @image-url("../../assets/glyph-play.png");
+                            width: 14px; height: 18px;
+                            colorize: Theme.accent;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: act.title;
+                            font-size: 19px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: act.source + " · " + act.place;
+                            font-size: 14px;
+                            letter-spacing: 0.06 * 14px;
+                            color: Theme.text-tertiary;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        SectionLabel { text: "AREAS"; height: 19px; }
+
+        VerticalLayout {
+            spacing: 11px;
+            for area[i] in root.areas: Rectangle {
+                height: 90px;
+                background: root.pressed-index == root.activities.length + i
+                    ? Theme.surface-press
+                    : (area.idle ? Theme.surface-idle : Theme.surface);
+                border-width: 1px;
+                border-color: area.idle ? Theme.border-idle : Theme.border;
+                border-radius: Theme.r-row;
+
+                FocusRing {
+                    focused: root.focus-index == root.activities.length + i;
+                    radius-inner: Theme.r-row;
+                    box-width: parent.width; box-height: parent.height;
+                }
+
+                HorizontalLayout {
+                    padding: 18px;
+                    spacing: 16px;
+
+                    Rectangle {
+                        width: 52px;
+                        height: 52px;
+                        border-radius: Theme.r-disc;
+                        background: area.idle ? Theme.surface-icon-idle : Theme.surface-icon;
+                        border-width: 1px;
+                        border-color: area.idle ? Theme.border-icon-idle : Theme.border-icon;
+                        AreaGlyph {
+                            shape: area.glyph;
+                            ink: area.idle ? Theme.text-quaternary : Theme.accent;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text {
+                            text: area.name;
+                            font-size: 26px;
+                            font-weight: 600;
+                            color: area.idle ? Theme.text-secondary : Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: area.detail == "" ? area.devices
+                                                    : area.devices + " · " + area.detail;
+                            font-size: 19px;
+                            color: area.idle ? Theme.text-quaternary : Theme.text-secondary;
+                            overflow: elide;
+                        }
+                    }
+
+                    // Status column. The design calls for a glow behind the dot;
+                    // on the software renderer that is a blur we cannot afford,
+                    // so the documented substitute is a 1px accent ring.
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        horizontal-stretch: 0;
+                        if !area.idle && !area.offline: Rectangle {
+                            width: 19px; height: 19px;
+                            background: transparent;
+                            border-radius: 9.5px;
+                            border-width: 1px;
+                            border-color: Theme.accent.with-alpha(0.4);
+                            Rectangle {
+                                width: 9px; height: 9px;
+                                border-radius: 4.5px;
+                                background: Theme.accent;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                        Text {
+                            text: area.offline ? "OFFLINE"
+                                : area.idle ? "IDLE"
+                                : (area.active-count + " ON");
+                            font-size: 14px;
+                            horizontal-alignment: right;
+                            color: area.offline ? Theme.text-quaternary
+                                : area.idle ? (area.dimmed ? Theme.text-disabled : Theme.text-quaternary)
+                                : Theme.accent;
+                        }
+                    }
+                }
+            }
+        }
+
+        SectionLabel { text: "WHOLE HOME"; height: 19px; }
+
+        HorizontalLayout {
+            height: 74px;
+            spacing: 11px;
+            for scene[i] in root.scenes: Rectangle {
+                background: root.pressed-index == root.activities.length + root.areas.length + i
+                    ? Theme.surface-press : Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.r-card;
+
+                FocusRing {
+                    focused: root.focus-index == root.activities.length + root.areas.length + i;
+                    radius-inner: Theme.r-card;
+                    box-width: parent.width; box-height: parent.height;
+                }
+
+                HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px; height: 18px;
+                            border-radius: 9px;
+                            background: scene.active ? Theme.accent : transparent;
+                            border-width: scene.active ? 0px : 2px;
+                            border-color: Theme.text-secondary;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: scene.name;
+                            font-size: 21px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

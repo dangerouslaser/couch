@@ -1,121 +1,108 @@
-// Placeholder layout. The visual design is being mocked up separately; what
-// matters here is the property surface the Rust side drives, so that porting a
-// mockup is a layout exercise and not a re-wiring one.
+import { Theme } from "theme.slint";
+import { StatusBar } from "components/status_bar.slint";
+import { VolumeOverlay } from "components/volume_overlay.slint";
+import { HomeHub, LiveActivity, AreaRow, SceneCell } from "screens/home_hub.slint";
+import { Setup } from "screens/setup.slint";
+
+export { LiveActivity, AreaRow, SceneCell }
+
 export component App inherits Window {
     width: 480px;
     height: 800px;
-    background: #09090b;
+    background: Theme.bg;
 
-    // --- status, driven from src/system.rs -----------------------------------
+    // --- shell ----------------------------------------------------------------
     in-out property <string> clock: "--:--";
-    in-out property <string> battery: "";
+    in-out property <string> context-title: "HOME";
+    in-out property <int> battery: 0;
     in-out property <bool> charging: false;
 
-    // --- navigation ----------------------------------------------------------
-    in-out property <int> sel: 0;
-    in-out property <int> item-count: 6;
+    // --- hub data -------------------------------------------------------------
+    in-out property <[LiveActivity]> activities;
+    in-out property <[AreaRow]> areas;
+    in-out property <[SceneCell]> scenes;
 
-    // --- setup mode ----------------------------------------------------------
+    // --- interaction ----------------------------------------------------------
+    // A single top-level FocusScope driving an integer index, rather than Slint's
+    // per-element focus: the hardware D-pad delivers key codes globally, and the
+    // ring is explicitly authored in reading order rather than derived from
+    // geometry. It also makes "restore focus per screen" a matter of keeping an
+    // integer, which is what returning from a room view needs.
+    in-out property <int> focus-index: 0;
+    in-out property <int> pressed-index: -1;
+    callback activated(int);
+    callback back();
+    callback home();
+
+    // --- first-run setup ------------------------------------------------------
     in-out property <bool> setup-mode: false;
     in-out property <string> ssid: "Couch-Setup";
     in-out property <string> portal-url: "http://192.168.4.1";
     in-out property <image> qr;
-    // 0 idle, 1 waiting for a button press, 2 granted, 3 timed out
     in-out property <int> approval: 0;
+
+    // --- volume overlay -------------------------------------------------------
+    in-out property <bool> volume-shown: false;
+    in-out property <int> volume: 0;
+    in-out property <string> volume-target: "";
+
+    function move(delta: int) {
+        // Both axes walk the same ring and wrap: on a 3.1" screen a true 2D
+        // navigation graph costs more than it returns, and wrapping means any
+        // stop is reachable by holding one direction.
+        if (hub.stop-count > 0) {
+            root.focus-index = Math.mod(root.focus-index + delta + hub.stop-count, hub.stop-count);
+        }
+    }
 
     fs := FocusScope {
         key-pressed(e) => {
-            if (e.text == Key.UpArrow)   { root.sel = max(0, root.sel - 1); return accept; }
-            if (e.text == Key.DownArrow) { root.sel = min(root.item-count - 1, root.sel + 1); return accept; }
+            if (e.text == Key.UpArrow || e.text == Key.LeftArrow)    { root.move(-1); return accept; }
+            if (e.text == Key.DownArrow || e.text == Key.RightArrow) { root.move(1);  return accept; }
+            if (e.text == Key.Return)  { root.activated(root.focus-index); return accept; }
+            if (e.text == Key.Escape)  { root.back(); return accept; }
+            if (e.text == Key.Home)    { root.home(); return accept; }
             return reject;
         }
     }
     init => { fs.focus(); }
 
-    if !root.setup-mode: Rectangle {
-        Text {
-            x: 16px; y: 16px;
-            text: "Couch";
-            font-size: 28px;
-            color: #fafafa;
-        }
-        Text {
-            x: 280px; y: 24px; width: 184px;
-            horizontal-alignment: right;
-            text: (root.charging ? "+ " : "") + root.battery + "   " + root.clock;
-            font-size: 20px;
-            color: #a1a1aa;
-        }
-        Text {
-            x: 16px; y: 100px; width: 448px;
-            wrap: word-wrap;
-            text: "Platform layer up. Awaiting the design.\n\nselection " + root.sel;
-            font-size: 16px;
-            color: #a1a1aa;
-        }
+    if root.setup-mode: Setup {
+        width: parent.width;
+        height: parent.height;
+        ssid: root.ssid;
+        portal-url: root.portal-url;
+        qr: root.qr;
+        approval: root.approval;
     }
 
-    if root.setup-mode: Rectangle {
-        Text {
-            x: 0px; y: 28px; width: 480px;
-            horizontal-alignment: center;
-            text: "Wi-Fi Setup";
-            font-size: 28px;
-            color: #fafafa;
-        }
-        Text {
-            x: 0px; y: 68px; width: 480px;
-            horizontal-alignment: center;
-            text: "Scan with your phone camera";
-            font-size: 14px;
-            color: #a1a1aa;
-        }
-        Rectangle {
-            x: 80px; y: 108px; width: 320px; height: 320px;
-            background: #ffffff;
-            border-radius: 12px;
-            Image {
-                source: root.qr;
-                width: 288px; height: 288px;
-                x: 16px; y: 16px;
-                image-rendering: pixelated;
-            }
-        }
-        Text {
-            x: 0px; y: 452px; width: 480px;
-            horizontal-alignment: center;
-            text: "Network - no password";
-            font-size: 14px;
-            color: #a1a1aa;
-        }
-        Text {
-            x: 0px; y: 478px; width: 480px;
-            horizontal-alignment: center;
-            text: root.ssid;
-            font-size: 28px;
-            color: #fafafa;
-        }
-        Text {
-            x: 0px; y: 540px; width: 480px;
-            horizontal-alignment: center;
-            text: "Then open  " + root.portal-url;
-            font-size: 16px;
-            color: #a1a1aa;
-        }
-        if root.approval != 0: Rectangle {
-            x: 24px; y: 660px; width: 432px; height: 116px;
-            background: #fafafa;
-            border-radius: 12px;
-            Text {
-                width: parent.width;
-                y: (parent.height - self.height) / 2;
-                horizontal-alignment: center;
-                font-size: 20px;
-                color: #18181b;
-                text: root.approval == 1 ? "Press any button\nto approve SSH access"
-                    : root.approval == 2 ? "SSH access approved"
-                    : "Approval timed out";
-            }
-        }
+    if !root.setup-mode: StatusBar {
+        y: 0;
+        width: parent.width;
+        clock: root.clock;
+        title: root.context-title;
+        battery: root.battery;
+        charging: root.charging;
+    }
+
+    hub := HomeHub {
+        visible: !root.setup-mode;
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
+        activities: root.activities;
+        areas: root.areas;
+        scenes: root.scenes;
+        focus-index: root.focus-index;
+        pressed-index: root.pressed-index;
+    }
+
+    VolumeOverlay {
+        x: 36px;
+        width: parent.width - 72px;
+        y: parent.height - self.height - 36px;
+        target: root.volume-target;
+        value: root.volume;
+        shown: root.volume-shown;
     }
 }

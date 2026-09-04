@@ -1,0 +1,61 @@
+import { Theme } from "../theme.slint";
+
+// Transient, above all content. Never takes focus and never changes screen -
+// VOL and MUTE raise it without disturbing what the user was doing.
+export component VolumeOverlay inherits Rectangle {
+    in property <string> target;     // e.g. "SONOS ARC"
+    in property <int> value;         // 0-100
+    in property <bool> shown;
+
+    // Geometry is set by the caller: a component's own root cannot see a
+    // parent it does not yet have.
+    height: 92px;
+
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.border-raised;
+    border-radius: Theme.r-overlay;
+
+    // Opacity only: one animated property, per the design's budget.
+    opacity: root.shown ? 1.0 : 0.0;
+    animate opacity { duration: Theme.fade; easing: ease; }
+
+    VerticalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 18px;
+        padding-bottom: 18px;
+        spacing: 11px;
+
+        HorizontalLayout {
+            Text {
+                text: root.target;
+                font-size: 15px;
+                letter-spacing: 0.14 * 15px;
+                color: Theme.text-secondary;
+                vertical-alignment: bottom;
+            }
+            Rectangle { }   // spacer: space-between
+            Text {
+                text: root.value;
+                font-size: 26px;
+                color: Theme.text;
+                horizontal-alignment: right;
+                vertical-alignment: bottom;
+            }
+        }
+
+        Rectangle {
+            height: 9px;
+            border-radius: Theme.r-meter;
+            background: Theme.border-raised;
+            Rectangle {
+                x: 0;
+                width: parent.width * max(0, min(100, root.value)) / 100;
+                height: parent.height;
+                border-radius: Theme.r-meter;
+                background: Theme.accent;
+            }
+        }
+    }
+}

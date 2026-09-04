@@ -1,0 +1,57 @@
+// Design tokens from the Home Hub handoff. Referenced as Theme.accent etc.
+// rather than inlined, because the panel may later ship a light variant for a
+// wall-mounted sibling device.
+export global Theme {
+    // --- colour ---------------------------------------------------------------
+    out property <color> bg: #15130F;
+    out property <color> bg-sleep: #0D0C0A;
+    out property <color> surface: #1F1C17;
+    out property <color> surface-recessed: #1B1814;
+    out property <color> surface-raised: #241F19;
+    out property <color> surface-icon: #2E2820;
+    out property <color> surface-press: #2A251E;
+    out property <color> border: #2C271F;
+    out property <color> border-dim: #262218;
+    out property <color> border-raised: #3A342B;
+    out property <color> border-icon: #3D362C;
+    // One accent only. A second hue on a panel this small reads as an error state.
+    out property <color> accent: #E8703A;
+    out property <color> accent-bg: #251A12;
+    out property <color> text: #F2EDE4;
+    out property <color> text-secondary: #A39C90;
+    out property <color> text-tertiary: #8A8175;
+    out property <color> text-quaternary: #6E675C;
+    out property <color> text-disabled: #4E483F;
+
+    // Idle rows are recessed rather than merely dimmer.
+    out property <color> surface-idle: #1B1814;
+    out property <color> border-idle: #262218;
+    out property <color> surface-icon-idle: #221F1A;
+    out property <color> border-icon-idle: #302B24;
+
+    // --- radii ----------------------------------------------------------------
+    out property <length> r-glyph: 3px;
+    out property <length> r-meter: 5px;
+    out property <length> r-control: 10px;
+    out property <length> r-card: 12px;
+    out property <length> r-row: 14px;
+    out property <length> r-overlay: 16px;
+    out property <length> r-disc: 26px;
+
+    // --- spacing --------------------------------------------------------------
+    out property <length> pad-top: 18px;
+    out property <length> pad-side: 20px;
+    out property <length> pad-bottom: 22px;
+
+    // --- focus ----------------------------------------------------------------
+    // Slint has no CSS outline, and a border on the element itself would shift
+    // its inner layout, so the ring is drawn as a sibling inset by -6px.
+    out property <length> ring-width: 3px;
+    out property <length> ring-offset: 3px;
+
+    // --- motion ---------------------------------------------------------------
+    // One property at a time: opacity cross-fades and colour changes only. No
+    // layout-animating transitions - the software renderer cannot afford them.
+    out property <duration> fade: 160ms;
+    out property <duration> volume-hold: 1600ms;
+}

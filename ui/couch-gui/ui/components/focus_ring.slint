@@ -1,0 +1,25 @@
+import { Theme } from "../theme.slint";
+
+// A ring drawn outside the element's border box, as a sibling behind the
+// content rather than a border on it, so gaining focus never changes layout.
+//
+// The box size is passed in rather than read from `parent`: a component's own
+// root cannot see a parent it does not yet have, so callers hand it the
+// dimensions of the element being ringed.
+export component FocusRing inherits Rectangle {
+    in property <bool> focused;
+    in property <length> box-width;
+    in property <length> box-height;
+    in property <length> radius-inner: Theme.r-card;
+
+    property <length> spread: Theme.ring-offset + Theme.ring-width;
+
+    x: -self.spread;
+    y: -self.spread;
+    width: root.box-width + 2 * self.spread;
+    height: root.box-height + 2 * self.spread;
+    border-radius: root.radius-inner + self.spread;
+    border-width: root.focused ? Theme.ring-width : 0px;
+    border-color: Theme.accent;
+    background: transparent;
+}

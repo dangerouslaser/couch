@@ -11,7 +11,7 @@ mod system;
 use std::time::Duration;
 
 use slint::platform::WindowEvent;
-use slint::{PhysicalSize, SharedString};
+use slint::{Model, ModelRc, PhysicalSize, SharedString, VecModel};
 
 use keypad::{now_monotonic_us, Keypad};
 use panel::{CouchPlatform, Panel};
@@ -32,6 +32,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     screen.claim(BACKGROUND);
 
     let app = App::new().map_err(|e| format!("App::new: {e:?}"))?;
+
+    // Reference content from the design handoff, so the hub renders as designed
+    // until a hub daemon exists to supply it. Areas come from local config in
+    // the real thing, which is why they are present before any bridge answers.
+    app.set_activities(ModelRc::new(VecModel::from(vec![
+        LiveActivity { kind: 0, title: "Midnight Ferry".into(),
+                       source: "SONOS".into(), place: "KITCHEN".into() },
+        LiveActivity { kind: 1, title: "Paused - Andrei Rublev".into(),
+                       source: "KODI".into(), place: "LIVING".into() },
+    ])));
+    app.set_areas(ModelRc::new(VecModel::from(vec![
+        AreaRow { name: "Living room".into(), devices: "5 devices".into(),
+                  detail: "Kodi, Hue, LG C3".into(),
+                  active_count: 2, idle: false, offline: false, dimmed: false, glyph: 0 },
+        AreaRow { name: "Bedroom".into(), devices: "3 devices".into(),
+                  detail: "Hue, Sonos One".into(),
+                  active_count: 0, idle: true, offline: false, dimmed: false, glyph: 1 },
+        AreaRow { name: "Kitchen".into(), devices: "2 devices".into(),
+                  detail: "Sonos Move".into(),
+                  active_count: 1, idle: false, offline: false, dimmed: false, glyph: 2 },
+        AreaRow { name: "Study".into(), devices: "2 devices".into(), detail: "".into(),
+                  active_count: 0, idle: true, offline: false, dimmed: true, glyph: 3 },
+    ])));
+    app.set_scenes(ModelRc::new(VecModel::from(vec![
+        SceneCell { name: "Movie night".into(), active: false },
+        SceneCell { name: "All off".into(), active: false },
+    ])));
+
+    app.on_activated(|index| println!("couch-gui: activated stop {index}"));
+    app.on_back(|| println!("couch-gui: back"));
+    app.on_home(|| println!("couch-gui: home"));
+
     app.show().map_err(|e| format!("show: {e:?}"))?;
 
     let mut pad = Keypad::open();
@@ -43,6 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tz_checked = now_monotonic_us();
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
+    // COUCH_NAV walks the focus ring on a timer, so its repaint behaviour is
+    // observable without someone pressing buttons.
+    let nav = std::env::var("COUCH_NAV").is_ok();
+    let mut nav_at = now_monotonic_us() + 700_000;
 
     let (mut frames, mut render_us, mut frame_max) = (0u64, 0u64, 0u64);
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
@@ -71,19 +107,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tz_offset = system::utc_offset_seconds();
                 tz_checked = now;
             }
-            app.set_clock(SharedString::from(system::clock_string(tz_offset)));
+            app.set_clock(SharedString::from(system::clock_24h(tz_offset)));
             match system::battery() {
                 Some(b) => {
-                    app.set_battery(SharedString::from(format!("{}%", b.percent)));
+                    app.set_battery(b.percent);
                     app.set_charging(b.charging);
                 }
-                None => app.set_battery(SharedString::default()),
+                None => app.set_battery(0),
             }
 
             let setup = system::in_setup_mode();
             if last_setup != Some(setup) {
                 last_setup = Some(setup);
                 app.set_setup_mode(setup);
+                app.set_context_title(SharedString::from(if setup { "SETUP" } else { "HOME" }));
                 if setup {
                     let ssid = system::setup_ssid();
                     app.set_ssid(SharedString::from(ssid.clone()));
@@ -98,6 +135,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Approval::Granted => 2,
                 Approval::TimedOut => 3,
             });
+        }
+
+        if nav && now >= nav_at {
+            let n = app.get_areas().row_count() as i32
+                + app.get_activities().row_count() as i32
+                + app.get_scenes().row_count() as i32;
+            if n > 0 {
+                app.set_focus_index((app.get_focus_index() + 1) % n);
+            }
+            nav_at = now + 700_000;
         }
 
         slint::platform::update_timers_and_animations();

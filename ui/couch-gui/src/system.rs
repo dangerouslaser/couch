@@ -41,6 +41,18 @@ pub fn utc_offset_seconds() -> i64 {
     sign * (hours * 3600 + mins * 60)
 }
 
+/// HH:MM, 24-hour, per the design's status bar.
+pub fn clock_24h(offset_seconds: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        + offset_seconds;
+    let secs_today = now.rem_euclid(86_400);
+    format!("{:02}:{:02}", secs_today / 3600, (secs_today % 3600) / 60)
+}
+
+#[allow(dead_code)]
 pub fn clock_string(offset_seconds: i64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

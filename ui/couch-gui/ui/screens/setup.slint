@@ -1,0 +1,112 @@
+import { Theme } from "../theme.slint";
+
+// First-run Wi-Fi provisioning. Not part of the design handoff - that scopes
+// the hub - but the device cannot reach a hub without it, so it is built from
+// the same tokens to sit alongside the rest.
+export component Setup inherits Rectangle {
+    in property <string> ssid;
+    in property <string> portal-url;
+    in property <image> qr;
+    // 0 idle, 1 waiting for a button press, 2 granted, 3 timed out
+    in property <int> approval: 0;
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding-top: 28px;
+        padding-left: Theme.pad-side;
+        padding-right: Theme.pad-side;
+        spacing: 0px;
+        alignment: start;
+
+        Text {
+            text: "Wi-Fi Setup";
+            font-size: 26px;
+            font-weight: 600;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "SCAN WITH YOUR PHONE CAMERA";
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+            horizontal-alignment: center;
+        }
+
+        Rectangle { height: 22px; }
+
+        // A QR needs a light quiet zone to scan, so this one card stays white
+        // in an otherwise very dark theme.
+        Rectangle {
+            height: 320px;
+            width: 320px;
+            background: #FFFFFF;
+            border-radius: Theme.r-row;
+            Image {
+                source: root.qr;
+                width: 288px;
+                height: 288px;
+                x: 16px;
+                y: 16px;
+                image-rendering: pixelated;
+            }
+        }
+
+        Rectangle { height: 24px; }
+
+        Text {
+            text: "NETWORK - NO PASSWORD";
+            font-size: 14px;
+            letter-spacing: 0.14 * 14px;
+            color: Theme.text-quaternary;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.ssid;
+            font-size: 26px;
+            font-weight: 600;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+
+        Rectangle { height: 18px; }
+
+        Text {
+            text: "THEN OPEN";
+            font-size: 14px;
+            letter-spacing: 0.14 * 14px;
+            color: Theme.text-quaternary;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.portal-url;
+            font-size: 19px;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+    }
+
+    // The portal demands a physical button press before granting SSH access,
+    // and confirm.sh has no way to say so on the panel - its output goes to a
+    // log, and this screen owns the display.
+    if root.approval != 0: Rectangle {
+        x: 24px;
+        y: parent.height - self.height - 28px;
+        width: parent.width - 48px;
+        height: 108px;
+        background: Theme.accent;
+        border-radius: Theme.r-row;
+        Text {
+            width: parent.width;
+            y: (parent.height - self.height) / 2;
+            horizontal-alignment: center;
+            font-size: 20px;
+            font-weight: 600;
+            color: Theme.bg;
+            text: root.approval == 1 ? "Press any button\nto approve SSH access"
+                : root.approval == 2 ? "SSH access approved"
+                : "Approval timed out";
+        }
+    }
+}
