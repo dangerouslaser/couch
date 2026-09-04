@@ -1,0 +1,13 @@
+[package]
+name = "couch-kodi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kodi JSON-RPC client for Couch"
+
+# Deliberately thin. Kodi speaks JSON-RPC over plain HTTP on the LAN, so there
+# is no TLS to justify a client stack; a small HTTP/1.1 writer over TcpStream
+# keeps the dependency tree - and the cross-compile - trivial.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

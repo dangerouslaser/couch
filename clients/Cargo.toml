@@ -1,0 +1,19 @@
+# One workspace rather than a repo per client: these crates share a target
+# triple, a linker configuration, a release profile and - shortly - a common
+# set of device/state types. Splitting them out buys independent versioning
+# nobody needs yet and costs a synchronised bump on every shared change.
+[workspace]
+resolver = "2"
+members = ["couch-kodi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
