@@ -28,19 +28,33 @@ From the device's own `vendor` (p14) and `system` (p21):
     /vendor/lib/egl/libGLES_mali.so      1,323,632
     /system/lib/egl/libGLES_android.so     108,452   (software fallback)
 
-The dependency split is what decides the shape of any port:
+The dependency split is what decides the shape of any port. These are
+`DT_NEEDED` entries read from the dynamic section (tools/elfdyn.py), not strings
+scraped from the binaries - an earlier pass using `strings` reported
+`libsec_mem.so` as a gralloc dependency, which the dynamic section shows it is
+not.
 
-**gralloc** needs only `libc++ libc libcutils libdl libged libgralloc_extra
-libhardware libion libion_mtk liblog libm libsec_mem libutils`. No binder, no
-HIDL, no libgui. All present on the device.
+    gralloc.mt6580.so     (12) liblog libcutils libion libhardware libion_mtk
+                               libged libgralloc_extra libutils libc++ libc
+                               libm libdl
 
-**hwcomposer** additionally needs `libbinder libhwbinder libhidlbase
-libhidltransport libgui libui libui_ext libpower libm4u libbwc libpq_prot
-libdpframework libsync`. That is most of SurfaceFlinger's supporting cast.
+    libGLES_mali.so       (13) libutils libcutils libhardware liblog libgpu_aux
+                               libgralloc_extra libged libdpframework
+                               libmtk_drvb libc++ libc libm libdl
 
-**libGLES_mali** needs `libcutils libgralloc_extra libhardware libged libgpu_aux
-libdpframework libmtk_drvb liblog libutils` - notably *no* binder or HIDL, so the
-GL driver itself does not drag in the Android graphics service stack.
+    hwcomposer.mt6580.so  (28) the above plus libui libui_ext libsync libbwc
+                               libbinder libpower libgui libm4u libhidlbase
+                               libhwbinder libhidltransport libpq_prot
+                               vendor.mediatek.hardware.pq@2.0_vendor
+                               android.hardware.power@1.0
+                               vendor.mediatek.hardware.power@1.1_vendor
+
+Neither gralloc nor the GL driver needs binder, HIDL or libgui. hwcomposer needs
+all three, plus two MediaTek vendor HIDL interfaces.
+
+**Every one of those libraries is present on the device**, across `/system/lib`
+and `/vendor/lib` - the closure is complete for both routes, with nothing
+missing. Whatever else is hard about this, sourcing the blobs is not.
 
 ## Two possible routes
 
@@ -65,6 +79,8 @@ MediaTek parts, but it means bringing up binder, HIDL and enough of libgui for
 ## Unknowns to resolve before committing
 
 1. Is `fb_post` in this gralloc actually functional, or a stub? Decides A vs B.
+   Answerable with a small C probe that dlopens gralloc through hybris, opens
+   the framebuffer device and posts one buffer.
 2. Does `libGLES_mali` contain a non-Android EGL platform, or only ANativeWindow?
    Its `__egl_platform_*` symbols carry `_android` variants; a generic one is not
    confirmed.
