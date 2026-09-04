@@ -12,6 +12,7 @@
 
 mod api;
 mod assets;
+mod auth;
 mod store;
 
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -19,6 +20,7 @@ use std::sync::Arc;
 
 use api::Api;
 use assets::Assets;
+use auth::Auth;
 use store::Store;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8090";
@@ -35,6 +37,8 @@ struct Options {
     addr: String,
     config: String,
     www: Option<String>,
+    pin_file: String,
+    no_auth: bool,
 }
 
 fn main() {
@@ -92,7 +96,16 @@ fn main() {
     };
     println!("couch-confd: listening on http://{}", options.addr);
 
-    let api = Arc::new(Api::new(store, assets));
+    let auth = Auth::new(&options.pin_file, options.no_auth);
+    if auth.disabled() {
+        // Loud, because the whole point of the PIN is that nobody has to trust
+        // the LAN, and this hands that back.
+        println!("couch-confd: *** --no-auth: anything on this network can rewrite the config ***");
+    } else {
+        println!("couch-confd: pairing by PIN, shown via {}", options.pin_file);
+    }
+
+    let api = Arc::new(Api::new(store, assets, auth));
     let mut workers = Vec::new();
     for _ in 1..WORKERS {
         let (server, api) = (server.clone(), api.clone());
@@ -130,6 +143,8 @@ fn parse_args() -> Result<Option<Options>, String> {
         addr: env_or("COUCH_CONFD_ADDR", DEFAULT_ADDR),
         config: env_or("COUCH_CONFIG", store::DEFAULT_PATH),
         www: std::env::var("COUCH_WWW").ok(),
+        pin_file: env_or("COUCH_PIN_FILE", auth::DEFAULT_PIN_FILE),
+        no_auth: std::env::var("COUCH_NO_AUTH").is_ok(),
     };
 
     let mut args = std::env::args().skip(1);
@@ -147,6 +162,8 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--addr" => options.addr = value()?,
             "--config" => options.config = value()?,
             "--www" => options.www = Some(value()?),
+            "--pin-file" => options.pin_file = value()?,
+            "--no-auth" => options.no_auth = true,
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -167,11 +184,18 @@ Usage: couch-confd [options]
   --config PATH   the config file (default {default_config}, env COUCH_CONFIG)
   --www DIR       serve the web UI from DIR instead of the embedded copy
                   (env COUCH_WWW) - for the dev loop on a laptop
+  --pin-file PATH where the pairing PIN is written for couch-gui to show
+                  (default {default_pin}, env COUCH_PIN_FILE)
+  --no-auth       no pairing at all (env COUCH_NO_AUTH) - for a laptop with no
+                  remote to read a PIN off. Never on a device.
   -h, --help      this
   -V, --version   the version
 
-The config file is created from a seed house if it does not exist. There is no
-authentication: bind it to a trusted LAN only.",
-        default_config = store::DEFAULT_PATH
+The config file is created from a seed house if it does not exist.
+
+A browser pairs by entering a four-digit PIN that appears on the remote's own
+screen: the credential is being able to see it.",
+        default_config = store::DEFAULT_PATH,
+        default_pin = auth::DEFAULT_PIN_FILE
     );
 }

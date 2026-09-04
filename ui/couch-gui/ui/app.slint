@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { StatusBar } from "components/status_bar.slint";
 import { VolumeOverlay } from "components/volume_overlay.slint";
+import { PairOverlay } from "components/pair_overlay.slint";
 import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
 
@@ -58,6 +59,12 @@ export component App inherits Window {
     in-out property <int> approval: 0;
 
     // --- volume overlay -------------------------------------------------------
+    // A browser is asking to pair; the digits live only here and on that
+    // browser's screen.
+    in-out property <bool> pair-shown: false;
+    in-out property <string> pair-pin: "";
+    in-out property <int> pair-seconds: 0;
+
     in-out property <bool> volume-shown: false;
     in-out property <int> volume: 0;
     in-out property <string> volume-target: "";
@@ -154,6 +161,14 @@ export component App inherits Window {
         first-room-row: root.first-room-row;
         scenes-row: root.scenes-row;
         area-keys-active: root.horizontal-is-area;
+    }
+
+    PairOverlay {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        shown: root.pair-shown;
+        pin: root.pair-pin;
+        seconds-left: root.pair-seconds;
     }
 
     VolumeOverlay {

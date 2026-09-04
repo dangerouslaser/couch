@@ -12,18 +12,101 @@
 
 use couch_model::Config;
 use gloo_net::http::Request;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct ApiError {
     pub message: String,
+    /// The session is gone - expired, or the daemon restarted. The app drops
+    /// back to the pairing screen rather than showing this as an edit failure,
+    /// because "not paired" is not something dismissing a banner can fix.
+    pub unauthorized: bool,
 }
 
 impl ApiError {
     fn new(message: impl Into<String>) -> ApiError {
-        ApiError { message: message.into() }
+        ApiError { message: message.into(), unauthorized: false }
     }
+}
+
+/// What the daemon says about pairing. Never includes the PIN: the digits exist
+/// on the remote's screen and nowhere else.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AuthStatus {
+    pub authenticated: bool,
+    pub pairing: bool,
+    pub expires_in: u64,
+    pub tries_left: u8,
+    pub disabled: bool,
+}
+
+/// A wrong PIN is an answer, not a failure: only losing the daemon is an `Err`.
+pub struct PinResult {
+    pub paired: bool,
+    pub message: String,
+}
+
+pub async fn auth_status() -> Result<AuthStatus, ApiError> {
+    json_get("/api/auth/status").await
+}
+
+/// Asks the daemon to put a PIN on the remote's screen.
+pub async fn auth_challenge() -> Result<AuthStatus, ApiError> {
+    let response = Request::post("/api/auth/challenge")
+        .send()
+        .await
+        .map_err(|e| ApiError::new(format!("cannot reach the remote: {e}")))?;
+    let text = response.text().await.unwrap_or_default();
+    serde_json::from_str(&text)
+        .map_err(|e| ApiError::new(format!("the remote sent something unreadable: {e}")))
+}
+
+pub async fn auth_verify(pin: String) -> Result<PinResult, ApiError> {
+    let response = Request::post("/api/auth/verify")
+        .json(&serde_json::json!({ "pin": pin }))
+        .map_err(|e| ApiError::new(format!("cannot encode the request: {e}")))?
+        .send()
+        .await
+        .map_err(|e| ApiError::new(format!("cannot reach the remote: {e}")))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    let value: Value = serde_json::from_str(&text).unwrap_or_default();
+
+    if (200..300).contains(&status) {
+        return Ok(PinResult { paired: true, message: String::new() });
+    }
+    let message = value.get("error").and_then(Value::as_str).unwrap_or("that PIN was not accepted");
+    let tries = value.get("tries_left").and_then(Value::as_u64).unwrap_or(0);
+    Ok(PinResult {
+        paired: false,
+        message: match tries {
+            0 => message.to_string(),
+            1 => format!("{message} - one try left"),
+            n => format!("{message} - {n} tries left"),
+        },
+    })
+}
+
+pub async fn log_out() -> Result<(), ApiError> {
+    Request::post("/api/auth/logout")
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| ApiError::new(format!("cannot reach the remote: {e}")))
+}
+
+async fn json_get<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, ApiError> {
+    let response = Request::get(path)
+        .send()
+        .await
+        .map_err(|e| ApiError::new(format!("cannot reach the remote: {e}")))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::new(format!("truncated response: {e}")))?;
+    serde_json::from_str(&text)
+        .map_err(|e| ApiError::new(format!("the remote sent something unreadable: {e}")))
 }
 
 impl std::fmt::Display for ApiError {
@@ -92,7 +175,8 @@ async fn parse(response: gloo_net::http::Response) -> Result<Config, ApiError> {
     // The daemon's errors carry a message and, for a rejected edit, the list of
     // things wrong with it. Surface those verbatim: they name a field, which is
     // the only thing that helps a user fix it.
-    Err(ApiError::new(match serde_json::from_str::<Value>(&text) {
+    let unauthorized = status == 401;
+    Err(ApiError { unauthorized, ..ApiError::new(match serde_json::from_str::<Value>(&text) {
         Ok(value) => {
             let message = value
                 .get("error")
@@ -118,5 +202,5 @@ async fn parse(response: gloo_net::http::Response) -> Result<Config, ApiError> {
             }
         }
         Err(_) => format!("the remote answered {status}"),
-    }))
+    })})
 }

@@ -14,8 +14,11 @@
 //!   `If-Match`. Two phones open on the same page is the collision that
 //!   actually happens here.
 //!
-//! There is no authentication. That is a deliberate, documented gap - see
-//! `docs/webui.md` - and it must be closed before this is in a shipped image.
+//! Everything under `/api` needs a paired session, except the pairing endpoints
+//! themselves and a stripped-down `health`. Pairing is a PIN on the remote's
+//! screen - see `auth`. The assets are served unguarded, because the page has to
+//! load in order to ask for the PIN, and the page on its own says nothing about
+//! anybody's house.
 
 use std::io::Read;
 use std::sync::Mutex;
@@ -29,6 +32,7 @@ use serde_json::json;
 use tiny_http::{Header, Request, Response, StatusCode};
 
 use crate::assets::Assets;
+use crate::auth::{self, Auth, Verdict};
 use crate::store::{self, Store};
 
 /// Bodies are small by construction - a whole house is a few KB - so a cap this
@@ -39,6 +43,7 @@ const MAX_BODY: u64 = 512 * 1024;
 pub struct Api {
     store: Mutex<Store>,
     assets: Assets,
+    auth: Auth,
 }
 
 /// What a `POST` to a collection needs: everything else is defaulted and then
@@ -141,6 +146,7 @@ struct Reply {
     cache: Option<&'static str>,
     /// Overrides the body's own length, for a HEAD that carries no body.
     length: Option<usize>,
+    set_cookie: Option<String>,
 }
 
 
@@ -158,6 +164,7 @@ impl Reply {
             created: None,
             cache: None,
             length: None,
+            set_cookie: None,
         }
     }
 
@@ -178,8 +185,8 @@ impl Reply {
 }
 
 impl Api {
-    pub fn new(store: Store, assets: Assets) -> Api {
-        Api { store: Mutex::new(store), assets }
+    pub fn new(store: Store, assets: Assets, auth: Auth) -> Api {
+        Api { store: Mutex::new(store), assets, auth }
     }
 
     pub fn handle(&self, mut request: Request) {
@@ -200,6 +207,11 @@ impl Api {
         }
         if let Some(cache) = reply.cache {
             headers.push(Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes()).unwrap());
+        }
+        if let Some(cookie) = &reply.set_cookie {
+            if let Ok(h) = Header::from_bytes(&b"Set-Cookie"[..], cookie.as_bytes()) {
+                headers.push(h);
+            }
         }
 
         // The length is passed rather than left to tiny_http to chunk: these
@@ -247,8 +259,22 @@ impl Api {
 
         // `&segments[1..]` drops the leading "api".
         let rest: Vec<&str> = segments.iter().skip(1).copied().collect();
+        let cookies = header(request, "cookie").unwrap_or_default();
+
+        // The gate. Pairing has to be reachable to pair, and health has to be
+        // reachable to tell whether the daemon is up at all - so both answer
+        // before this, and health answers with less when nobody is paired.
+        let open = matches!(rest.as_slice(), ["auth", ..] | ["health"]);
+        if !open && !self.auth.authenticated(&cookies) {
+            return Reply::error(401, "not paired - open the page and enter the PIN on your remote");
+        }
+
         match (method.as_str(), rest.as_slice()) {
-            ("GET", ["health"]) => self.health(),
+            ("GET", ["health"]) => self.health(self.auth.authenticated(&cookies)),
+            ("GET", ["auth", "status"]) => self.auth_status(&cookies),
+            ("POST", ["auth", "challenge"]) => self.auth_challenge(),
+            ("POST", ["auth", "verify"]) => self.auth_verify(&body),
+            ("POST", ["auth", "logout"]) => self.auth_logout(&cookies),
             ("GET", ["meta"]) => self.meta(),
 
             ("GET", ["config"]) => self.with(|s| Reply::json(200, s.config()).at(s.revision())),
@@ -404,7 +430,22 @@ impl Api {
         })
     }
 
-    fn health(&self) -> Reply {
+    /// Open to anyone, so it says only what an unpaired caller needs to know:
+    /// something is listening and it speaks this schema. The config path and
+    /// the revision count are the shape of somebody's house, in outline, and
+    /// they wait until you have paired.
+    fn health(&self, paired: bool) -> Reply {
+        if !paired {
+            return Reply::json(
+                200,
+                &json!({
+                    "service": "couch-confd",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "schema_version": SCHEMA_VERSION,
+                    "authenticated": false,
+                }),
+            );
+        }
         self.with(|s| {
             Reply::json(
                 200,
@@ -412,6 +453,7 @@ impl Api {
                     "service": "couch-confd",
                     "version": env!("CARGO_PKG_VERSION"),
                     "schema_version": SCHEMA_VERSION,
+                    "authenticated": true,
                     "config_path": s.path().display().to_string(),
                     "revision": s.revision(),
                     "embedded_assets": self.assets.count(),
@@ -419,6 +461,60 @@ impl Api {
             )
             .at(s.revision())
         })
+    }
+
+    fn auth_status(&self, cookies: &str) -> Reply {
+        Reply::json(200, &status_body(&self.auth.status(cookies)))
+    }
+
+    /// Lights up the remote. Idempotent while a challenge is running, so a
+    /// reload or a second tab does not change the digits somebody is reading.
+    fn auth_challenge(&self) -> Reply {
+        Reply::json(200, &status_body(&self.auth.challenge()))
+    }
+
+    fn auth_verify(&self, body: &[u8]) -> Reply {
+        #[derive(Deserialize)]
+        struct Offered {
+            pin: String,
+        }
+        let offered: Offered = match serde_json::from_slice(body) {
+            Ok(offered) => offered,
+            Err(e) => return Reply::error(400, format!("expected {{\"pin\": \"1234\"}}: {e}")),
+        };
+
+        match self.auth.verify(&offered.pin) {
+            Verdict::Paired(token) => {
+                let mut reply = Reply::json(200, &json!({ "authenticated": true }));
+                // SameSite=Strict is the CSRF defence: a page on another origin
+                // cannot make the browser attach this to a request at all, so a
+                // form post from a hostile tab arrives unpaired. HttpOnly keeps
+                // it away from script, and there is no Secure flag because this
+                // is plain HTTP on a LAN - see docs/webui.md.
+                reply.set_cookie = Some(format!(
+                    "{}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+                    auth::COOKIE,
+                    7 * 24 * 60 * 60
+                ));
+                reply
+            }
+            Verdict::Wrong { tries_left } => Reply::json(
+                401,
+                &json!({ "error": "wrong PIN", "tries_left": tries_left }),
+            ),
+            Verdict::Expired => Reply::json(
+                401,
+                &json!({ "error": "that PIN has expired - ask for a new one", "tries_left": 0 }),
+            ),
+        }
+    }
+
+    fn auth_logout(&self, cookies: &str) -> Reply {
+        self.auth.log_out(cookies);
+        let mut reply = Reply::json(200, &json!({ "authenticated": false }));
+        reply.set_cookie =
+            Some(format!("{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0", auth::COOKIE));
+        reply
     }
 
     /// The vocabularies the editor needs to build its pickers.
@@ -793,6 +889,7 @@ impl Api {
         }
         match self.assets.get(path) {
             Some(asset) => Reply {
+                set_cookie: None,
                 status: 200,
                 // A HEAD still has to answer with the length the GET would
                 // send, which is the only thing anybody asks HEAD for.
@@ -835,6 +932,16 @@ enum Member {
     Activity,
 }
 
+
+fn status_body(status: &auth::Status) -> serde_json::Value {
+    json!({
+        "authenticated": status.authenticated,
+        "pairing": status.pairing,
+        "expires_in": status.expires_in,
+        "tries_left": status.tries_left,
+        "disabled": status.disabled,
+    })
+}
 
 fn with_created(mut reply: Reply, id: &Id) -> Reply {
     if reply.status == 200 && !id.is_empty() {

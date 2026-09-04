@@ -40,6 +40,9 @@ pub struct App {
     pub error: RwSignal<Option<String>>,
     pub busy: RwSignal<bool>,
     pub router: Router,
+    /// `None` until the first status call answers, so the app shows neither the
+    /// house nor a PIN box while it does not yet know which is right.
+    pub paired: RwSignal<Option<bool>>,
 }
 
 impl App {
@@ -53,12 +56,18 @@ impl App {
     where
         F: Future<Output = Result<Config, ApiError>> + 'static,
     {
-        let (config, error, busy) = (self.config, self.error, self.busy);
+        let (config, error, busy, paired) = (self.config, self.error, self.busy, self.paired);
         busy.set(true);
         error.set(None);
         spawn_local(async move {
             match call.await {
                 Ok(next) => config.set(Some(next)),
+                Err(e) if e.unauthorized => {
+                    // Not an edit that failed - the session went away. Sending
+                    // them to the PIN box says what to do; an error banner over
+                    // a stale house does not.
+                    paired.set(Some(false));
+                }
                 Err(e) => {
                     error.set(Some(e.message));
                     // The screen is now showing something the daemon refused
@@ -103,11 +112,20 @@ fn Shell() -> impl IntoView {
         error: RwSignal::new(None),
         busy: RwSignal::new(false),
         router: Router::install(),
+        paired: RwSignal::new(None),
     };
     provide_context(app);
 
-    // The first load, and the only place the app fetches without being asked.
-    app.run(api::load());
+    // Ask whether this browser is already paired before anything else. A
+    // session lives a week, so the common case is that it is and the PIN box
+    // never appears.
+    spawn_local(async move {
+        let known = api::auth_status().await.map(|s| s.authenticated).unwrap_or(false);
+        app.paired.set(Some(known));
+        if known {
+            app.run(api::load());
+        }
+    });
 
     let route = app.router.current;
 
@@ -118,6 +136,18 @@ fn Shell() -> impl IntoView {
             <span class="status">
                 {move || if app.busy.get() { "saving…" } else { "" }}
             </span>
+            <Show when=move || app.paired.get() == Some(true)>
+                <button
+                    class="link"
+                    on:click=move |_| spawn_local(async move {
+                        let _ = api::log_out().await;
+                        app.config.set(None);
+                        app.paired.set(Some(false));
+                    })
+                >
+                    "Unpair"
+                </button>
+            </Show>
         </header>
 
         <main>
@@ -132,14 +162,17 @@ fn Shell() -> impl IntoView {
                 </div>
             })}
 
-            {move || match app.config.get() {
-
-                None => view! { <p class="dim pad">"Loading the house…"</p> }.into_any(),
-                Some(config) => screens::render(app, &config, route.get()),
+            {move || match app.paired.get() {
+                None => view! { <p class="dim pad">"Connecting…"</p> }.into_any(),
+                Some(false) => view! { <Pair/> }.into_any(),
+                Some(true) => match app.config.get() {
+                    None => view! { <p class="dim pad">"Loading the house…"</p> }.into_any(),
+                    Some(config) => screens::render(app, &config, route.get()),
+                },
             }}
         </main>
 
-        <nav class="tabs">
+        <nav class="tabs" class:hidden=move || app.paired.get() != Some(true)>
             {[
                 (Route::Areas, "Areas"),
                 (Route::Scenes, "Scenes"),
@@ -161,5 +194,125 @@ fn Shell() -> impl IntoView {
                 })
                 .collect_view()}
         </nav>
+    }
+}
+
+/// The pairing screen.
+///
+/// Asking for a challenge is what puts the PIN on the remote, so it happens
+/// when this screen mounts rather than behind a button: by the time anyone has
+/// read this far, the digits are already up.
+#[component]
+fn Pair() -> impl IntoView {
+    let app = expect_context::<App>();
+    let pin = RwSignal::new(String::new());
+    let message = RwSignal::new(Option::<String>::None);
+    let asking = RwSignal::new(true);
+    let status = RwSignal::new(api::AuthStatus::default());
+
+    let ask = move || {
+        asking.set(true);
+        message.set(None);
+        spawn_local(async move {
+            match api::auth_challenge().await {
+                // --no-auth: there is nothing to pair with, so do not sit here
+                // asking for a PIN that will never appear.
+                Ok(s) if s.disabled => app.paired.set(Some(true)),
+                Ok(s) => status.set(s),
+                Err(e) => message.set(Some(e.message)),
+            }
+            asking.set(false);
+        });
+    };
+    ask();
+
+    let submit = move || {
+        let offered = pin.get_untracked().trim().to_string();
+        if offered.len() != 4 {
+            message.set(Some("Four digits.".into()));
+            return;
+        }
+        spawn_local(async move {
+            match api::auth_verify(offered).await {
+                Ok(result) if result.paired => {
+                    pin.set(String::new());
+                    message.set(None);
+                    app.paired.set(Some(true));
+                    app.run(api::load());
+                }
+                Ok(result) => {
+                    pin.set(String::new());
+                    message.set(Some(result.message));
+                    // The count comes back from the daemon, which is the only
+                    // thing that knows how many of these a PIN has left.
+                    if let Ok(s) = api::auth_status().await {
+                        status.set(s);
+                    }
+                }
+                Err(e) => message.set(Some(e.message)),
+            }
+        });
+    };
+
+    view! {
+        <section class="pair">
+            <h1>"Look at your remote"</h1>
+            <p class="dim">
+                "It is showing four digits. Type them here to let this browser \
+                 edit your house."
+            </p>
+
+            <input
+                class="pin"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                maxlength="4"
+                placeholder="••••"
+                prop:value=move || pin.get()
+                on:input=move |e| {
+                    // Digits only, so a stray character cannot make a
+                    // four-character entry that can never match.
+                    let cleaned: String =
+                        event_target_value(&e).chars().filter(char::is_ascii_digit).take(4).collect();
+                    pin.set(cleaned);
+                }
+                on:keydown=move |e| if e.key() == "Enter" { submit() }
+            />
+
+            <button class="primary" on:click=move |_| submit()>"Pair"</button>
+
+            {move || message.get().map(|m| view! { <p class="wrong" role="alert">{m}</p> })}
+
+            <p class="dim small">
+                {move || {
+                    let s = status.get();
+                    if asking.get() {
+                        "Asking the remote for a PIN…".to_string()
+                    } else if !s.pairing {
+                        "No PIN on the screen? Wake the remote and ask again.".to_string()
+                    } else if s.expires_in > 0 {
+                        format!("It stops working in about {} seconds.", s.expires_in)
+                    } else {
+                        "That PIN has expired.".to_string()
+                    }
+                }}
+            </p>
+            {move || {
+                let left = status.get().tries_left;
+                // Only worth saying once some have been spent: a fresh PIN
+                // announcing five attempts reads as a challenge.
+                (status.get().pairing && left < 5).then(|| view! {
+                    <p class="dim small">
+                        {match left {
+                            0 => "Ask for a new PIN.".to_string(),
+                            1 => "One try left, then you will need a new PIN.".to_string(),
+                            n => format!("{n} tries left."),
+                        }}
+                    </p>
+                })
+            }}
+            <button class="link" on:click=move |_| ask()>"Show a new PIN"</button>
+        </section>
     }
 }

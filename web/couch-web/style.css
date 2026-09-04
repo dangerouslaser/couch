@@ -284,3 +284,51 @@ button:disabled { opacity: 0.35; cursor: default; }
 .add-row select { flex: 1; min-width: 9rem; }
 
 .add-row .label { white-space: nowrap; }
+
+/* --- pairing ------------------------------------------------------------- */
+/* The only screen someone sees while standing next to the remote comparing it
+   with a phone, so the digits are the largest thing on it and nothing else
+   competes. */
+.pair {
+  padding: 40px 24px;
+  max-width: 22rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.pair h1 { font-size: 24px; margin: 0 0 10px; }
+.pair p { margin: 0 0 14px; }
+.pair .small { font-size: 13px; }
+
+.pin {
+  width: 100%;
+  margin: 6px 0 14px;
+  padding: 14px 0;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: 600 40px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Four boxes' worth of gap, so what is typed reads as four digits rather
+     than a number. */
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  text-align: center;
+}
+
+.pin:focus { outline: none; border-color: var(--accent); }
+
+.pair .primary {
+  width: 100%;
+  padding: 13px 0;
+  background: var(--accent);
+  color: #0b0d11;
+  border: 0;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.wrong { color: var(--danger); font-size: 14px; }
+
+.hidden { display: none; }

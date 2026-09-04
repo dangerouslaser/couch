@@ -1,0 +1,66 @@
+import { Theme } from "../theme.slint";
+
+// The PIN a browser needs before it can edit the house.
+//
+// Deliberately the loudest thing the GUI ever draws: it is read across a room,
+// off a 480px panel, by someone holding a phone in the other hand. It also
+// doubles as the alarm - if this appears and nobody opened the page, somebody
+// else on the network just tried to.
+export component PairOverlay inherits Rectangle {
+    in property <bool> shown: false;
+    in property <string> pin: "";
+    in property <int> seconds-left: 0;
+
+    visible: root.shown;
+    background: #000000F5;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 18px;
+        padding-left: 28px;
+        padding-right: 28px;
+
+        Text {
+            text: "PAIR THIS DEVICE";
+            font-size: 16px;
+            letter-spacing: 2px;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            height: 84px;
+            background: Theme.surface-raised;
+            border-radius: Theme.r-card;
+            border-width: 1px;
+            border-color: Theme.accent;
+            Text {
+                text: root.pin;
+                // 48px rather than the 72px this first wanted. Glyphs are
+                // rasterised into the binary per size used, for the whole
+                // charset rather than the ten characters this needs, so the
+                // jump to 72px cost 327KB against 162KB here - and the remote
+                // is in your hand while you type, not across the room.
+                font-size: 48px;
+                font-weight: 700;
+                letter-spacing: 8px;
+                color: Theme.accent;
+            }
+        }
+
+        Text {
+            text: "Enter this in the browser";
+            font-size: 19px;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.seconds-left > 0
+                ? "Expires in " + root.seconds-left + "s"
+                : "Expired";
+            font-size: 16px;
+            color: Theme.text-quaternary;
+            horizontal-alignment: center;
+        }
+    }
+}

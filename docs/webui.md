@@ -4,10 +4,10 @@ How the house gets described: `couch-confd`, a static binary on the remote that
 owns `/opt/couch/config.json`, and `couch-web`, the page it serves to a phone on
 the same LAN.
 
-> **There is no authentication.** Anything that can reach the port can rewrite
-> the house. This is a deliberate, documented gap - see [No
-> authentication](#no-authentication) - and it has to be closed before this is
-> in an image anyone else installs.
+> **A browser pairs with a four-digit PIN shown on the remote's own screen.**
+> The credential is being able to see the panel - see [Pairing by a PIN on the
+> remote's screen](#pairing-by-a-pin-on-the-remotes-screen), which also lists
+> what this still does not defend against. Traffic is plain HTTP.
 
 ## Three crates, three targets
 
@@ -116,6 +116,10 @@ JSON. `{id}` is a slug like `living-room`.
 
 | Method   | Path                                   | What it does |
 |----------|----------------------------------------|--------------|
+| `POST`   | `/api/auth/challenge`                  | put a PIN on the remote's screen; idempotent while one is showing. Unguarded |
+| `POST`   | `/api/auth/verify`                     | `{pin}`; on success sets the session cookie. Unguarded |
+| `GET`    | `/api/auth/status`                     | paired? pairing? seconds left, tries left. Never the PIN. Unguarded |
+| `POST`   | `/api/auth/logout`                     | ends this browser's session. Unguarded |
 | `GET`    | `/api/health`                          | service, version, schema version, config path, revision, embedded asset count |
 | `GET`    | `/api/meta`                            | the vocabularies the editor builds its pickers from: icons, device kinds, integrations, activity kinds |
 | `GET`    | `/api/config`                          | the whole document |
@@ -196,11 +200,11 @@ daemon, both stripped. `wasm-opt -Oz` runs as part of the trunk build.
 
 | Artefact | Bytes | gzip -9 |
 |----------|------:|--------:|
-| `couch-web-*_bg.wasm` | 396,446 (387 KB) | 158,913 |
-| `couch-web-*.js` (wasm-bindgen loader) | 38,393 | 7,068 |
-| `style-*.css` | 6,732 | 2,287 |
-| `index.html` | 2,201 | 1,286 |
-| **bundle total** | **443,772 (433 KB)** | **169,554 (166 KB)** |
+| `couch-web-*_bg.wasm` | 428,746 (418 KB) | 170,300 |
+| `couch-web-*.js` (wasm-bindgen loader) | 38,393 | 7,070 |
+| `style-*.css` | 7,908 | 2,611 |
+| `index.html` | 2,205 | 1,284 |
+| **bundle total** | **477,252 (466 KB)** | **181,265 (177 KB)** |
 
 `tools/build-webui.sh` prints this table at the end of every run. The last few
 bytes wobble between builds because trunk's content hashes are not always the
@@ -208,11 +212,18 @@ same length, and `index.html` names two of them.
 
 | Binary | Bytes |
 |--------|------:|
-| `couch-confd`, `armv7-unknown-linux-musleabihf`, static musl | 1,172,472 (1.12 MB) |
-| `couch-confd`, host (macOS arm64) | 1,098,560 (1.05 MB) |
+| `couch-confd`, `armv7-unknown-linux-musleabihf`, static musl | 1,225,080 (1.17 MB) |
+| `couch-confd`, host (macOS arm64) | 1,115,200 (1.06 MB) |
+| `couch-gui`, same target, for comparison | 1,689,532 (1.61 MB) |
 
 The ARM binary carries the whole bundle inside it, so the daemon is about
-730 KB of code and 433 KB of page. The daemon does not compress responses: the
+730 KB of code and 466 KB of page.
+
+Pairing cost `couch-gui` 162 KB, which is not the PIN logic - it is one font
+size. Glyphs are rasterised into the binary per size used, for the whole
+charset rather than the ten characters the PIN needs, so the overlay's 48px
+digits carry every other character at 48px with them. Drawing them at 72px, as
+the first version did, cost 327 KB. The daemon does not compress responses: the
 bundle would go over the wire at a third the size gzipped, which is the obvious
 next saving if first load on the remote's own AP ever feels slow.
 
@@ -298,9 +309,82 @@ running `couch-gui` - the two do not contend for anything, since the daemon
 touches neither the framebuffer nor the keypad. Then
 `http://192.168.1.79:8090` from a phone on the same network.
 
-Nothing starts it at boot yet. When that is wanted, it belongs in
-`stage2/stage2.sh` next to the block that starts `couch-gui`, and after the
-network is up - it is useless without one:
+Nothing starts it at boot; see the section on pairing for where that goes.
+
+## Pairing by a PIN on the remote's screen
+
+The credential is being able to see the remote. Open the page, and four digits
+appear on the panel; type them in, and that browser is paired for a week. There
+is nothing to enrol ahead of time, no password to store, and nothing to reset
+when it is forgotten - the same boundary the SSH enrolment button already draws,
+and the reason a stolen config is a burglary rather than a port scan.
+
+```
+browser                      couch-confd                  couch-gui
+   |  GET /  (page, unguarded)    |                            |
+   |  POST /api/auth/challenge -> |  writes 0600 /tmp/couch.pin |
+   |                              |                     reads it, draws it
+   |  <- {pairing, expires_in}    |                            |
+   |         (you read the digits off the panel)               |
+   |  POST /api/auth/verify ----> |  constant-time compare     |
+   |  <- Set-Cookie: couch_session|  deletes the PIN file      |
+   |                              |                     overlay clears
+   |  GET /api/config ----------> |  cookie checked            |
+```
+
+Four digits is ten thousand guesses, so the digits are not the defence. The
+defence is that a guess costs an attempt against a challenge that dies:
+
+* a PIN lives **120 seconds**;
+* **five** wrong answers destroy it, and the right answer no longer works after
+  that either;
+* a new challenge is a new prompt **on the remote**, so brute force means making
+  the panel in someone's living room flash a fresh PIN a thousand times over.
+
+That visibility is the second feature. A PIN appearing when nobody opened the
+page means somebody else on the network just tried.
+
+Details worth knowing:
+
+* **The PIN is never in an HTTP response.** `/api/auth/status` reports that
+  pairing is in progress, how long is left and how many tries remain; the digits
+  themselves exist only in the daemon's memory, in a `0600` file, and on the
+  panel.
+* **Asking twice does not reroll.** A reload or a second tab would otherwise
+  change the digits halfway through someone typing them.
+* **Sessions are in memory.** Restarting the daemon logs everyone out, which is
+  the right way round: a config daemon holding sessions across a reboot is one
+  that cannot be reset by turning it off and on again.
+* **`SameSite=Strict; HttpOnly`** is the CSRF defence. A page on another origin
+  cannot make the browser attach the cookie at all, so a form post from a
+  hostile tab arrives unpaired. There is no `Secure` flag, because this is plain
+  HTTP.
+* **The page itself is unguarded**, because it has to load in order to ask for a
+  PIN. It contains no house data.
+* **`/api/health` is unguarded** and answers with less when nobody is paired -
+  enough to say something is listening and what schema it speaks, not the config
+  path or the revision count.
+* **`--no-auth`** exists for a laptop with no remote to read a PIN off. It
+  announces itself at startup in the loudest terms the log has. Never on a
+  device.
+
+### What this still does not do
+
+* **Plain HTTP.** Anything on the path can read the traffic and lift the session
+  cookie. On a home LAN with WPA2 that is a smaller problem than it sounds, but
+  it is real, and it is why the boot block below is still not a default.
+* **No rate limit on challenges.** Attempts against a PIN are limited; asking
+  for new PINs is not. The cost is deliberate and physical - each one lights up
+  the remote - rather than enforced in code.
+* **Anyone who can see the panel can pair**, including through a window. That is
+  the trust model, not a bug, and it is the same one the SSH button uses.
+* **No audit trail.** Nothing records which session made which change.
+
+### Starting it at boot
+
+Nothing starts `couch-confd` at boot yet. When that is wanted it belongs in
+`stage2/stage2.sh`, next to the block that starts `couch-gui` and after the
+network is up, since it is useless without one:
 
 ```sh
 CONFD="$(dirname "$0")/couch-confd"
@@ -310,46 +394,8 @@ if [ -n "$IP" ] && [ -x "$CONFD" ]; then
 fi
 ```
 
-**Do not add that block to a shipped image while the server is unauthenticated.**
-
-## No authentication
-
-`couch-confd` has no authentication, no authorisation and no transport
-security. Every endpoint above is open to anything that can open a TCP
-connection to port 8090:
-
-* any device on the LAN can read the whole configuration - room names, device
-  names, Home Assistant entity ids, Kodi hostnames and ports;
-* any device on the LAN can rewrite or delete all of it, with no audit trail;
-* traffic is plain HTTP, so anything on the path can read and alter it;
-* there are no CSRF defences, so a page in a browser on the same network can
-  issue writes with a form post or a `fetch`;
-* nothing rate-limits anything.
-
-This is a deliberate gap and not an oversight. The daemon exists to be driven
-from a phone on the same network as the remote, and every mechanism that would
-close the gap - a password to store, a token to enrol, a certificate to trust -
-needs a decision about where the credential comes from and how a factory-reset
-device gets a new one. That decision belongs with the setup portal, which
-already owns enrolment: it is where the SSH key and root password are
-established today, gated on a physical button press (`stage2/confirm.sh`).
-
-**It must be closed before this ships in an image.** The likely shape, reusing
-what exists:
-
-1. A token generated on first boot, stored in `/opt/couch/confd.token`, shown on
-   the panel as a QR code the way the setup SSID already is (`ui/couch-gui/src/qr.rs`).
-2. The browser exchanges it once for a cookie; the daemon checks that cookie on
-   every `/api` request and every asset.
-3. Same-origin checks on mutations, since the token in a cookie is otherwise
-   CSRF-able.
-4. Bind to the LAN interface rather than `0.0.0.0` where that is meaningful, and
-   consider requiring the physical confirm press for a *first* pairing, which is
-   the pattern the portal already sets.
-
-Until then: run it on a network you trust, and stop it when you are done. The
-`--help` text says so, `api.rs` says so at the top, and this section is what
-they point at.
+Pairing makes that defensible where it was not before. What would make it
+comfortable is TLS, or binding to the LAN interface rather than `0.0.0.0`.
 
 ## Known gaps
 
