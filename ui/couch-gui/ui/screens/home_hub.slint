@@ -81,9 +81,28 @@ component AreaPane inherits Rectangle {
     // rows travel under a fixed window.
     property <length> row-pitch: 101px;      // 90px row + 11px gap
     property <length> ring-bleed: 6px;       // ring offset + width
+    // The window is computed from the pane's own height and the furniture
+    // around it, NOT read back off the laid-out box.
+    //
+    // Reading roomsbox.height here was a cycle: the box's child is sized from
+    // rows-h, and rows-h came from the box. Slint resolves it, but it meant any
+    // invalidation inside that subtree re-ran the pane's layout, and a layout
+    // re-run dirties the whole component - a 452x654 rect, ~23ms, on the first
+    // frame of every focus move. The animation after it was always smooth; the
+    // stutter was this frame, at the front of it.
+    property <length> acts-h: root.activities.length == 0 ? 0px
+        : 66px + 2 * root.ring-bleed
+          + (root.activities.length > 2 ? 12px : 0px);
+    property <length> scenes-h: 74px + 2 * root.ring-bleed
+                                + (root.scenes.length > 2 ? 12px : 0px);
+    // Children of the pane's VerticalLayout: rooms, the label, scenes, and the
+    // activity block when there is one. Spacing sits between them.
+    property <int> kids: 3 + (root.activities.length > 0 ? 1 : 0);
+    property <length> avail: root.height - root.acts-h - root.scenes-h - 19px
+                             - (root.kids - 1) * 14px - 2 * root.ring-bleed;
     property <length> rows-h: max(90px,
-        Math.floor((roomsbox.height - 2 * root.ring-bleed + 11px) / root.row-pitch)
-        * root.row-pitch - 11px);
+        min(Math.floor((root.avail + 11px) / root.row-pitch) * root.row-pitch - 11px,
+            root.avail));
 
     // Horizontal rows show two cells and scroll for the rest, so a third
     // activity is reachable rather than squashing the first two.
@@ -94,6 +113,22 @@ component AreaPane inherits Rectangle {
                                         - 10px - (root.width - 2 * Theme.pad-side));
     property <length> scene-max: max(0px, root.scenes.length * (root.cell-w + 10px)
                                           - 10px - (root.width - 2 * Theme.pad-side));
+
+    // Which dot is lit, or -1 for none, hoisted out of the dots themselves.
+    //
+    // Each dot used to test focus-row and focus-col directly, so all of them
+    // re-evaluated on every focus move - including moves between rooms, where
+    // the answer is "none" before and after. That is a handful of 6px rects at
+    // the very top and very bottom of the pane, and with the ring moving too it
+    // put more than three rectangles in the dirty region. Past three, Slint
+    // merges, and the merge of "dots at the top, dots at the bottom" is the
+    // whole pane: a 23ms frame at the start of every move, which read as the
+    // animation stuttering before it got going.
+    //
+    // As one property per row, a room-to-room move leaves both at -1, nothing
+    // changes, and nothing is invalidated.
+    property <int> act-dot: root.focus-row < root.first-room-row ? root.focus-col : -1;
+    property <int> scene-dot: root.focus-row == root.scenes-row ? root.focus-col : -1;
 
     in-out property <bool> anim-scroll: true;
     animate act-scroll, scene-scroll {
@@ -243,8 +278,7 @@ component AreaPane inherits Rectangle {
             for act[i] in root.activities: Rectangle {
                 width: 6px; height: 6px;
                 border-radius: 3px;
-                background: root.focus-row < root.first-room-row && root.focus-col == i
-                    ? Theme.accent : Theme.border-raised;
+                background: root.act-dot == i ? Theme.accent : Theme.border-raised;
             }
         }
         }
@@ -354,7 +388,13 @@ component AreaPane inherits Rectangle {
             // with the rows and only the row-to-row step is animated here.
             Rectangle {
                 x: root.ring-bleed;
-                y: (root.focus-row - root.first-room-row) * root.row-pitch;
+                // Clamped to the rows that exist. Focus also sits on the strip
+                // above and the scenes below, and by raw index those are y=-101
+                // and one row past the end - so every crossing sent the ring
+                // flying the length of the list, dirtying a band that size for
+                // the whole animation. It is invisible out there anyway.
+                y: min(max(root.focus-row - root.first-room-row, 0),
+                       max(root.rooms.length - 1, 0)) * root.row-pitch;
                 width: parent.width - 2 * root.ring-bleed;
                 height: 90px;
                 background: transparent;
@@ -448,8 +488,7 @@ component AreaPane inherits Rectangle {
             for scene[i] in root.scenes: Rectangle {
                 width: 6px; height: 6px;
                 border-radius: 3px;
-                background: root.focus-row == root.scenes-row && root.focus-col == i
-                    ? Theme.accent : Theme.border-raised;
+                background: root.scene-dot == i ? Theme.accent : Theme.border-raised;
             }
         }
         }

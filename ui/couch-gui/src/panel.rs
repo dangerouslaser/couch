@@ -132,11 +132,18 @@ impl Panel {
             let region = renderer.render(ram, w as usize);
             if report {
                 let (mut n, mut px) = (0u32, 0u64);
-                for (_, sz) in region.iter() {
+                // The geometry, not just the total: a frame that costs far more
+                // than the moving element explains is claiming something else,
+                // and which rectangle it is names the culprit.
+                let mut where_ = String::new();
+                for (pos, sz) in region.iter() {
                     n += 1;
                     px += (sz.width * sz.height) as u64;
+                    where_.push_str(&format!(
+                        " [{},{} {}x{}]", pos.x, pos.y, sz.width, sz.height
+                    ));
                 }
-                println!("couch-gui: region {n} rect(s), {px} px = {}% of screen",
+                println!("couch-gui: region {n} rect(s), {px} px = {}% of screen{where_}",
                          px * 100 / (w as u64 * h as u64));
             }
             // The region's own rectangles, not its bounding box: a change at
