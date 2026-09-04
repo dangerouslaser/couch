@@ -1,5 +1,12 @@
 # GPU acceleration on the HA100
 
+> **Status: tabled.** The media scene looks fine in practice - the crossfade is
+> brief and nobody watching it is counting frames - and getting EGL up needs
+> enough of Android's runtime (linker namespaces at minimum) that it is a
+> project rather than a bridge. This is kept because the survey and the probes
+> are the expensive part, and they are done: if the animation requirement ever
+> hardens, start from the "Unknowns" section rather than from scratch.
+
 The panel work that hurts is full-screen image compositing: a crossfade between
 two 480x800 backdrops costs **44-57ms per frame** on the CPU, in both LVGL and
 Slint. Everything else fits comfortably in a 16ms budget. So this document is
