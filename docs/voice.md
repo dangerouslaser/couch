@@ -759,3 +759,52 @@ one.
 analogue path is powered returns `EBUSY` with nothing holding the device. The
 error text now says so, because otherwise it sends you looking for a process
 that does not exist.
+
+## sherpa-onnx on the remote: measured, not estimated
+
+Whisper is the wrong shape for this device because its encoder pads every
+utterance to thirty seconds. sherpa-onnx's streaming zipformer transducer does
+work proportional to the audio instead, which is a different question, so it
+was measured rather than reasoned about.
+
+**It runs on the remote today, with no port.** The release's
+`linux-arm-gnueabihf-static` build is static only in the sense that sherpa's own
+libraries and onnxruntime are linked in; the binary itself still wants glibc.
+But it needs exactly three things - `libc.so.6`, `libm.so.6` and
+`ld-linux-armhf.so.3`, with no libstdc++ - so a Debian armhf libc6 unpacked into
+a directory and invoked as an explicit loader is enough:
+
+```sh
+./glibc/ld-linux-armhf.so.3 --library-path ./glibc ./sherpa-onnx --tokens=... 
+```
+
+Alpine's `gcompat` was tried first and segfaults before printing its usage,
+which is the usual outcome for a C++ binary that wants real TLS and unwinding.
+
+**The numbers**, `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17` int8
+(43 MB), on the HA100:
+
+| | |
+|---|---|
+| RTF, 23s of speech, 1 thread | 1.4 |
+| RTF, 23s of speech, 4 threads | 1.6 - *slower* |
+| RTF, 3s clip, 1 thread | 1.9 |
+| cold start, 3s clip, end to end | 14.5s |
+| peak RSS | 83 MB |
+
+Three things follow. Threading does not help - four cores are slower than one,
+the same memory-bandwidth ceiling the GUI's dirty-region work ran into, and for
+the same reason. Fitting a line through the two RTF figures gives about 1.5s of
+fixed warmup plus 1.35x the audio, so **the model must be resident**: 14.5s of
+that cold start is loading 43 MB of weights, and paying it per utterance is
+absurd where paying it once at boot is nothing.
+
+With a warm, resident decoder fed while the user is still speaking, a
+three-second phrase lands roughly two to three seconds after they stop. That is
+usable for dictating a search - a D-pad keyboard takes twenty - and it is not
+usable for anything conversational.
+
+Accuracy was not established. The test recording came off a microphone whose
+response is discussed above, and the transcript was recognisably English
+without being right. Judging the model needs a clean input, which needs the
+microphone question answered first.
