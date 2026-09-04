@@ -1,0 +1,23 @@
+[package]
+name = "couch-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Couch remote's on-screen UI"
+
+# Slint without its "std" feature: that feature turns on system font discovery,
+# which drags in yeslogic-fontconfig-sys - a C library wanting a cross sysroot
+# and pkg-config, for a device with no font system at all. This is the
+# configuration Slint's microcontroller targets use; fonts are embedded at build
+# time by build.rs. The crate itself still uses Rust std normally.
+[dependencies]
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "renderer-software", "libm", "unsafe-single-threaded",
+] }
+libc = "0.2"
+# The setup screen's QR. LVGL had one built in; Slint does not, and qrcodegen is
+# the same encoder LVGL vendored.
+qrcodegen = "1.8"
+
+[build-dependencies]
+slint-build = "1.17"

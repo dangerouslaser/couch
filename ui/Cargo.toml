@@ -1,0 +1,19 @@
+# Separate from clients/ deliberately: the GUI and the integration daemons are
+# built and iterated on independently, and keeping two workspaces means work on
+# one cannot break the other's lockfile. They can be merged later if they start
+# sharing types.
+[workspace]
+resolver = "2"
+members = ["couch-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
