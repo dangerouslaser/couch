@@ -21,6 +21,8 @@ export component App inherits Window {
     in-out property <[LiveActivity]> activities;
     in-out property <[AreaRow]> areas;
     in-out property <[SceneCell]> scenes;
+    // Areas beyond what fits, collapsed into one stop by the hub.
+    in-out property <int> more-count: 0;
 
     // --- interaction ----------------------------------------------------------
     // A single top-level FocusScope driving an integer index, rather than Slint's
@@ -93,6 +95,7 @@ export component App inherits Window {
         activities: root.activities;
         areas: root.areas;
         scenes: root.scenes;
+        more-count: root.more-count;
         focus-index: root.focus-index;
         pressed-index: root.pressed-index;
     }

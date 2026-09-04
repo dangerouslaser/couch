@@ -74,12 +74,20 @@ export component HomeHub inherits Rectangle {
     in property <[LiveActivity]> activities;
     in property <[AreaRow]> areas;
     in property <[SceneCell]> scenes;
+    // Areas beyond what fits collapse into one "More areas" stop rather than
+    // scrolling or paginating. The hub must never scroll, and left/right are
+    // already spoken for by the focus ring, so pagination would need the soft
+    // keys - a bigger decision than this row.
+    in property <int> more-count: 0;
     in property <int> focus-index;
     in property <int> pressed-index: -1;
+    property <int> more-base: root.activities.length + root.areas.length;
+    property <int> scene-base: root.more-base + (root.more-count > 0 ? 1 : 0);
 
     // Stops are a single linear ring in reading order: activities, then areas,
     // then scenes. Declared here so the shell can wrap without knowing layout.
-    out property <int> stop-count: root.activities.length + root.areas.length + root.scenes.length;
+    out property <int> stop-count: root.activities.length + root.areas.length
+        + (root.more-count > 0 ? 1 : 0) + root.scenes.length;
 
     background: Theme.bg;
 
@@ -248,6 +256,59 @@ export component HomeHub inherits Rectangle {
                     }
                 }
             }
+
+            if root.more-count > 0: Rectangle {
+                height: 90px;
+                background: root.pressed-index == root.more-base
+                    ? Theme.surface-press : Theme.surface-recessed;
+                border-width: 1px;
+                border-color: Theme.border-dim;
+                border-radius: Theme.r-row;
+
+                FocusRing {
+                    focused: root.focus-index == root.more-base;
+                    radius-inner: Theme.r-row;
+                    box-width: parent.width; box-height: parent.height;
+                }
+
+                HorizontalLayout {
+                    padding: 18px;
+                    spacing: 16px;
+
+                    Rectangle {
+                        width: 52px;
+                        height: 52px;
+                        border-radius: Theme.r-disc;
+                        background: Theme.surface-icon-idle;
+                        border-width: 1px;
+                        border-color: Theme.border-icon-idle;
+                        Image {
+                            source: @image-url("../../assets/chevron-right.png");
+                            width: 20px; height: 20px;
+                            colorize: Theme.text-secondary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text {
+                            text: "More areas";
+                            font-size: 26px;
+                            font-weight: 600;
+                            color: Theme.text-secondary;
+                        }
+                        Text {
+                            text: root.more-count + " more";
+                            font-size: 19px;
+                            color: Theme.text-quaternary;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 0; width: 0px; }
+                }
+            }
         }
 
         SectionLabel { text: "WHOLE HOME"; height: 19px; }
@@ -256,14 +317,14 @@ export component HomeHub inherits Rectangle {
             height: 74px;
             spacing: 11px;
             for scene[i] in root.scenes: Rectangle {
-                background: root.pressed-index == root.activities.length + root.areas.length + i
+                background: root.pressed-index == root.scene-base + i
                     ? Theme.surface-press : Theme.surface;
                 border-width: 1px;
                 border-color: Theme.border;
                 border-radius: Theme.r-card;
 
                 FocusRing {
-                    focused: root.focus-index == root.activities.length + root.areas.length + i;
+                    focused: root.focus-index == root.scene-base + i;
                     radius-inner: Theme.r-card;
                     box-width: parent.width; box-height: parent.height;
                 }

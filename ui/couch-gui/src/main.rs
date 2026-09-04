@@ -36,13 +36,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reference content from the design handoff, so the hub renders as designed
     // until a hub daemon exists to supply it. Areas come from local config in
     // the real thing, which is why they are present before any bridge answers.
+    let activities_shown = true;
     app.set_activities(ModelRc::new(VecModel::from(vec![
         LiveActivity { kind: 0, title: "Midnight Ferry".into(),
                        source: "SONOS".into(), place: "KITCHEN".into() },
         LiveActivity { kind: 1, title: "Paused - Andrei Rublev".into(),
                        source: "KODI".into(), place: "LIVING".into() },
     ])));
-    app.set_areas(ModelRc::new(VecModel::from(vec![
+    // COUCH_AREAS overrides the count so the overflow behaviour is testable:
+    // the hub is designed for four and must never scroll, and what a fifth or
+    // eighth area does to it is an open question in the handoff.
+    let mut areas = vec![
         AreaRow { name: "Living room".into(), devices: "5 devices".into(),
                   detail: "Kodi, Hue, LG C3".into(),
                   active_count: 2, idle: false, offline: false, dimmed: false, glyph: 0 },
@@ -54,7 +58,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                   active_count: 1, idle: false, offline: false, dimmed: false, glyph: 2 },
         AreaRow { name: "Study".into(), devices: "2 devices".into(), detail: "".into(),
                   active_count: 0, idle: true, offline: false, dimmed: true, glyph: 3 },
-    ])));
+    ];
+    if let Ok(n) = std::env::var("COUCH_AREAS").unwrap_or_default().parse::<usize>() {
+        let extra = ["Hallway", "Garage", "Garden", "Loft", "Utility", "Porch", "Cellar"];
+        while areas.len() > n {
+            areas.pop();
+        }
+        let mut i = 0;
+        while areas.len() < n {
+            let name = extra[i % extra.len()];
+            areas.push(AreaRow {
+                name: name.into(),
+                devices: "2 devices".into(),
+                detail: "Hue".into(),
+                active_count: (i % 2) as i32,
+                idle: i % 2 == 1,
+                offline: false,
+                dimmed: false,
+                glyph: (i % 4) as i32,
+            });
+            i += 1;
+        }
+    }
+    // What fits, measured against the 800px the hub may never exceed:
+    // 704px of content once the status bar and padding are taken, less the
+    // labels, the scene row, and - when anything is playing - the activity
+    // strip. That leaves room for four rows, or five when the strip is hidden.
+    // Anything past that collapses into a single "More areas" stop, so the
+    // hub's height is the same whether a home has four areas or forty.
+    let capacity = if activities_shown { 4 } else { 5 };
+    let more = areas.len().saturating_sub(capacity);
+    if more > 0 {
+        // The overflow row occupies a slot of its own.
+        areas.truncate(capacity - 1);
+    }
+    app.set_more_count((if more > 0 { more + 1 } else { 0 }) as i32);
+    app.set_areas(ModelRc::new(VecModel::from(areas)));
+
     app.set_scenes(ModelRc::new(VecModel::from(vec![
         SceneCell { name: "Movie night".into(), active: false },
         SceneCell { name: "All off".into(), active: false },
