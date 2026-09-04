@@ -15,9 +15,19 @@ slint = { version = "1.17", default-features = false, features = [
     "compat-1-2", "renderer-software", "libm", "unsafe-single-threaded",
 ] }
 libc = "0.2"
+# Direct dependency purely to switch on i-slint-core's "path" feature: Cargo
+# unifies features, so this should reach the same crate slint depends on.
+# These two exist only to switch on the "path" feature, which lets the software
+# renderer draw vector paths - lucide-slint's icons are Path elements. The slint
+# facade forwards this feature from neither crate, and enabling it on core alone
+# leaves the renderer's draw_path compiled out, which reads as "paths are
+# unsupported" when it is really "half configured".
+i-slint-core = { version = "1.17", default-features = false, features = ["path"] }
+i-slint-renderer-software = { version = "1.17", default-features = false, features = ["path", "libm"] }
 # The setup screen's QR. LVGL had one built in; Slint does not, and qrcodegen is
 # the same encoder LVGL vendored.
 qrcodegen = "1.8"
 
 [build-dependencies]
+lucide-slint = "1.40.0"
 slint-build = "1.17"

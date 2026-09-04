@@ -120,7 +120,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
     let areas = std::rc::Rc::new(areas);
-    let show_area = {
+    // A page change fills the incoming pane, slides to it, and adopts it when
+    // the hub says the animation is done. The pager updates immediately -
+    // it does not move, so it can lead rather than lag.
+    let pending = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let sliding = std::rc::Rc::new(std::cell::Cell::new(false));
+
+    let put_front = {
         let areas = areas.clone();
         move |app: &App, index: usize| {
             let a = &areas[index];
@@ -128,11 +134,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_area_index(index as i32);
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
-            // A new list makes the old focus and scroll meaningless.
             app.set_focus_index(app.get_activities().row_count() as i32);
             app.invoke_reset_scroll();
         }
     };
+
     // COUCH_AREA opens on a given page, so each one can be checked without
     // driving the keypad.
     let first = std::env::var("COUCH_AREA")
@@ -140,17 +146,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|i| *i < areas.len())
         .unwrap_or(0);
-    show_area(&app, first);
+    put_front(&app, first);
+    pending.set(first);
 
     {
         let weak = app.as_weak();
-        let areas_len = areas.len();
-        let show_area = show_area.clone();
+        let areas = areas.clone();
+        let pending = pending.clone();
+        let sliding = sliding.clone();
         app.on_area_step(move |delta| {
+            let Some(app) = weak.upgrade() else { return };
+            // Ignore a second press mid-transition: restarting the timer would
+            // strand the first page half way across.
+            if sliding.get() {
+                return;
+            }
+            let cur = app.get_area_index();
+            let next = (cur + delta).rem_euclid(areas.len() as i32) as usize;
+            if next == cur as usize {
+                return;
+            }
+            let a = &areas[next];
+            app.set_rooms_next(ModelRc::new(VecModel::from(a.rooms.clone())));
+            app.set_scenes_next(ModelRc::new(VecModel::from(a.scenes.clone())));
+            app.set_area_name(a.name.into());
+            app.set_area_index(next as i32);
+            pending.set(next);
+            sliding.set(true);
+            app.invoke_slide(delta);
+        });
+    }
+
+    {
+        let weak = app.as_weak();
+        let pending = pending.clone();
+        let sliding = sliding.clone();
+        let put_front = put_front.clone();
+        app.on_settled(move || {
             if let Some(app) = weak.upgrade() {
-                let cur = app.get_area_index();
-                let next = (cur + delta).rem_euclid(areas_len as i32);
-                show_area(&app, next as usize);
+                put_front(&app, pending.get());
+                sliding.set(false);
             }
         });
     }
@@ -173,6 +208,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // COUCH_NAV walks the focus ring on a timer, so its repaint behaviour is
     // observable without someone pressing buttons.
     let nav = std::env::var("COUCH_NAV").is_ok();
+    // COUCH_SLIDE steps the area every 1.5s, so the transition's real cost can
+    // be measured rather than extrapolated from simpler content.
+    let auto_slide = std::env::var("COUCH_SLIDE").is_ok();
+    let mut slide_at = now_monotonic_us() + 1_500_000;
     let mut nav_at = now_monotonic_us() + 700_000;
 
     let (mut frames, mut render_us, mut frame_max) = (0u64, 0u64, 0u64);
@@ -240,6 +279,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_focus_index((app.get_focus_index() + 1) % n);
             }
             nav_at = now + 700_000;
+        }
+
+        if auto_slide && now >= slide_at {
+            app.invoke_area_step(1);
+            slide_at = now + 1_500_000;
         }
 
         slint::platform::update_timers_and_animations();

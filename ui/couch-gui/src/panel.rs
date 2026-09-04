@@ -120,11 +120,25 @@ impl Panel {
     }
 
     /// Render one frame if anything changed. Returns whether it drew.
+    ///
+    /// COUCH_REGION reports what the renderer marked dirty. A frame that costs
+    /// far more than its content suggests is almost always claiming a much
+    /// larger region than it needs, and that is invisible without this.
     pub fn render(&mut self, window: &MinimalSoftwareWindow) -> bool {
+        let report = std::env::var_os("COUCH_REGION").is_some();
         let (w, h, stride_px) = (self.width, self.height, self.stride_px);
         let (ram, map) = (&mut self.ram, &mut *self.map);
         window.draw_if_needed(|renderer| {
             let region = renderer.render(ram, w as usize);
+            if report {
+                let (mut n, mut px) = (0u32, 0u64);
+                for (_, sz) in region.iter() {
+                    n += 1;
+                    px += (sz.width * sz.height) as u64;
+                }
+                println!("couch-gui: region {n} rect(s), {px} px = {}% of screen",
+                         px * 100 / (w as u64 * h as u64));
+            }
             // The region's own rectangles, not its bounding box: a change at
             // opposite ends of the screen has a bounding box of nearly the
             // whole panel.

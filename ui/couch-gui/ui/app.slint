@@ -20,6 +20,12 @@ export component App inherits Window {
     // --- hub data -------------------------------------------------------------
     in-out property <[LiveActivity]> activities;
     in-out property <[RoomRow]> rooms;
+    // The incoming page during a transition; the host fills it, then asks for
+    // the slide, then adopts it when the hub reports settled.
+    in-out property <[RoomRow]> rooms-next;
+    in-out property <[SceneCell]> scenes-next;
+    callback settled();
+    public function slide(dir: int) { hub.slide(dir); }
     in-out property <string> area-name: "HOME";
     in-out property <int> area-index: 0;
     in-out property <int> area-count: 1;
@@ -55,7 +61,7 @@ export component App inherits Window {
     public function settle-focus() { hub.ensure-visible(); }
     // Changing area replaces the whole list, so the old scroll position means
     // nothing: start the new area at the top.
-    public function reset-scroll() { hub.scroll = 0px; }
+    public function reset-scroll() { hub.reset-scroll(); }
 
     function move(delta: int) {
         // Vertical only now. The handoff had both axes walking one ring, but
@@ -105,6 +111,9 @@ export component App inherits Window {
         height: parent.height - 56px;
         activities: root.activities;
         rooms: root.rooms;
+        rooms-next: root.rooms-next;
+        scenes-next: root.scenes-next;
+        settled() => { root.settled(); }
         area-name: root.area-name;
         area-index: root.area-index;
         area-count: root.area-count;

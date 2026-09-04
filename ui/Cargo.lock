@@ -722,7 +722,10 @@ dependencies = [
 name = "couch-gui"
 version = "0.1.0"
 dependencies = [
+ "i-slint-core",
+ "i-slint-renderer-software",
  "libc",
+ "lucide-slint",
  "qrcodegen",
  "slint",
  "slint-build",
@@ -2342,6 +2345,12 @@ checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
 ]
+
+[[package]]
+name = "lucide-slint"
+version = "1.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62e8aec3ed21c97d6591ed6708cd9350d8387cfc19fd446233d64c14ba97dcc2"
 
 [[package]]
 name = "lyon_algorithms"

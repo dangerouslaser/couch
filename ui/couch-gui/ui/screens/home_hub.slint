@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { IconDisplay, IconSet } from "@lucide";
 import { FocusRing } from "../components/focus_ring.slint";
 import { SectionLabel } from "../components/section_label.slint";
 
@@ -29,61 +30,52 @@ export struct SceneCell {
     active: bool,
 }
 
-// Room icons are Lucide, tinted at runtime so the colour still comes from the
-// theme. The mockup drew these as primitives to avoid an asset pipeline; there
-// was already one here from the C build, and a sofa reads as a living room in a
-// way that a square does not.
+// Room icons are Lucide, drawn as real vector paths rather than rasterised
+// alpha masks. That needs the "path" feature on both i-slint-core and the
+// software renderer - the slint facade forwards it from neither, which is why
+// Cargo.toml names those two crates directly.
 //
-// Selected by index rather than by name: Slint has no map, and an if-chain of
-// @image-url keeps every icon embedded at compile time, which is what the
-// software renderer needs.
+// Selected with a ternary chain rather than ten conditional elements: the icon
+// is a value, so picking it is an expression.
 component RoomIcon inherits Rectangle {
     in property <int> shape;
     in property <color> ink;
     width: 24px;
     height: 24px;
 
-    if root.shape == 0: Image { source: @image-url("../../assets/icon-sofa.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 1: Image { source: @image-url("../../assets/icon-bed.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 2: Image { source: @image-url("../../assets/icon-cooking-pot.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 3: Image { source: @image-url("../../assets/icon-book-open.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 4: Image { source: @image-url("../../assets/icon-door-open.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 5: Image { source: @image-url("../../assets/icon-car.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 6: Image { source: @image-url("../../assets/icon-trees.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 7: Image { source: @image-url("../../assets/icon-lamp.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 8: Image { source: @image-url("../../assets/icon-tv.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape >= 9: Image { source: @image-url("../../assets/icon-house.png");
-        width: 100%; height: 100%; colorize: root.ink; }
+    IconDisplay {
+        width: 100%;
+        height: 100%;
+        size: 24px;
+        stroke: root.ink;
+        stroke-width: 2.2;
+        icon: root.shape == 0 ? IconSet.Sofa
+            : root.shape == 1 ? IconSet.Bed
+            : root.shape == 2 ? IconSet.CookingPot
+            : root.shape == 3 ? IconSet.BookOpen
+            : root.shape == 4 ? IconSet.DoorOpen
+            : root.shape == 5 ? IconSet.Car
+            : root.shape == 6 ? IconSet.Trees
+            : root.shape == 7 ? IconSet.Lamp
+            : root.shape == 8 ? IconSet.Tv
+            : IconSet.House;
+    }
 }
 
-export component HomeHub inherits Rectangle {
-    in property <[LiveActivity]> activities;
+component AreaPane inherits Rectangle {
+    in property <int> activities-count;
     in property <[RoomRow]> rooms;
     in property <[SceneCell]> scenes;
-    in property <string> area-name;
-    in property <int> area-index;
-    in property <int> area-count;
-    // A model purely to count dots; Slint has no numeric range loop.
-    in property <[bool]> area-dots;
     in property <int> focus-index;
     in property <int> pressed-index: -1;
-    property <int> scene-base: root.activities.length + root.rooms.length;
+    property <int> scene-base: root.activities-count + root.rooms.length;
 
     // The area list scrolls rather than paginating. Everything else on the hub
     // stays put, so the strip, the labels and the scenes never move - only the
     // rows travel under a fixed window.
     property <length> row-pitch: 101px;      // 90px row + 11px gap
     property <length> ring-bleed: 6px;       // ring offset + width
-    property <length> rows-h: root.activities.length > 0 ? 393px : 494px;
+    property <length> rows-h: root.activities-count > 0 ? 393px : 494px;
     in-out property <length> scroll: 0px;
     property <length> max-scroll: max(0px, root.rooms.length * root.row-pitch
                                            - 11px - root.rows-h);
@@ -92,9 +84,9 @@ export component HomeHub inherits Rectangle {
     // into the window, and not at all while it is already there. Recomputing
     // from the index alone would scroll on moves that did not need it.
     public function ensure-visible() {
-        if (root.focus-index < root.activities.length) { return; }
+        if (root.focus-index < root.activities-count) { return; }
         if (root.focus-index >= root.scene-base) { return; }
-        self.row-into-view((root.focus-index - root.activities.length) * root.row-pitch);
+        self.row-into-view((root.focus-index - root.activities-count) * root.row-pitch);
     }
     function row-into-view(row-y: length) {
         if (row-y < root.scroll) {
@@ -106,132 +98,13 @@ export component HomeHub inherits Rectangle {
 
     // Stops are a single linear ring in reading order: activities, then areas,
     // then scenes. Declared here so the shell can wrap without knowing layout.
-    out property <int> stop-count: root.activities.length + root.rooms.length
-        + root.scenes.length;
 
     background: Theme.bg;
 
     VerticalLayout {
-        padding-top: Theme.pad-top;
         padding-left: Theme.pad-side - root.ring-bleed;
         padding-right: Theme.pad-side - root.ring-bleed;
-        padding-bottom: Theme.pad-bottom;
         spacing: 14px;
-
-        // --- live activity strip: hidden entirely when nothing is playing, so
-        // the AREAS label moves up rather than leaving empty cells ------------
-        if root.activities.length > 0: HorizontalLayout {
-            height: 66px;
-            spacing: 10px;
-            padding-left: root.ring-bleed;
-            padding-right: root.ring-bleed;
-            for act[i] in root.activities: Rectangle {
-                background: root.pressed-index == i ? Theme.surface-press : Theme.surface-raised;
-                border-width: 1px;
-                border-color: Theme.border-raised;
-                border-radius: Theme.r-card;
-
-                FocusRing {
-                    focused: root.focus-index == i;
-                    radius-inner: Theme.r-card;
-                    box-width: parent.width; box-height: parent.height;
-                }
-
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
-                    spacing: 12px;
-
-                    // Sonos: three bars, 4px wide, 12/20/8 tall, bottom aligned.
-                    // Kodi: a 14x18 play triangle.
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 0;
-                        if act.kind == 0: HorizontalLayout {
-                            spacing: 3px;
-                            alignment: start;
-                            Rectangle { width: 4px; height: 12px; background: Theme.accent;
-                                        y: parent.height - self.height; }
-                            Rectangle { width: 4px; height: 20px; background: Theme.accent;
-                                        y: parent.height - self.height; }
-                            Rectangle { width: 4px; height: 8px;  background: Theme.accent;
-                                        y: parent.height - self.height; }
-                        }
-                        if act.kind == 1: Image {
-                            source: @image-url("../../assets/glyph-play.png");
-                            width: 14px; height: 18px;
-                            colorize: Theme.accent;
-                        }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 3px;
-                        horizontal-stretch: 1;
-                        Text {
-                            text: act.title;
-                            font-size: 19px;
-                            font-weight: 600;
-                            color: Theme.text;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: act.source + " · " + act.place;
-                            font-size: 14px;
-                            letter-spacing: 0.06 * 14px;
-                            color: Theme.text-tertiary;
-                            overflow: elide;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Left and right move between areas, up and down between rooms. The
-        // chevrons and dots are the only thing telling a user the sideways
-        // axis exists, so they are not decoration.
-        VerticalLayout {
-            height: 36px;
-            spacing: 4px;
-
-            HorizontalLayout {
-                height: 26px;
-                padding-left: root.ring-bleed;
-                padding-right: root.ring-bleed;
-                Image {
-                    source: @image-url("../../assets/chevron-left.png");
-                    width: 18px; height: 18px;
-                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
-                    y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: root.area-name;
-                    font-size: 16px;
-                    letter-spacing: 0.12 * 16px;
-                    color: Theme.accent;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                Image {
-                    source: @image-url("../../assets/chevron-right.png");
-                    width: 18px; height: 18px;
-                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            HorizontalLayout {
-                height: 6px;
-                spacing: 6px;
-                alignment: center;
-                for dot[i] in root.area-dots: Rectangle {
-                    width: 6px; height: 6px;
-                    border-radius: 3px;
-                    background: i == root.area-index ? Theme.accent : Theme.border-raised;
-                }
-            }
-        }
 
         Rectangle {
             height: root.rows-h + 2 * root.ring-bleed;
@@ -245,7 +118,7 @@ export component HomeHub inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for area[i] in root.rooms: Rectangle {
                 height: 90px;
-                background: root.pressed-index == root.activities.length + i
+                background: root.pressed-index == root.activities-count + i
                     ? Theme.surface-press
                     : (area.idle ? Theme.surface-idle : Theme.surface);
                 border-width: 1px;
@@ -253,7 +126,7 @@ export component HomeHub inherits Rectangle {
                 border-radius: Theme.r-row;
 
                 FocusRing {
-                    focused: root.focus-index == root.activities.length + i;
+                    focused: root.focus-index == root.activities-count + i;
                     radius-inner: Theme.r-row;
                     box-width: parent.width; box-height: parent.height;
                 }
@@ -380,6 +253,227 @@ export component HomeHub inherits Rectangle {
                             overflow: elide;
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+export component HomeHub inherits Rectangle {
+    in property <[LiveActivity]> activities;
+    in property <string> area-name;
+    in property <int> area-index;
+    in property <int> area-count;
+    // A model purely to count dots; Slint has no numeric range loop.
+    in property <[bool]> area-dots;
+
+    // Two panes: the one on screen, and the one sliding in. The host fills the
+    // back pane before asking for the slide, and adopts it when settled().
+    in property <[RoomRow]> rooms;
+    in property <[SceneCell]> scenes;
+    in property <[RoomRow]> rooms-next;
+    in property <[SceneCell]> scenes-next;
+
+    in property <int> focus-index;
+    in property <int> pressed-index: -1;
+    out property <int> stop-count: root.activities.length + root.rooms.length
+        + root.scenes.length;
+
+    property <length> ring-bleed: 6px;
+    // Measured off our own height rather than the parent's, which a component
+    // root cannot see. The strip is conditional, and so is the gap above it.
+    property <length> strip-block: root.activities.length > 0 ? 66px + 14px : 0px;
+    property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom
+                              - root.strip-block - 36px - 14px;
+
+    // A slide rather than a cross-fade, and only over the part that changes.
+    // Blending two layers costs roughly twice writing each pixel once, which on
+    // this CPU is the difference between comfortable and not; and the pager is
+    // the control, so it should not travel with the thing it controls.
+    property <bool> jumping: false;
+    out property <bool> sliding: false;
+    property <bool> from-right: true;
+    property <length> strip-x: 0px;
+    animate strip-x {
+        duration: root.jumping ? 0ms : 180ms;
+        easing: ease-out;
+    }
+    callback settled();
+
+    public function slide(dir: int) {
+        root.from-right = dir > 0;
+        // Park at the start without animating, then animate home.
+        root.jumping = true;
+        root.strip-x = 0px;
+        root.jumping = false;
+        root.strip-x = dir > 0 ? -root.width : root.width;
+        root.sliding = true;
+        settle-timer.running = true;
+    }
+
+    settle-timer := Timer {
+        interval: 180ms;
+        running: false;
+        triggered() => {
+            self.running = false;
+            // Adopt the incoming pane as the resident one and jump back, which
+            // is invisible because the host has just swapped the content.
+            root.settled();
+            root.jumping = true;
+            root.strip-x = 0px;
+            root.jumping = false;
+            root.sliding = false;
+        }
+    }
+
+    public function ensure-visible() { front.ensure-visible(); }
+    public function reset-scroll() { front.scroll = 0px; }
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding-top: Theme.pad-top;
+        padding-bottom: Theme.pad-bottom;
+        spacing: 14px;
+
+        // --- live activity strip: hidden entirely when nothing is playing, so
+        // the pager moves up rather than leaving empty cells ------------------
+        if root.activities.length > 0: HorizontalLayout {
+            height: 66px;
+            spacing: 10px;
+            padding-left: Theme.pad-side;
+            padding-right: Theme.pad-side;
+            for act[i] in root.activities: Rectangle {
+                background: root.pressed-index == i ? Theme.surface-press : Theme.surface-raised;
+                border-width: 1px;
+                border-color: Theme.border-raised;
+                border-radius: Theme.r-card;
+
+                FocusRing {
+                    focused: root.focus-index == i;
+                    radius-inner: Theme.r-card;
+                    box-width: parent.width; box-height: parent.height;
+                }
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        if act.kind == 0: HorizontalLayout {
+                            spacing: 3px;
+                            alignment: start;
+                            Rectangle { width: 4px; height: 12px; background: Theme.accent;
+                                        y: parent.height - self.height; }
+                            Rectangle { width: 4px; height: 20px; background: Theme.accent;
+                                        y: parent.height - self.height; }
+                            Rectangle { width: 4px; height: 8px;  background: Theme.accent;
+                                        y: parent.height - self.height; }
+                        }
+                        if act.kind == 1: Path {
+                            width: 14px; height: 18px;
+                            viewbox-width: 14; viewbox-height: 18;
+                            commands: "M 0 0 L 14 9 L 0 18 Z";
+                            fill: Theme.accent;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: act.title;
+                            font-size: 19px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: act.source + " · " + act.place;
+                            font-size: 14px;
+                            letter-spacing: 0.06 * 14px;
+                            color: Theme.text-tertiary;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Left and right move between areas, up and down between rooms. The
+        // chevrons and dots are the only thing telling a user the sideways axis
+        // exists, so they are not decoration.
+        VerticalLayout {
+            height: 36px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                height: 26px;
+                padding-left: Theme.pad-side;
+                padding-right: Theme.pad-side;
+                Image {
+                    source: @image-url("../../assets/chevron-left.png");
+                    width: 18px; height: 18px;
+                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.area-name;
+                    font-size: 16px;
+                    letter-spacing: 0.12 * 16px;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Image {
+                    source: @image-url("../../assets/chevron-right.png");
+                    width: 18px; height: 18px;
+                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            HorizontalLayout {
+                height: 6px;
+                spacing: 6px;
+                alignment: center;
+                for dot[i] in root.area-dots: Rectangle {
+                    width: 6px; height: 6px;
+                    border-radius: 3px;
+                    background: i == root.area-index ? Theme.accent : Theme.border-raised;
+                }
+            }
+        }
+
+        // The sliding window. Only this part moves.
+        Rectangle {
+            clip: true;
+            Rectangle {
+                x: root.strip-x;
+                front := AreaPane {
+                    x: 0px;
+                    width: root.width;
+                    height: root.pane-h;
+                    activities-count: root.activities.length;
+                    rooms: root.rooms;
+                    scenes: root.scenes;
+                    focus-index: root.focus-index;
+                    pressed-index: root.pressed-index;
+                }
+                if root.sliding: AreaPane {
+                    x: root.from-right ? root.width : -root.width;
+                    width: root.width;
+                    height: root.pane-h;
+                    activities-count: root.activities.length;
+                    rooms: root.rooms-next;
+                    scenes: root.scenes-next;
+                    focus-index: -1;
+                    pressed-index: -1;
                 }
             }
         }
