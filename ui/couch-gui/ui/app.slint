@@ -3,6 +3,7 @@ import { StatusBar } from "components/status_bar.slint";
 import { VolumeOverlay } from "components/volume_overlay.slint";
 import { PairOverlay } from "components/pair_overlay.slint";
 import { MicOverlay } from "components/mic_overlay.slint";
+import { Chooser, ChoiceItem } from "components/chooser.slint";
 import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
 
@@ -47,8 +48,7 @@ export component App inherits Window {
     // between rows and left and right move within them. In the room list, which
     // has no horizontal extent, left and right change area instead.
     in-out property <int> focus-row: 0;
-    in-out property <int> focus-col: 0;
-    callback activated(int, int);
+    callback activated(int);
     callback back();
     callback home();
 
@@ -60,6 +60,14 @@ export component App inherits Window {
     in-out property <int> approval: 0;
 
     // --- volume overlay -------------------------------------------------------
+    // The chooser, opened by OK on the activity strip or the scenes row. While
+    // it is up it owns up, down, OK and back; nothing else on the hub moves.
+    in-out property <bool> chooser-shown: false;
+    in-out property <string> chooser-title;
+    in-out property <[ChoiceItem]> chooser-items;
+    in-out property <int> chooser-index: 0;
+    callback chosen(int);
+
     // The microphone is open. Driven by whether the capture thread is alive,
     // never by a flag - see src/mic.rs.
     in-out property <bool> recording: false;
@@ -94,36 +102,38 @@ export component App inherits Window {
         root.focus-row = Math.mod(root.focus-row + delta + root.row-count, root.row-count);
         // A row remembers nothing: entering it always starts at its first cell,
         // which is predictable in a way that "wherever you were last" is not.
-        root.focus-col = 0;
         hub.ensure-visible();
     }
 
-    // Left and right mean different things depending on where focus is, so the
-    // pager chevrons dim when they are not what the keys will do.
-    property <bool> horizontal-is-area: root.focus-row >= root.first-room-row
-                                        && root.focus-row < root.scenes-row;
-
-    function step-horizontal(delta: int) {
-        if (root.horizontal-is-area) {
-            root.area-step(delta);
-            return;
-        }
-        if (root.focus-row < root.first-room-row) {
-            root.focus-col = Math.mod(root.focus-col + delta + root.act-count, root.act-count);
-        } else if (root.scenes.length > 0) {
-            root.focus-col = Math.mod(root.focus-col + delta + root.scenes.length,
-                                      root.scenes.length);
-        }
-        hub.ensure-col-visible();
-    }
 
     fs := FocusScope {
         key-pressed(e) => {
+            if (root.chooser-shown) {
+                if (e.text == Key.UpArrow) {
+                    root.chooser-index = Math.mod(root.chooser-index - 1
+                        + root.chooser-items.length, root.chooser-items.length);
+                    return accept;
+                }
+                if (e.text == Key.DownArrow) {
+                    root.chooser-index = Math.mod(root.chooser-index + 1,
+                        root.chooser-items.length);
+                    return accept;
+                }
+                if (e.text == Key.Return) { root.chosen(root.chooser-index); return accept; }
+                if (e.text == Key.Escape) { root.chooser-shown = false; return accept; }
+                // Left and right change area everywhere else; inside a list
+                // they would have nothing to do, so they close it.
+                if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                    root.chooser-shown = false;
+                    return accept;
+                }
+                return accept;
+            }
             if (e.text == Key.UpArrow)    { root.move(-1); return accept; }
             if (e.text == Key.DownArrow)  { root.move(1);  return accept; }
-            if (e.text == Key.LeftArrow)  { root.step-horizontal(-1); return accept; }
-            if (e.text == Key.RightArrow) { root.step-horizontal(1);  return accept; }
-            if (e.text == Key.Return)  { root.activated(root.focus-row, root.focus-col); return accept; }
+            if (e.text == Key.LeftArrow)  { root.area-step(-1); return accept; }
+            if (e.text == Key.RightArrow) { root.area-step(1);  return accept; }
+            if (e.text == Key.Return)  { root.activated(root.focus-row); return accept; }
             if (e.text == Key.Escape)  { root.back(); return accept; }
             if (e.text == Key.Home)    { root.home(); return accept; }
             return reject;
@@ -154,9 +164,8 @@ export component App inherits Window {
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
-        pick(r, c) => {
+        pick(r) => {
             root.focus-row = r;
-            root.focus-col = c;
             hub.ensure-visible();
         }
         activities: root.activities;
@@ -171,9 +180,19 @@ export component App inherits Window {
         area-dots: root.area-dots;
         scenes: root.scenes;
         focus-row: root.focus-row;
-        focus-col: root.focus-col;
         first-room-row: root.first-room-row;
         scenes-row: root.scenes-row;
+    }
+
+    Chooser {
+        // Below the status bar, not over it: the clock and the battery are
+        // true whatever is on screen, and dimming them to 7% says otherwise.
+        x: 0px; y: 56px;
+        width: root.width; height: root.height - 56px;
+        shown: root.chooser-shown;
+        title: root.chooser-title;
+        items: root.chooser-items;
+        index: root.chooser-index;
     }
 
     MicOverlay {

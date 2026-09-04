@@ -178,7 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
             app.set_focus_row(if a.activities.is_empty() { 0 } else { 1 });
-            app.set_focus_col(0);
             app.invoke_reset_scroll();
             // The page is whole; the ring may animate again.
             app.invoke_end_swap();
@@ -200,9 +199,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // without driving the keypad.
     if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
         app.set_focus_row(n);
-        app.set_focus_col(
-            std::env::var("COUCH_COL").unwrap_or_default().parse::<i32>().unwrap_or(0),
-        );
         app.invoke_settle_focus();
     }
 
@@ -248,7 +244,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    app.on_activated(|row, col| println!("couch-gui: activated row {row} col {col}"));
+    // OK on the strip or the scenes row opens what is there: straight through
+    // when there is one of it, as a list when there are several. Anywhere else
+    // it is a room, which has no screen behind it yet.
+    {
+        let weak = app.as_weak();
+        let areas = areas.clone();
+        let pending = pending.clone();
+        app.on_activated(move |row| {
+            let Some(app) = weak.upgrade() else { return };
+            let a = &areas[pending.get()];
+            let first_room = if a.activities.is_empty() { 0 } else { 1 };
+            let scenes_row = first_room + a.rooms.len() as i32;
+
+            if row < first_room {
+                if a.activities.len() == 1 {
+                    println!("couch-gui: open activity '{}'", a.activities[0].title);
+                    return;
+                }
+                let items: Vec<ChoiceItem> = a
+                    .activities
+                    .iter()
+                    .map(|x| ChoiceItem {
+                        title: x.title.clone(),
+                        detail: SharedString::from(format!("{} · {}", x.source, x.place)),
+                        // Everything in this list is playing, so a dot marking
+                        // that would be on every row and mean nothing.
+                        active: false,
+                    })
+                    .collect();
+                app.set_chooser_title("NOW PLAYING".into());
+                app.set_chooser_items(ModelRc::new(VecModel::from(items)));
+                app.set_chooser_index(0);
+                app.set_chooser_shown(true);
+            } else if row == scenes_row {
+                if a.scenes.len() == 1 {
+                    println!("couch-gui: run scene '{}'", a.scenes[0].name);
+                    return;
+                }
+                let items: Vec<ChoiceItem> = a
+                    .scenes
+                    .iter()
+                    .map(|x| ChoiceItem {
+                        title: x.name.clone(),
+                        detail: SharedString::new(),
+                        active: x.active,
+                    })
+                    .collect();
+                app.set_chooser_title("SCENES".into());
+                app.set_chooser_items(ModelRc::new(VecModel::from(items)));
+                app.set_chooser_index(0);
+                app.set_chooser_shown(true);
+            } else {
+                let room = (row - first_room) as usize;
+                if let Some(r) = a.rooms.get(room) {
+                    println!("couch-gui: open room '{}'", r.name);
+                }
+            }
+        });
+    }
+
+    {
+        let weak = app.as_weak();
+        app.on_chosen(move |index| {
+            let Some(app) = weak.upgrade() else { return };
+            let title = app
+                .get_chooser_items()
+                .row_data(index as usize)
+                .map(|i| i.title.to_string())
+                .unwrap_or_default();
+            println!("couch-gui: chose '{title}'");
+            app.set_chooser_shown(false);
+        });
+    }
     app.on_back(|| println!("couch-gui: back"));
     app.on_home(|| println!("couch-gui: home"));
 
@@ -278,6 +346,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the timezone does.
     let mut tz_offset = system::utc_offset_seconds();
     let mut tz_checked = now_monotonic_us();
+    // COUCH_OPEN presses OK on whatever COUCH_FOCUS selected, so the chooser
+    // can be photographed without driving the keypad. It has to come after the
+    // handlers are registered; invoking a callback nobody has set does nothing.
+    if std::env::var("COUCH_OPEN").is_ok() {
+        app.invoke_activated(app.get_focus_row());
+    }
+
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
     // COUCH_NAV walks the focus ring on a timer, so its repaint behaviour is
@@ -421,8 +496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 + 1;
             if rows > 0 {
                 app.set_focus_row((app.get_focus_row() + 1) % rows);
-                app.set_focus_col(0);
-                app.invoke_settle_focus();
+                    app.invoke_settle_focus();
             }
             nav_at = now + 700_000;
         }

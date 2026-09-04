@@ -80,11 +80,10 @@ component AreaPane inherits Rectangle {
     // will do - which it would not be if a finger could act somewhere the ring
     // is not. The keyboard, where a key has no meaningful selected state, is
     // where direct activation belongs instead.
-    callback pick(int, int);
+    callback pick(int);
 
     in property <bool> ring-hidden: false;
     in property <int> focus-row;
-    in property <int> focus-col;
     in property <int> first-room-row;
     in property <int> scenes-row;
 
@@ -116,37 +115,8 @@ component AreaPane inherits Rectangle {
         min(Math.floor((root.avail + 11px) / root.row-pitch) * root.row-pitch - 11px,
             root.avail));
 
-    // Horizontal rows show two cells and scroll for the rest, so a third
-    // activity is reachable rather than squashing the first two.
-    property <length> cell-w: (root.width - 2 * Theme.pad-side - 10px) / 2;
-    in-out property <length> act-scroll: 0px;
-    in-out property <length> scene-scroll: 0px;
-    property <length> act-max: max(0px, root.activities.length * (root.cell-w + 10px)
-                                        - 10px - (root.width - 2 * Theme.pad-side));
-    property <length> scene-max: max(0px, root.scenes.length * (root.cell-w + 10px)
-                                          - 10px - (root.width - 2 * Theme.pad-side));
-
-    // Which dot is lit, or -1 for none, hoisted out of the dots themselves.
-    //
-    // Each dot used to test focus-row and focus-col directly, so all of them
-    // re-evaluated on every focus move - including moves between rooms, where
-    // the answer is "none" before and after. That is a handful of 6px rects at
-    // the very top and very bottom of the pane, and with the ring moving too it
-    // put more than three rectangles in the dirty region. Past three, Slint
-    // merges, and the merge of "dots at the top, dots at the bottom" is the
-    // whole pane: a 23ms frame at the start of every move, which read as the
-    // animation stuttering before it got going.
-    //
-    // As one property per row, a room-to-room move leaves both at -1, nothing
-    // changes, and nothing is invalidated.
-    property <int> act-dot: root.focus-row < root.first-room-row ? root.focus-col : -1;
-    property <int> scene-dot: root.focus-row == root.scenes-row ? root.focus-col : -1;
 
     in-out property <bool> anim-scroll: true;
-    animate act-scroll, scene-scroll {
-        duration: root.anim-scroll ? 160ms : 0ms;
-        easing: ease-out;
-    }
 
     /// Called before a page's content is swapped in: the row index means
     /// something different either side of it, and the ring should land on the
@@ -162,17 +132,6 @@ component AreaPane inherits Rectangle {
     /// by this point, and the next one is the user's.
     public function end-swap() { fs.anim = true; }
 
-    public function ensure-col-visible() {
-        fs.anim = true;
-        root.anim-scroll = true;
-        if (root.focus-row < root.first-room-row && root.activities.length > 0) {
-            root.act-scroll = min(root.act-max,
-                max(0px, (root.focus-col - 1) * (root.cell-w + 10px)));
-        } else if (root.focus-row == root.scenes-row && root.scenes.length > 0) {
-            root.scene-scroll = min(root.scene-max,
-                max(0px, (root.focus-col - 1) * (root.cell-w + 10px)));
-        }
-    }
     in-out property <length> scroll: 0px;
     property <length> max-scroll: max(0px, root.rooms.length * root.row-pitch
                                            - 11px - root.rows-h);
@@ -229,24 +188,20 @@ component AreaPane inherits Rectangle {
         property <length> rooms-y: root.activities.length > 0 ? root.acts-h + 14px : 0px;
         property <length> scenes-y: fs.rooms-y + root.avail + 2 * root.ring-bleed
                                     + 14px + 19px + 14px;
-        property <length> cell-x: Theme.pad-side + root.focus-col * (root.cell-w + 10px);
-
         property <bool> on-strip: root.focus-row < root.first-room-row;
         property <bool> on-scenes: root.focus-row == root.scenes-row;
 
-        property <length> ring-x: fs.on-strip ? fs.cell-x - root.act-scroll
-                                : fs.on-scenes ? fs.cell-x - root.scene-scroll
-                                : Theme.pad-side;
+        property <length> ring-x: Theme.pad-side;
         property <length> ring-y: fs.on-strip ? root.ring-bleed
             : fs.on-scenes ? fs.scenes-y + root.ring-bleed
             : fs.rooms-y + root.ring-bleed - root.scroll
               + min(max(root.focus-row - root.first-room-row, 0),
                     max(root.rooms.length - 1, 0)) * root.row-pitch;
-        property <length> ring-w: fs.on-strip || fs.on-scenes
-                                  ? root.cell-w : root.width - 2 * Theme.pad-side;
+        property <length> ring-w: root.width - 2 * Theme.pad-side;
         property <length> ring-h: fs.on-strip ? 66px : fs.on-scenes ? 74px : 90px;
         property <length> ring-r: fs.on-strip || fs.on-scenes
                                   ? Theme.r-card : Theme.r-row;
+
         // Off across a page change, on for a focus move.
         //
         // Filling the new area sets its activities before its focus row, so for
@@ -266,93 +221,74 @@ component AreaPane inherits Rectangle {
         padding-right: Theme.pad-side - root.ring-bleed;
         spacing: 14px;
 
-        // --- live activities: scrolls horizontally, hidden when the area has
-        // nothing playing so the rooms move up ------------------------------
-        if root.activities.length > 0: VerticalLayout {
-          spacing: 6px;
-          Rectangle {
+        // A summary, and one focus stop.
+        //
+        // This was a two-wide horizontal scroller, which meant left and right
+        // had to mean "move within this row" here and "change area" one row
+        // down. That mode was the cause of every navigation fault this screen
+        // has had. As one stop, left and right mean the same thing everywhere
+        // and OK opens what is playing - directly if there is one thing, as a
+        // list if there are several.
+        if root.activities.length > 0: Rectangle {
             height: 66px + 2 * root.ring-bleed;
-            clip: true;
             Rectangle {
-                x: -root.act-scroll;
-                y: 0px;
-                width: root.activities.length * (root.cell-w + 10px) - 10px
-                       + 2 * root.ring-bleed;
+                x: Theme.pad-side - (Theme.pad-side - root.ring-bleed);
+                y: root.ring-bleed;
+                width: root.width - 2 * Theme.pad-side;
+                height: 66px;
+                background: Theme.surface-raised;
+                border-width: 1px;
+                border-color: Theme.border-raised;
+                border-radius: Theme.r-card;
+                TouchArea { clicked => { root.pick(0); } }
+
                 HorizontalLayout {
-                    y: root.ring-bleed;
-                    height: 66px;
-                    spacing: 10px;
-                    padding-left: root.ring-bleed;
-                    padding-right: root.ring-bleed;
-                    for act[i] in root.activities: Rectangle {
-                        width: root.cell-w;
-                        TouchArea { clicked => { root.pick(0, i); } }
-                        background: Theme.surface-raised;
-                        border-width: 1px;
-                        border-color: Theme.border-raised;
-                        border-radius: Theme.r-card;
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    spacing: 12px;
 
-                        HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
-                            spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        if root.activities[0].kind == 0: HorizontalLayout {
+                            spacing: 3px;
+                            alignment: center;
+                            Rectangle { width: 3px; height: 10px; background: Theme.accent; }
+                            Rectangle { width: 3px; height: 16px; background: Theme.accent; }
+                            Rectangle { width: 3px; height: 7px; background: Theme.accent; }
+                        }
+                        if root.activities[0].kind != 0: Image {
+                            source: @image-url("../../assets/glyph-play.png");
+                            width: 14px; height: 18px;
+                            colorize: Theme.accent;
+                        }
+                    }
 
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 0;
-                                if act.kind == 0: HorizontalLayout {
-                                    spacing: 3px;
-                                    alignment: start;
-                                    Rectangle { width: 4px; height: 12px; background: Theme.accent;
-                                                y: parent.height - self.height; }
-                                    Rectangle { width: 4px; height: 20px; background: Theme.accent;
-                                                y: parent.height - self.height; }
-                                    Rectangle { width: 4px; height: 8px;  background: Theme.accent;
-                                                y: parent.height - self.height; }
-                                }
-                                if act.kind == 1: Image {
-                                    source: @image-url("../../assets/glyph-play.png");
-                                    width: 14px; height: 18px;
-                                    colorize: Theme.accent;
-                                }
-                            }
-
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 3px;
-                                horizontal-stretch: 1;
-                                Text {
-                                    text: act.title;
-                                    font-size: 19px;
-                                    font-weight: 600;
-                                    color: Theme.text;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: act.source + " · " + act.place;
-                                    font-size: 14px;
-                                    letter-spacing: 0.06 * 14px;
-                                    color: Theme.text-tertiary;
-                                    overflow: elide;
-                                }
-                            }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.activities.length == 1
+                                ? root.activities[0].title
+                                : root.activities.length + " playing";
+                            font-size: 21px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.activities.length == 1
+                                ? root.activities[0].source + " · " + root.activities[0].place
+                                : root.activities[0].title + " · and more";
+                            font-size: 14px;
+                            letter-spacing: 0.06 * 14px;
+                            color: Theme.text-secondary;
+                            overflow: elide;
                         }
                     }
                 }
             }
-        }
-
-        // Dots only when there is something past the fold to find.
-          if root.activities.length > 2: HorizontalLayout {
-            height: 6px;
-            spacing: 6px;
-            alignment: center;
-            for act[i] in root.activities: Rectangle {
-                width: 6px; height: 6px;
-                border-radius: 3px;
-                background: root.act-dot == i ? Theme.accent : Theme.border-raised;
-            }
-        }
         }
 
         roomsbox := Rectangle {
@@ -369,7 +305,7 @@ component AreaPane inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for area[i] in root.rooms: Rectangle {
                 height: 90px;
-                TouchArea { clicked => { root.pick(root.first-room-row + i, 0); } }
+                TouchArea { clicked => { root.pick(root.first-room-row + i); } }
                 background: area.idle ? Theme.surface-idle : Theme.surface;
                 border-width: 1px;
                 border-color: area.idle ? Theme.border-idle : Theme.border;
@@ -456,74 +392,49 @@ component AreaPane inherits Rectangle {
 
         SectionLabel { text: "SCENES"; height: 19px; x: root.ring-bleed; }
 
-        VerticalLayout {
-          spacing: 6px;
-          Rectangle {
+        // One stop, for the same reason as the strip above.
+        Rectangle {
             height: 74px + 2 * root.ring-bleed;
-            clip: true;
             Rectangle {
-                x: -root.scene-scroll;
-                y: 0px;
-                width: root.scenes.length * (root.cell-w + 10px) - 10px
-                       + 2 * root.ring-bleed;
+                x: root.ring-bleed;
+                y: root.ring-bleed;
+                width: root.width - 2 * Theme.pad-side;
+                height: 74px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.r-card;
+                TouchArea { clicked => { root.pick(root.scenes-row); } }
+
                 HorizontalLayout {
-                    y: root.ring-bleed;
-                    height: 74px;
-                    spacing: 10px;
-                    padding-left: root.ring-bleed;
-                    padding-right: root.ring-bleed;
-                    for scene[i] in root.scenes: Rectangle {
-                        width: root.cell-w;
-                        TouchArea { clicked => { root.pick(root.scenes-row, i); } }
-                        background: Theme.surface;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        border-radius: Theme.r-card;
-
-                        HorizontalLayout {
-                            padding-left: 18px;
-                            padding-right: 18px;
-                            spacing: 12px;
-
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 0;
-                                Rectangle {
-                                    width: 18px; height: 18px;
-                                    border-radius: 9px;
-                                    background: scene.active ? Theme.accent : transparent;
-                                    border-width: scene.active ? 0px : 2px;
-                                    border-color: Theme.text-secondary;
-                                }
-                            }
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 1;
-                                Text {
-                                    text: scene.name;
-                                    font-size: 21px;
-                                    font-weight: 600;
-                                    color: Theme.text;
-                                    overflow: elide;
-                                }
-                            }
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.scenes.length == 1 ? root.scenes[0].name
+                                                          : root.scenes.length + " scenes";
+                            font-size: 21px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Image {
+                            source: @image-url("../../assets/chevron-right.png");
+                            width: 18px; height: 18px;
+                            colorize: Theme.text-secondary;
                         }
                     }
                 }
             }
         }
 
-          if root.scenes.length > 2: HorizontalLayout {
-            height: 6px;
-            spacing: 6px;
-            alignment: center;
-            for scene[i] in root.scenes: Rectangle {
-                width: 6px; height: 6px;
-                border-radius: 3px;
-                background: root.scene-dot == i ? Theme.accent : Theme.border-raised;
-            }
-        }
-        }
     }
 
     // Drawn last so it is never behind a card, and outside the scrolling
@@ -562,7 +473,7 @@ component AreaPane inherits Rectangle {
 }
 
 export component HomeHub inherits Rectangle {
-    callback pick(int, int);
+    callback pick(int);
     in property <[LiveActivity]> activities;
     in property <string> area-name;
     in property <int> area-index;
@@ -579,7 +490,6 @@ export component HomeHub inherits Rectangle {
     in property <[SceneCell]> scenes-next;
 
     in property <int> focus-row;
-    in property <int> focus-col;
     in property <int> first-room-row;
     in property <int> scenes-row;
     // Whether left and right will change area from where focus currently is.
@@ -645,16 +555,12 @@ export component HomeHub inherits Rectangle {
 
     public function ensure-visible() {
         front.ensure-visible();
-        front.ensure-col-visible();
     }
-    public function ensure-col-visible() { front.ensure-col-visible(); }
     public function begin-swap() { front.begin-swap(); }
     public function end-swap() { front.end-swap(); }
     public function reset-scroll() {
         front.anim-scroll = false;
         front.scroll = 0px;
-        front.act-scroll = 0px;
-        front.scene-scroll = 0px;
     }
 
     background: Theme.bg;
@@ -691,9 +597,8 @@ export component HomeHub inherits Rectangle {
                     rooms: root.rooms;
                     scenes: root.scenes;
                     ring-hidden: root.sliding;
-                    pick(r, c) => { root.pick(r, c); }
+                    pick(r) => { root.pick(r); }
                     focus-row: root.focus-row;
-                    focus-col: root.focus-col;
                     first-room-row: root.first-room-row;
                     scenes-row: root.scenes-row;
                 }
@@ -705,7 +610,6 @@ export component HomeHub inherits Rectangle {
                     rooms: root.rooms-next;
                     scenes: root.scenes-next;
                     focus-row: -1;
-                    focus-col: -1;
                     first-room-row: root.first-room-row;
                     scenes-row: root.scenes-row;
                 }

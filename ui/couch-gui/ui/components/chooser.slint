@@ -1,0 +1,117 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "focus_ring.slint";
+
+export struct ChoiceItem {
+    title: string,
+    detail: string,
+    active: bool,
+}
+
+// A list, over the hub, for the things that used to be a horizontal scroller.
+//
+// An overlay rather than a page: it does not disturb the pane underneath, so
+// none of the swap machinery applies to it, and Back simply closes it. A
+// vertical list is also what a D-pad is good at - which the two-wide scroller
+// this replaces very much was not.
+export component Chooser inherits Rectangle {
+    in property <bool> shown: false;
+    in property <string> title;
+    in property <[ChoiceItem]> items;
+    in property <int> index: 0;
+
+    property <length> row-h: 72px;
+    property <length> gap: 10px;
+    /// The ring is drawn outside its row, so the viewport needs room for it or
+    /// the first row's ring is cut off against the top edge.
+    property <length> bleed: 6px;
+
+    visible: root.shown;
+    background: #000000EE;
+
+    VerticalLayout {
+        padding-left: Theme.pad-side;
+        padding-right: Theme.pad-side;
+        padding-top: 26px;
+        padding-bottom: 26px;
+        spacing: 16px;
+
+        Text {
+            text: root.title;
+            font-size: 16px;
+            letter-spacing: 0.12 * 16px;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            clip: true;
+            // Only the focused row travels; the list itself scrolls under it,
+            // the same arrangement the room list uses.
+            Rectangle {
+                x: root.bleed;
+                y: root.bleed - max(0px, (root.index + 1) * (root.row-h + root.gap)
+                                         - root.gap - parent.height + 2 * root.bleed);
+                width: parent.width - 2 * root.bleed;
+                VerticalLayout {
+                    spacing: root.gap;
+                    for it[i] in root.items: Rectangle {
+                        height: root.row-h;
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: it.active ? Theme.accent : Theme.border;
+                        border-radius: Theme.r-card;
+
+                        HorizontalLayout {
+                            padding-left: 18px;
+                            padding-right: 18px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: it.title;
+                                    font-size: 21px;
+                                    font-weight: 600;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                }
+                                if it.detail != "": Text {
+                                    text: it.detail;
+                                    font-size: 14px;
+                                    letter-spacing: 0.06 * 14px;
+                                    color: Theme.text-secondary;
+                                    overflow: elide;
+                                }
+                            }
+                            if it.active: VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                Rectangle {
+                                    width: 12px; height: 12px;
+                                    border-radius: 6px;
+                                    background: Theme.accent;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0px;
+                    y: root.index * (root.row-h + root.gap);
+                    width: parent.width;
+                    height: root.row-h;
+                    background: transparent;
+                    animate y { duration: 140ms; easing: ease-out; }
+                    FocusRing {
+                        focused: true;
+                        radius-inner: Theme.r-card;
+                        box-width: parent.width;
+                        box-height: parent.height;
+                    }
+                }
+            }
+        }
+    }
+}
