@@ -1,0 +1,3 @@
+# Cargo's build tree. Scoped here rather than in the repo root .gitignore
+# because "target" is a common enough directory name to want the anchor.
+/target

@@ -1,0 +1,18 @@
+# Separate from clients/ and ui/ for the same reason those are separate from
+# each other: this one has to stay linkable as a static musl binary, and the
+# fastest way to lose that is to share a lockfile with something that does not.
+[workspace]
+resolver = "2"
+members = ["couch-confd"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

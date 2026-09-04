@@ -1,0 +1,17 @@
+# A workspace of one, for now, and shaped like clients/ and ui/ so it is
+# obvious where a second shared crate would go. The lockfile here is the one
+# that has to satisfy three targets at once - armv7 musl, wasm32 and the host -
+# which is exactly why it is not folded into either consumer's workspace.
+[workspace]
+resolver = "2"
+members = ["couch-model"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

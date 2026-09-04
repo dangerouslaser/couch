@@ -1,0 +1,19 @@
+[build]
+target = "index.html"
+dist = "dist"
+# The daemon serves whatever is in dist/, so hashed filenames are what make the
+# long-lived Cache-Control safe.
+filehash = true
+
+[serve]
+port = 8080
+open = false
+
+# `trunk serve` for the CSS-and-markup loop, with the real daemon behind it:
+#
+#     couch-confd --config /tmp/couch.json --addr 127.0.0.1:8090
+#     trunk serve
+#
+# Without this the dev server would answer /api itself, with 404s.
+[[proxy]]
+backend = "http://127.0.0.1:8090/api"

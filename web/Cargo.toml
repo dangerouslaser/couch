@@ -1,0 +1,21 @@
+# A workspace of its own so the wasm build's lockfile is not shared with the
+# daemon's. They agree on couch-model and on nothing else: this side pulls
+# wasm-bindgen and a browser's worth of bindings, and the device side must not
+# grow a reason to resolve any of it.
+[workspace]
+resolver = "2"
+members = ["couch-web"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# Size, not speed. This is downloaded over the remote's own WiFi to a phone,
+# and there is nothing in it that is remotely CPU-bound.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

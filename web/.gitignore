@@ -1,0 +1,3 @@
+# Cargo's build tree, and trunk's.
+/target
+/couch-web/dist

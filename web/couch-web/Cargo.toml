@@ -1,0 +1,18 @@
+[package]
+name = "couch-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Couch config UI, as a WASM bundle the remote serves"
+
+[dependencies]
+couch-model = { path = "../../model/couch-model" }
+leptos = { version = "0.8", features = ["csr"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "History", "Location", "Window", "Event", "PopStateEvent",
+] }

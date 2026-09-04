@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover so the tab bar can sit above the home indicator. -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f1115">
+<title>Couch config</title>
+<!--
+  Everything is local. The remote serves this over its own LAN, which may have
+  no route to the internet at all - no font CDN, no CSS framework, no analytics.
+  The system font stack is the only typeface, for the same reason.
+-->
+<!--
+  wasm-opt has to be told which proposals the input uses. Binaryen defaults to
+  MVP and rustc has emitted bulk-memory and sign-ext for wasm32 since 1.82, so
+  without these the optimiser fails validation on its own input with
+  "memory.copy operations require bulk memory operations".
+-->
+<link data-trunk rel="rust" data-wasm-opt="z"
+      data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int --enable-multivalue" />
+<link data-trunk rel="css" href="style.css" />
+<!--
+  Inline, because a browser asks for /favicon.ico on every page load and the
+  daemon has nothing to answer with: one 404 per load, in the log and in the
+  network panel, for want of 300 bytes.
+-->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3.5' width='10' height='4.5' rx='1.5' fill='%234c8dff' opacity='.55'/%3E%3Crect x='1' y='6.5' width='14' height='6' rx='2' fill='%234c8dff'/%3E%3C/svg%3E">
+
+</head>
+<body></body>
+</html>

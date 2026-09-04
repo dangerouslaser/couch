@@ -1,0 +1,286 @@
+/* Hand-written, and small on purpose: the whole page is downloaded over the
+   remote's own WiFi, which may have no route to the internet, so a framework
+   from a CDN is not an option and a bundled one would be more bytes than the
+   app. The palette is stage2/www/index.html's, so the setup portal and the
+   config UI look like the same device talking. */
+
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --line: #252a34;
+  --fg: #e6e9ef;
+  --dim: #98a2b3;
+  --accent: #4c8dff;
+  --danger: #ff8080;
+  --ok: #7ce09b;
+  --bar-h: 52px;
+  --tabs-h: 56px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* The tab bar is fixed; without this the last row hides behind it. */
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: calc(var(--bar-h) + 8px) 0 calc(var(--tabs-h) + 24px);
+}
+
+/* --- chrome ------------------------------------------------------------- */
+
+.bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--bar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  background: rgba(15, 17, 21, 0.94);
+  border-bottom: 1px solid var(--line);
+  z-index: 2;
+}
+.brand { font-weight: 600; letter-spacing: 0.04em; }
+.spacer { flex: 1; }
+.status { color: var(--accent); font-size: 13px; min-width: 4rem; text-align: right; }
+
+.tabs {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: var(--tabs-h);
+  display: flex;
+  background: rgba(15, 17, 21, 0.94);
+  border-top: 1px solid var(--line);
+  /* Keep the labels clear of the home indicator on a notched phone. */
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 2;
+}
+.tab {
+  flex: 1;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+  padding: 0;
+  cursor: pointer;
+}
+.tab.on { color: var(--accent); font-weight: 600; }
+
+.banner {
+  /* In the flow, so it pushes the page down rather than covering its title,
+     and sticky so it is still on screen when the button that failed was
+     halfway down a long list. */
+  position: sticky;
+  top: var(--bar-h);
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 12px 16px;
+  background: #2a1b1f;
+  border-bottom: 1px solid #52323a;
+  color: var(--danger);
+  font-size: 14px;
+  z-index: 1;
+}
+
+.banner span { flex: 1; }
+
+/* --- layout ------------------------------------------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px 4px;
+}
+.page-head h1 { font-size: 22px; margin: 0; }
+
+.section {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 24px 16px 8px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.count { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.pad { padding: 20px 16px; }
+.pad-x { padding: 0 16px; }
+.dim { color: var(--dim); font-size: 14px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.empty { padding: 14px 16px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: 8px 16px;
+  padding: 14px;
+}
+.card.device { margin: 8px 16px; }
+.card-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.card-foot .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+.preview {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #10131a;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 15px;
+}
+
+/* --- rows --------------------------------------------------------------- */
+
+.rows { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.row:last-child { border-bottom: 0; }
+.row-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  /* 44px is the smallest comfortable touch target on a phone. */
+  min-height: 44px;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.row-main:hover { background: #1d212a; }
+.row-title { font-weight: 600; }
+.row-sub { color: var(--dim); font-size: 13px; }
+
+.row.step { gap: 10px; padding-left: 16px; }
+.row.step .row-title { flex: 1; font-weight: 400; font-size: 14px; }
+.command { width: 8.5rem; }
+
+.reorder { display: flex; flex-direction: column; gap: 2px; }
+
+/* --- controls ----------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.field:last-child { margin-bottom: 0; }
+.label {
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+input[type="text"], select {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #10131a;
+  color: var(--fg);
+  font: inherit;
+  /* Anything under 16px makes iOS Safari zoom the page on focus. */
+  font-size: 16px;
+}
+input[type="text"]:focus, select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+button { cursor: pointer; font: inherit; }
+button:disabled { opacity: 0.35; cursor: default; }
+
+.primary {
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ghost, .danger {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--dim);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.danger { color: var(--danger); }
+.danger.armed { background: #3a1d22; border-color: var(--danger); color: #fff; }
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font-size: 14px;
+}
+.back {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-size: 30px;
+  line-height: 1;
+  padding: 0 8px;
+  min-height: 44px;
+}
+.icon {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  width: 26px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+}
+
+.add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  /* The three-control row - name, room, Add - has about 330px to work with on
+     a 360px phone. Wrapping puts the button on its own line there rather than
+     squeezing the name field to half a placeholder. */
+  flex-wrap: wrap;
+}
+.add-row input[type="text"] { flex: 1; min-width: 9rem; }
+.add-row select { flex: 1; min-width: 9rem; }
+
+.add-row .label { white-space: nowrap; }

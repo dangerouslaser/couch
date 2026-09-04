@@ -1,0 +1,293 @@
+//! What has to be true of a config before anything is allowed to store it.
+//!
+//! The daemon runs this on every write and refuses the whole document if it
+//! fails, which is the only reason readers elsewhere in this crate can be
+//! relaxed about dangling ids. Every check here exists because breaking it
+//! would produce a house that renders wrong rather than an error: two rooms
+//! with the same id means one of them is unreachable, and an area pointing at a
+//! room that was deleted means a gap in the list with no explanation.
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{Config, Id, SCHEMA_VERSION};
+
+/// One thing wrong, named well enough to put in front of a user.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Problem {
+    /// A dotted path into the document: `areas[1].rooms[0]`.
+    pub at: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValidationError {
+    pub problems: Vec<Problem>,
+}
+
+impl core::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for (i, p) in self.problems.iter().enumerate() {
+            if i > 0 {
+                f.write_str("; ")?;
+            }
+            write!(f, "{}: {}", p.at, p.message)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ValidationError {}
+
+impl Config {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        let mut problems = Vec::new();
+
+        if self.schema_version > SCHEMA_VERSION {
+            problems.push(Problem {
+                at: "schema_version".to_string(),
+                message: alloc::format!(
+                    "written by a newer build (schema {}, this understands {})",
+                    self.schema_version,
+                    SCHEMA_VERSION
+                ),
+            });
+        }
+
+        // Ids and names, per collection. A blank name is worth rejecting: the
+        // hub renders it as an empty row that cannot be told apart from a
+        // rendering bug, and there is no way to select it to fix it.
+        let mut seen: Vec<&Id> = Vec::new();
+        for (i, a) in self.areas.iter().enumerate() {
+            check_entity(&mut problems, &mut seen, "areas", i, &a.id, &a.name);
+        }
+        seen.clear();
+        for (i, r) in self.rooms.iter().enumerate() {
+            check_entity(&mut problems, &mut seen, "rooms", i, &r.id, &r.name);
+        }
+        seen.clear();
+        for (i, s) in self.scenes.iter().enumerate() {
+            check_entity(&mut problems, &mut seen, "scenes", i, &s.id, &s.name);
+        }
+        seen.clear();
+        for (i, a) in self.activities.iter().enumerate() {
+            check_entity(&mut problems, &mut seen, "activities", i, &a.id, &a.name);
+        }
+
+        // Device ids are unique across the home, not per room: an Action names
+        // a device and nothing else, so a duplicate id makes a scene ambiguous.
+        let mut device_ids: Vec<&Id> = Vec::new();
+        for (ri, room) in self.rooms.iter().enumerate() {
+            for (di, d) in room.devices.iter().enumerate() {
+                let at = alloc::format!("rooms[{ri}].devices[{di}]");
+                if d.id.is_empty() {
+                    problems.push(Problem { at: at.clone(), message: "blank id".to_string() });
+                }
+                if d.name.trim().is_empty() {
+                    problems.push(Problem { at: at.clone(), message: "blank name".to_string() });
+                }
+                if device_ids.contains(&&d.id) {
+                    problems.push(Problem {
+                        at,
+                        message: alloc::format!("duplicate device id \"{}\"", d.id),
+                    });
+                } else {
+                    device_ids.push(&d.id);
+                }
+            }
+        }
+
+        // References.
+        for (i, area) in self.areas.iter().enumerate() {
+            for (j, id) in area.rooms.iter().enumerate() {
+                if self.room(id).is_none() {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].rooms[{j}]"),
+                        message: alloc::format!("no room \"{id}\""),
+                    });
+                }
+                if area.rooms[..j].contains(id) {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].rooms[{j}]"),
+                        message: alloc::format!("room \"{id}\" listed twice"),
+                    });
+                }
+            }
+            for (j, id) in area.scenes.iter().enumerate() {
+                if self.scene(id).is_none() {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].scenes[{j}]"),
+                        message: alloc::format!("no scene \"{id}\""),
+                    });
+                }
+                if area.scenes[..j].contains(id) {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].scenes[{j}]"),
+                        message: alloc::format!("scene \"{id}\" listed twice"),
+                    });
+                }
+            }
+            for (j, id) in area.activities.iter().enumerate() {
+                if self.activity(id).is_none() {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].activities[{j}]"),
+                        message: alloc::format!("no activity \"{id}\""),
+                    });
+                }
+                if area.activities[..j].contains(id) {
+                    problems.push(Problem {
+                        at: alloc::format!("areas[{i}].activities[{j}]"),
+                        message: alloc::format!("activity \"{id}\" listed twice"),
+                    });
+                }
+            }
+        }
+
+
+        for (i, scene) in self.scenes.iter().enumerate() {
+            for (j, step) in scene.steps.iter().enumerate() {
+                if !device_ids.contains(&&step.device) {
+                    problems.push(Problem {
+                        at: alloc::format!("scenes[{i}].steps[{j}]"),
+                        message: alloc::format!("no device \"{}\"", step.device),
+                    });
+                }
+            }
+        }
+
+        for (i, act) in self.activities.iter().enumerate() {
+            if self.room(&act.room).is_none() {
+                problems.push(Problem {
+                    at: alloc::format!("activities[{i}].room"),
+                    message: alloc::format!("no room \"{}\"", act.room),
+                });
+            }
+            if let Some(src) = &act.source {
+                if !device_ids.contains(&src) {
+                    problems.push(Problem {
+                        at: alloc::format!("activities[{i}].source"),
+                        message: alloc::format!("no device \"{src}\""),
+                    });
+                }
+            }
+            for (j, step) in act.steps.iter().enumerate() {
+                if !device_ids.contains(&&step.device) {
+                    problems.push(Problem {
+                        at: alloc::format!("activities[{i}].steps[{j}]"),
+                        message: alloc::format!("no device \"{}\"", step.device),
+                    });
+                }
+            }
+        }
+
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError { problems })
+        }
+    }
+}
+
+fn check_entity<'a>(
+    problems: &mut Vec<Problem>,
+    seen: &mut Vec<&'a Id>,
+    collection: &str,
+    index: usize,
+    id: &'a Id,
+    name: &str,
+) {
+    let at = alloc::format!("{collection}[{index}]");
+    if id.is_empty() {
+        problems.push(Problem { at: at.clone(), message: "blank id".to_string() });
+    }
+    if name.trim().is_empty() {
+        problems.push(Problem { at: at.clone(), message: "blank name".to_string() });
+    }
+    if seen.contains(&id) {
+        problems.push(Problem {
+            at,
+            message: alloc::format!("duplicate id \"{id}\""),
+        });
+    } else {
+        seen.push(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Action, Area, Device, DeviceKind, Room};
+    use alloc::vec;
+
+    fn room(id: &str, name: &str) -> Room {
+        Room { id: Id::new(id), name: name.to_string(), icon: None, devices: vec![] }
+    }
+
+    #[test]
+    fn dangling_area_room_is_rejected() {
+        let cfg = Config {
+            areas: vec![Area {
+                id: Id::new("a"),
+                name: "A".to_string(),
+                icon: None,
+                rooms: vec![Id::new("nowhere")],
+                scenes: vec![],
+                activities: vec![],
+            }],
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.problems[0].at, "areas[0].rooms[0]");
+    }
+
+    #[test]
+    fn dangling_area_activity_is_rejected() {
+        let cfg = Config {
+            areas: vec![Area {
+                id: Id::new("a"),
+                name: "A".to_string(),
+                icon: None,
+                rooms: vec![],
+                scenes: vec![],
+                activities: vec![Id::new("nothing")],
+            }],
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.problems[0].at, "areas[0].activities[0]");
+    }
+
+
+    #[test]
+    fn duplicate_device_ids_across_rooms_are_rejected() {
+        let mut a = room("a", "A");
+        let mut b = room("b", "B");
+        a.devices.push(Device::new(Id::new("dup"), "One", DeviceKind::Light));
+        b.devices.push(Device::new(Id::new("dup"), "Two", DeviceKind::Light));
+        let cfg = Config { rooms: vec![a, b], ..Config::default() };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_scene_step_must_name_a_real_device() {
+        let cfg = Config {
+            scenes: vec![crate::Scene {
+                id: Id::new("s"),
+                name: "S".to_string(),
+                icon: None,
+                steps: vec![Action::new(Id::new("ghost"), "on")],
+            }],
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused() {
+        let cfg = Config { schema_version: SCHEMA_VERSION + 1, ..Config::default() };
+        assert!(cfg.validate().is_err());
+    }
+}
