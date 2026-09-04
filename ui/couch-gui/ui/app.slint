@@ -23,6 +23,7 @@ export component App inherits Window {
     // The incoming page during a transition; the host fills it, then asks for
     // the slide, then adopts it when the hub reports settled.
     in-out property <[RoomRow]> rooms-next;
+    in-out property <[LiveActivity]> activities-next;
     in-out property <[SceneCell]> scenes-next;
     callback settled();
     public function slide(dir: int) { hub.slide(dir); }
@@ -97,6 +98,7 @@ export component App inherits Window {
             root.focus-col = Math.mod(root.focus-col + delta + root.scenes.length,
                                       root.scenes.length);
         }
+        hub.ensure-col-visible();
     }
 
     fs := FocusScope {
@@ -137,6 +139,7 @@ export component App inherits Window {
         width: parent.width;
         height: parent.height - 56px;
         activities: root.activities;
+        activities-next: root.activities-next;
         rooms: root.rooms;
         rooms-next: root.rooms-next;
         scenes-next: root.scenes-next;

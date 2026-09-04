@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // down between the rooms inside one. Seeded here until a hub daemon exists.
     struct Area {
         name: &'static str,
+        activities: Vec<LiveActivity>,
         rooms: Vec<RoomRow>,
         scenes: Vec<SceneCell>,
     }
@@ -56,44 +57,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn scene(name: &str) -> SceneCell {
         SceneCell { name: name.into(), active: false }
     }
+    fn scene_on(name: &str) -> SceneCell {
+        SceneCell { name: name.into(), active: true }
+    }
+    // kind 0 is audio (bars), 1 is video (play triangle).
+    fn act(kind: i32, title: &str, source: &str, place: &str) -> LiveActivity {
+        LiveActivity {
+            kind,
+            title: title.into(),
+            source: source.into(),
+            place: place.into(),
+        }
+    }
 
     let mut areas = vec![
         Area {
             name: "WHOLE HOME",
+            activities: vec![
+                act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
+                act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
+                act(0, "Radio Paradise", "SONOS", "STUDY"),
+            ],
             rooms: vec![
                 room("Living room", "5 devices", "Kodi, Hue, LG C3", 2, 0),
                 room("Kitchen", "2 devices", "Sonos Move", 1, 2),
                 room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
                 room("Study", "2 devices", "", 0, 3),
             ],
-            scenes: vec![scene("Movie night"), scene("All off")],
+            scenes: vec![
+                scene("Movie night"),
+                scene("Good morning"),
+                scene_on("Away"),
+                scene("Dinner"),
+                scene("All off"),
+            ],
         },
         Area {
             name: "UPSTAIRS",
+            activities: vec![act(0, "White noise", "SONOS", "BEDROOM")],
             rooms: vec![
                 room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
                 room("Study", "2 devices", "", 0, 3),
                 room("Loft", "1 device", "Hue", 0, 7),
             ],
-            scenes: vec![scene("Bedtime"), scene("Upstairs off")],
+            scenes: vec![scene("Bedtime"), scene("Wake up"), scene("Upstairs off")],
         },
         Area {
             name: "DOWNSTAIRS",
+            activities: vec![
+                act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
+                act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
+                act(1, "Front door", "CAMERA", "HALLWAY"),
+                act(0, "The Rest Is History", "SONOS", "LIVING"),
+                act(1, "Formula 1 - Practice 2", "PLEX", "LIVING"),
+            ],
             rooms: vec![
                 room("Living room", "5 devices", "Kodi, Hue, LG C3", 2, 0),
                 room("Kitchen", "2 devices", "Sonos Move", 1, 2),
                 room("Hallway", "2 devices", "Hue", 0, 4),
             ],
-            scenes: vec![scene("Movie night"), scene("Downstairs off")],
+            scenes: vec![
+                scene_on("Movie night"),
+                scene("Cooking"),
+                scene("Downstairs off"),
+            ],
         },
         Area {
             name: "OUTSIDE",
+            activities: vec![],
             rooms: vec![
                 room("Garden", "3 devices", "Hue, Cameras", 1, 6),
                 room("Garage", "2 devices", "Hue", 0, 5),
                 room("Porch", "1 device", "Hue", 0, 4),
             ],
-            scenes: vec![scene("Evening"), scene("Outside off")],
+            scenes: vec![
+                scene("Evening"),
+                scene("Security on"),
+                scene("Watering"),
+                scene("Outside off"),
+            ],
         },
     ];
 
@@ -110,12 +152,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         areas[0].rooms.truncate(n);
     }
 
-    app.set_activities(ModelRc::new(VecModel::from(vec![
-        LiveActivity { kind: 0, title: "Midnight Ferry".into(),
-                       source: "SONOS".into(), place: "KITCHEN".into() },
-        LiveActivity { kind: 1, title: "Paused - Andrei Rublev".into(),
-                       source: "KODI".into(), place: "LIVING".into() },
-    ])));
     app.set_area_count(areas.len() as i32);
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -132,9 +168,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let a = &areas[index];
             app.set_area_name(a.name.into());
             app.set_area_index(index as i32);
+            app.set_activities(ModelRc::new(VecModel::from(a.activities.clone())));
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
-            app.set_focus_row(if app.get_activities().row_count() > 0 { 1 } else { 0 });
+            app.set_focus_row(if a.activities.is_empty() { 0 } else { 1 });
             app.set_focus_col(0);
             app.invoke_reset_scroll();
         }
@@ -155,7 +192,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // without driving the keypad.
     if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
         app.set_focus_row(n);
-        app.set_focus_col(0);
+        app.set_focus_col(
+            std::env::var("COUCH_COL").unwrap_or_default().parse::<i32>().unwrap_or(0),
+        );
         app.invoke_settle_focus();
     }
 
@@ -177,6 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let a = &areas[next];
+            app.set_activities_next(ModelRc::new(VecModel::from(a.activities.clone())));
             app.set_rooms_next(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes_next(ModelRc::new(VecModel::from(a.scenes.clone())));
             app.set_area_name(a.name.into());
