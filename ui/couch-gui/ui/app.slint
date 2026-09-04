@@ -1,10 +1,10 @@
 import { Theme } from "theme.slint";
 import { StatusBar } from "components/status_bar.slint";
 import { VolumeOverlay } from "components/volume_overlay.slint";
-import { HomeHub, LiveActivity, AreaRow, SceneCell } from "screens/home_hub.slint";
+import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
 
-export { LiveActivity, AreaRow, SceneCell }
+export { LiveActivity, RoomRow, SceneCell }
 
 export component App inherits Window {
     width: 480px;
@@ -19,7 +19,12 @@ export component App inherits Window {
 
     // --- hub data -------------------------------------------------------------
     in-out property <[LiveActivity]> activities;
-    in-out property <[AreaRow]> areas;
+    in-out property <[RoomRow]> rooms;
+    in-out property <string> area-name: "HOME";
+    in-out property <int> area-index: 0;
+    in-out property <int> area-count: 1;
+    in-out property <[bool]> area-dots;
+    callback area-step(int);
     in-out property <[SceneCell]> scenes;
 
     // --- interaction ----------------------------------------------------------
@@ -48,11 +53,13 @@ export component App inherits Window {
 
     // Lets the host park focus somewhere and have the list scroll to match.
     public function settle-focus() { hub.ensure-visible(); }
+    // Changing area replaces the whole list, so the old scroll position means
+    // nothing: start the new area at the top.
+    public function reset-scroll() { hub.scroll = 0px; }
 
     function move(delta: int) {
-        // Both axes walk the same ring and wrap: on a 3.1" screen a true 2D
-        // navigation graph costs more than it returns, and wrapping means any
-        // stop is reachable by holding one direction.
+        // Vertical only now. The handoff had both axes walking one ring, but
+        // areas need an axis of their own, and left/right cannot be both.
         if (hub.stop-count > 0) {
             root.focus-index = Math.mod(root.focus-index + delta + hub.stop-count, hub.stop-count);
             hub.ensure-visible();
@@ -61,8 +68,10 @@ export component App inherits Window {
 
     fs := FocusScope {
         key-pressed(e) => {
-            if (e.text == Key.UpArrow || e.text == Key.LeftArrow)    { root.move(-1); return accept; }
-            if (e.text == Key.DownArrow || e.text == Key.RightArrow) { root.move(1);  return accept; }
+            if (e.text == Key.UpArrow)    { root.move(-1); return accept; }
+            if (e.text == Key.DownArrow)  { root.move(1);  return accept; }
+            if (e.text == Key.LeftArrow)  { root.area-step(-1); return accept; }
+            if (e.text == Key.RightArrow) { root.area-step(1);  return accept; }
             if (e.text == Key.Return)  { root.activated(root.focus-index); return accept; }
             if (e.text == Key.Escape)  { root.back(); return accept; }
             if (e.text == Key.Home)    { root.home(); return accept; }
@@ -95,7 +104,11 @@ export component App inherits Window {
         width: parent.width;
         height: parent.height - 56px;
         activities: root.activities;
-        areas: root.areas;
+        rooms: root.rooms;
+        area-name: root.area-name;
+        area-index: root.area-index;
+        area-count: root.area-count;
+        area-dots: root.area-dots;
         scenes: root.scenes;
         focus-index: root.focus-index;
         pressed-index: root.pressed-index;

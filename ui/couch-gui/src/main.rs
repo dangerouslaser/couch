@@ -33,9 +33,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::new().map_err(|e| format!("App::new: {e:?}"))?;
 
-    // Reference content from the design handoff, so the hub renders as designed
-    // until a hub daemon exists to supply it. Areas come from local config in
-    // the real thing, which is why they are present before any bridge answers.
+    // Areas are a level above rooms: left and right move between them, up and
+    // down between the rooms inside one. Seeded here until a hub daemon exists.
+    struct Area {
+        name: &'static str,
+        rooms: Vec<RoomRow>,
+        scenes: Vec<SceneCell>,
+    }
+
+    fn room(name: &str, devices: &str, detail: &str, on: i32, glyph: i32) -> RoomRow {
+        RoomRow {
+            name: name.into(),
+            devices: devices.into(),
+            detail: detail.into(),
+            active_count: on,
+            idle: on == 0,
+            offline: false,
+            dimmed: false,
+            glyph,
+        }
+    }
+    fn scene(name: &str) -> SceneCell {
+        SceneCell { name: name.into(), active: false }
+    }
+
+    let mut areas = vec![
+        Area {
+            name: "WHOLE HOME",
+            rooms: vec![
+                room("Living room", "5 devices", "Kodi, Hue, LG C3", 2, 0),
+                room("Kitchen", "2 devices", "Sonos Move", 1, 2),
+                room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
+                room("Study", "2 devices", "", 0, 3),
+            ],
+            scenes: vec![scene("Movie night"), scene("All off")],
+        },
+        Area {
+            name: "UPSTAIRS",
+            rooms: vec![
+                room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
+                room("Study", "2 devices", "", 0, 3),
+                room("Loft", "1 device", "Hue", 0, 7),
+            ],
+            scenes: vec![scene("Bedtime"), scene("Upstairs off")],
+        },
+        Area {
+            name: "DOWNSTAIRS",
+            rooms: vec![
+                room("Living room", "5 devices", "Kodi, Hue, LG C3", 2, 0),
+                room("Kitchen", "2 devices", "Sonos Move", 1, 2),
+                room("Hallway", "2 devices", "Hue", 0, 4),
+            ],
+            scenes: vec![scene("Movie night"), scene("Downstairs off")],
+        },
+        Area {
+            name: "OUTSIDE",
+            rooms: vec![
+                room("Garden", "3 devices", "Hue, Cameras", 1, 6),
+                room("Garage", "2 devices", "Hue", 0, 5),
+                room("Porch", "1 device", "Hue", 0, 4),
+            ],
+            scenes: vec![scene("Evening"), scene("Outside off")],
+        },
+    ];
+
+    // COUCH_ROOMS pads the first area, so the scrolling behaviour is testable
+    // without waiting for a house with a dozen rooms in one area.
+    if let Ok(n) = std::env::var("COUCH_ROOMS").unwrap_or_default().parse::<usize>() {
+        let extra = ["Hallway", "Garage", "Garden", "Loft", "Utility", "Porch", "Cellar"];
+        let mut i = 0;
+        while areas[0].rooms.len() < n {
+            areas[0].rooms.push(room(extra[i % extra.len()], "2 devices", "Hue",
+                                     (i % 2) as i32, (i % 4) as i32));
+            i += 1;
+        }
+        areas[0].rooms.truncate(n);
+    }
 
     app.set_activities(ModelRc::new(VecModel::from(vec![
         LiveActivity { kind: 0, title: "Midnight Ferry".into(),
@@ -43,56 +116,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         LiveActivity { kind: 1, title: "Paused - Andrei Rublev".into(),
                        source: "KODI".into(), place: "LIVING".into() },
     ])));
-    // COUCH_AREAS overrides the count so the overflow behaviour is testable:
-    // the hub is designed for four and must never scroll, and what a fifth or
-    // eighth area does to it is an open question in the handoff.
-    let mut areas = vec![
-        AreaRow { name: "Living room".into(), devices: "5 devices".into(),
-                  detail: "Kodi, Hue, LG C3".into(),
-                  active_count: 2, idle: false, offline: false, dimmed: false, glyph: 0 },
-        AreaRow { name: "Bedroom".into(), devices: "3 devices".into(),
-                  detail: "Hue, Sonos One".into(),
-                  active_count: 0, idle: true, offline: false, dimmed: false, glyph: 1 },
-        AreaRow { name: "Kitchen".into(), devices: "2 devices".into(),
-                  detail: "Sonos Move".into(),
-                  active_count: 1, idle: false, offline: false, dimmed: false, glyph: 2 },
-        AreaRow { name: "Study".into(), devices: "2 devices".into(), detail: "".into(),
-                  active_count: 0, idle: true, offline: false, dimmed: true, glyph: 3 },
-    ];
-    if let Ok(n) = std::env::var("COUCH_AREAS").unwrap_or_default().parse::<usize>() {
-        let extra = ["Hallway", "Garage", "Garden", "Loft", "Utility", "Porch", "Cellar"];
-        while areas.len() > n {
-            areas.pop();
-        }
-        let mut i = 0;
-        while areas.len() < n {
-            let name = extra[i % extra.len()];
-            areas.push(AreaRow {
-                name: name.into(),
-                devices: "2 devices".into(),
-                detail: "Hue".into(),
-                active_count: (i % 2) as i32,
-                idle: i % 2 == 1,
-                offline: false,
-                dimmed: false,
-                glyph: (i % 4) as i32,
-            });
-            i += 1;
-        }
-    }
-    // The area list scrolls, so every area is reachable regardless of count.
-    app.set_areas(ModelRc::new(VecModel::from(areas)));
+    app.set_area_count(areas.len() as i32);
+    app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
-    app.set_scenes(ModelRc::new(VecModel::from(vec![
-        SceneCell { name: "Movie night".into(), active: false },
-        SceneCell { name: "All off".into(), active: false },
-    ])));
+    let areas = std::rc::Rc::new(areas);
+    let show_area = {
+        let areas = areas.clone();
+        move |app: &App, index: usize| {
+            let a = &areas[index];
+            app.set_area_name(a.name.into());
+            app.set_area_index(index as i32);
+            app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
+            app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
+            // A new list makes the old focus and scroll meaningless.
+            app.set_focus_index(app.get_activities().row_count() as i32);
+            app.invoke_reset_scroll();
+        }
+    };
+    // COUCH_AREA opens on a given page, so each one can be checked without
+    // driving the keypad.
+    let first = std::env::var("COUCH_AREA")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|i| *i < areas.len())
+        .unwrap_or(0);
+    show_area(&app, first);
 
-    // COUCH_FOCUS parks focus on a given stop, so a screenshot can show any
-    // focus position without driving the keypad.
-    if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
-        app.set_focus_index(n);
-        app.invoke_settle_focus();
+    {
+        let weak = app.as_weak();
+        let areas_len = areas.len();
+        let show_area = show_area.clone();
+        app.on_area_step(move |delta| {
+            if let Some(app) = weak.upgrade() {
+                let cur = app.get_area_index();
+                let next = (cur + delta).rem_euclid(areas_len as i32);
+                show_area(&app, next as usize);
+            }
+        });
     }
 
     app.on_activated(|index| println!("couch-gui: activated stop {index}"));
@@ -173,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if nav && now >= nav_at {
-            let n = app.get_areas().row_count() as i32
+            let n = app.get_rooms().row_count() as i32
                 + app.get_activities().row_count() as i32
                 + app.get_scenes().row_count() as i32;
             if n > 0 {

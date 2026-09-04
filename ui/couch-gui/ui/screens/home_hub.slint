@@ -12,7 +12,7 @@ export struct LiveActivity {
     place: string,      // KITCHEN
 }
 
-export struct AreaRow {
+export struct RoomRow {
     name: string,
     devices: string,    // "5 devices"
     detail: string,     // "Kodi, Hue, LG C3" - may be empty
@@ -29,54 +29,54 @@ export struct SceneCell {
     active: bool,
 }
 
-// Glyphs are primitives where a Rectangle can express them - a square, a
-// circle, and a rounded-top rect all can, since Slint has per-corner radii.
-// A square on its point and a play triangle cannot, and Slint's Path element
-// is unavailable in this build: PathData is gated behind Slint's "std"
-// feature, which we cannot enable because it pulls in fontconfig. Those two
-// are alpha masks, tinted at runtime so the colour still comes from the theme.
-component AreaGlyph inherits Rectangle {
+// Room icons are Lucide, tinted at runtime so the colour still comes from the
+// theme. The mockup drew these as primitives to avoid an asset pipeline; there
+// was already one here from the C build, and a sofa reads as a living room in a
+// way that a square does not.
+//
+// Selected by index rather than by name: Slint has no map, and an if-chain of
+// @image-url keeps every icon embedded at compile time, which is what the
+// software renderer needs.
+component RoomIcon inherits Rectangle {
     in property <int> shape;
     in property <color> ink;
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
 
-    if root.shape == 0: Rectangle {          // living: square
-        width: 15px; height: 15px;
-        x: 2.5px; y: 2.5px;
-        border-radius: Theme.r-glyph;
-        border-width: 2.5px;
-        border-color: root.ink;
-    }
-    if root.shape == 1: Rectangle {          // bedroom: rounded top only
-        width: 17px; height: 12px;
-        x: 1.5px; y: 5px;
-        border-top-left-radius: 6px;
-        border-top-right-radius: 6px;
-        border-width: 2.5px;
-        border-color: root.ink;
-    }
-    if root.shape == 2: Rectangle {          // kitchen: circle
-        width: 17px; height: 17px;
-        x: 1.5px; y: 1.5px;
-        border-radius: 8.5px;
-        border-width: 2.5px;
-        border-color: root.ink;
-    }
-    if root.shape == 3: Image {              // study: square on its point
-        source: @image-url("../../assets/glyph-diamond.png");
-        width: 20px; height: 20px;
-        colorize: root.ink;
-    }
+    if root.shape == 0: Image { source: @image-url("../../assets/icon-sofa.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 1: Image { source: @image-url("../../assets/icon-bed.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 2: Image { source: @image-url("../../assets/icon-cooking-pot.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 3: Image { source: @image-url("../../assets/icon-book-open.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 4: Image { source: @image-url("../../assets/icon-door-open.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 5: Image { source: @image-url("../../assets/icon-car.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 6: Image { source: @image-url("../../assets/icon-trees.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 7: Image { source: @image-url("../../assets/icon-lamp.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 8: Image { source: @image-url("../../assets/icon-tv.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape >= 9: Image { source: @image-url("../../assets/icon-house.png");
+        width: 100%; height: 100%; colorize: root.ink; }
 }
 
 export component HomeHub inherits Rectangle {
     in property <[LiveActivity]> activities;
-    in property <[AreaRow]> areas;
+    in property <[RoomRow]> rooms;
     in property <[SceneCell]> scenes;
+    in property <string> area-name;
+    in property <int> area-index;
+    in property <int> area-count;
+    // A model purely to count dots; Slint has no numeric range loop.
+    in property <[bool]> area-dots;
     in property <int> focus-index;
     in property <int> pressed-index: -1;
-    property <int> scene-base: root.activities.length + root.areas.length;
+    property <int> scene-base: root.activities.length + root.rooms.length;
 
     // The area list scrolls rather than paginating. Everything else on the hub
     // stays put, so the strip, the labels and the scenes never move - only the
@@ -85,7 +85,7 @@ export component HomeHub inherits Rectangle {
     property <length> ring-bleed: 6px;       // ring offset + width
     property <length> rows-h: root.activities.length > 0 ? 393px : 494px;
     in-out property <length> scroll: 0px;
-    property <length> max-scroll: max(0px, root.areas.length * root.row-pitch
+    property <length> max-scroll: max(0px, root.rooms.length * root.row-pitch
                                            - 11px - root.rows-h);
 
     // Minimal scrolling: move only far enough to bring the focused row fully
@@ -106,7 +106,7 @@ export component HomeHub inherits Rectangle {
 
     // Stops are a single linear ring in reading order: activities, then areas,
     // then scenes. Declared here so the shell can wrap without knowing layout.
-    out property <int> stop-count: root.activities.length + root.areas.length
+    out property <int> stop-count: root.activities.length + root.rooms.length
         + root.scenes.length;
 
     background: Theme.bg;
@@ -187,19 +187,63 @@ export component HomeHub inherits Rectangle {
             }
         }
 
-        SectionLabel { text: "AREAS"; height: 19px; x: root.ring-bleed; }
+        // Left and right move between areas, up and down between rooms. The
+        // chevrons and dots are the only thing telling a user the sideways
+        // axis exists, so they are not decoration.
+        VerticalLayout {
+            height: 36px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                height: 26px;
+                padding-left: root.ring-bleed;
+                padding-right: root.ring-bleed;
+                Image {
+                    source: @image-url("../../assets/chevron-left.png");
+                    width: 18px; height: 18px;
+                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.area-name;
+                    font-size: 16px;
+                    letter-spacing: 0.12 * 16px;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Image {
+                    source: @image-url("../../assets/chevron-right.png");
+                    width: 18px; height: 18px;
+                    colorize: root.area-count > 1 ? Theme.text-secondary : Theme.text-disabled;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            HorizontalLayout {
+                height: 6px;
+                spacing: 6px;
+                alignment: center;
+                for dot[i] in root.area-dots: Rectangle {
+                    width: 6px; height: 6px;
+                    border-radius: 3px;
+                    background: i == root.area-index ? Theme.accent : Theme.border-raised;
+                }
+            }
+        }
 
         Rectangle {
             height: root.rows-h + 2 * root.ring-bleed;
             clip: true;
             Rectangle {
                 y: root.ring-bleed - root.scroll;
-                height: max(0px, root.areas.length * root.row-pitch - 11px);
+                height: max(0px, root.rooms.length * root.row-pitch - 11px);
                 VerticalLayout {
                     spacing: 11px;
                     padding-left: root.ring-bleed;
                     padding-right: root.ring-bleed;
-                    for area[i] in root.areas: Rectangle {
+                    for area[i] in root.rooms: Rectangle {
                 height: 90px;
                 background: root.pressed-index == root.activities.length + i
                     ? Theme.surface-press
@@ -225,7 +269,7 @@ export component HomeHub inherits Rectangle {
                         background: area.idle ? Theme.surface-icon-idle : Theme.surface-icon;
                         border-width: 1px;
                         border-color: area.idle ? Theme.border-icon-idle : Theme.border-icon;
-                        AreaGlyph {
+                        RoomIcon {
                             shape: area.glyph;
                             ink: area.idle ? Theme.text-quaternary : Theme.accent;
                             x: (parent.width - self.width) / 2;
@@ -291,7 +335,7 @@ export component HomeHub inherits Rectangle {
         }
         }
 
-        SectionLabel { text: "WHOLE HOME"; height: 19px; x: root.ring-bleed; }
+        SectionLabel { text: "SCENES"; height: 19px; x: root.ring-bleed; }
 
         HorizontalLayout {
             height: 74px;
