@@ -71,6 +71,11 @@ component AreaPane inherits Rectangle {
     in property <[SceneCell]> scenes;
     // Row 0 is the activity strip when there is one; rooms follow; the scenes
     // row is last. The column only means anything on the horizontal rows.
+    // True while the page is crossing. The ring fades rather than appearing:
+    // it is the one thing on the page that does not slide with the rest, so
+    // popping into place at the end reads as a stutter against the motion that
+    // just finished.
+    in property <bool> ring-hidden: false;
     in property <int> focus-row;
     in property <int> focus-col;
     in property <int> first-room-row;
@@ -511,8 +516,15 @@ component AreaPane inherits Rectangle {
         width: fs.ring-w;
         height: fs.ring-h;
         background: transparent;
+        opacity: root.ring-hidden ? 0 : 1;
         animate x, y, width, height {
             duration: fs.anim ? 160ms : 0ms;
+            easing: ease-out;
+        }
+        // Out fast so it is gone before the page has travelled far, in slower
+        // so the arrival is the thing you notice.
+        animate opacity {
+            duration: root.ring-hidden ? 90ms : 200ms;
             easing: ease-out;
         }
         FocusRing {
@@ -657,6 +669,7 @@ export component HomeHub inherits Rectangle {
                     activities: root.activities;
                     rooms: root.rooms;
                     scenes: root.scenes;
+                    ring-hidden: root.sliding;
                     focus-row: root.focus-row;
                     focus-col: root.focus-col;
                     first-room-row: root.first-room-row;
