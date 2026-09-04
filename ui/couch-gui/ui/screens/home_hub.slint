@@ -176,6 +176,52 @@ component AreaPane inherits Rectangle {
     // Stops are a single linear ring in reading order: activities, then areas,
     // then scenes. Declared here so the shell can wrap without knowing layout.
 
+    // The focus ring is ONE element for the whole pane, not one per section.
+    //
+    // Three rings meant three `focused` expressions over focus-row, and all of
+    // them re-evaluated on every move - including moves between rooms, where
+    // two of the three answer false before and after. Naming the expressions
+    // does not help: Slint propagates on dependency, not on value. And those
+    // two rings sit at the very top and the very bottom of the pane, so past
+    // three dirty rectangles Slint merges, and the merge of "something at the
+    // top, something at the bottom" is the whole pane: 452x654, ~23ms, at the
+    // front of every single move. Bisected by disabling readers one at a time -
+    // with the rooms ring alone, that frame does not happen.
+    //
+    // One ring, one reader, one band. The geometry lives on a zero-size element
+    // so that recomputing it cannot dirty the root, which is what paints the
+    // background.
+    //
+    // Section offsets are arithmetic over the same furniture heights the row
+    // window is computed from, rather than read back off laid-out elements -
+    // see the note on rows-h for why reading the layout back is a trap.
+    fs := Rectangle {
+        width: 0px;
+        height: 0px;
+
+        property <length> rooms-y: root.activities.length > 0 ? root.acts-h + 14px : 0px;
+        property <length> scenes-y: fs.rooms-y + root.avail + 2 * root.ring-bleed
+                                    + 14px + 19px + 14px;
+        property <length> cell-x: Theme.pad-side + root.focus-col * (root.cell-w + 10px);
+
+        property <bool> on-strip: root.focus-row < root.first-room-row;
+        property <bool> on-scenes: root.focus-row == root.scenes-row;
+
+        property <length> ring-x: fs.on-strip ? fs.cell-x - root.act-scroll
+                                : fs.on-scenes ? fs.cell-x - root.scene-scroll
+                                : Theme.pad-side;
+        property <length> ring-y: fs.on-strip ? root.ring-bleed
+            : fs.on-scenes ? fs.scenes-y + root.ring-bleed
+            : fs.rooms-y + root.ring-bleed - root.scroll
+              + min(max(root.focus-row - root.first-room-row, 0),
+                    max(root.rooms.length - 1, 0)) * root.row-pitch;
+        property <length> ring-w: fs.on-strip || fs.on-scenes
+                                  ? root.cell-w : root.width - 2 * Theme.pad-side;
+        property <length> ring-h: fs.on-strip ? 66px : fs.on-scenes ? 74px : 90px;
+        property <length> ring-r: fs.on-strip || fs.on-scenes
+                                  ? Theme.r-card : Theme.r-row;
+    }
+
     background: Theme.bg;
 
     VerticalLayout {
@@ -253,18 +299,6 @@ component AreaPane inherits Rectangle {
                                 }
                             }
                         }
-                    }
-                }
-                Rectangle {
-                    x: root.ring-bleed + root.focus-col * (root.cell-w + 10px);
-                    y: root.ring-bleed;
-                    width: root.cell-w;
-                    height: 66px;
-                    background: transparent;
-                    animate x { duration: 160ms; easing: ease-out; }
-                    FocusRing {
-                        focused: root.focus-row < root.first-room-row;
-                        box-width: parent.width; box-height: parent.height;
                     }
                 }
             }
@@ -377,35 +411,6 @@ component AreaPane inherits Rectangle {
 
             }
 
-            // One ring, moved, rather than one per row switched on and off.
-            // Switching is a jump however fast the list scrolls underneath;
-            // this is the thing the eye actually follows. It also costs less to
-            // draw - N conditional borders become one - which is what paid for
-            // the animation.
-            //
-            // It lives inside the scrolling content, so a focus move that also
-            // scrolls does not need the two to be reconciled: the ring travels
-            // with the rows and only the row-to-row step is animated here.
-            Rectangle {
-                x: root.ring-bleed;
-                // Clamped to the rows that exist. Focus also sits on the strip
-                // above and the scenes below, and by raw index those are y=-101
-                // and one row past the end - so every crossing sent the ring
-                // flying the length of the list, dirtying a band that size for
-                // the whole animation. It is invisible out there anyway.
-                y: min(max(root.focus-row - root.first-room-row, 0),
-                       max(root.rooms.length - 1, 0)) * root.row-pitch;
-                width: parent.width - 2 * root.ring-bleed;
-                height: 90px;
-                background: transparent;
-                animate y { duration: 160ms; easing: ease-out; }
-                FocusRing {
-                    focused: root.focus-row >= root.first-room-row
-                             && root.focus-row < root.scenes-row;
-                    radius-inner: Theme.r-row;
-                    box-width: parent.width; box-height: parent.height;
-                }
-            }
           }
         }
         }
@@ -465,19 +470,6 @@ component AreaPane inherits Rectangle {
                         }
                     }
                 }
-                Rectangle {
-                    x: root.ring-bleed + root.focus-col * (root.cell-w + 10px);
-                    y: root.ring-bleed;
-                    width: root.cell-w;
-                    height: 74px;
-                    background: transparent;
-                    animate x { duration: 160ms; easing: ease-out; }
-                    FocusRing {
-                        focused: root.focus-row == root.scenes-row;
-                        radius-inner: Theme.r-card;
-                        box-width: parent.width; box-height: parent.height;
-                    }
-                }
             }
         }
 
@@ -491,6 +483,24 @@ component AreaPane inherits Rectangle {
                 background: root.scene-dot == i ? Theme.accent : Theme.border-raised;
             }
         }
+        }
+    }
+
+    // Drawn last so it is never behind a card, and outside the scrolling
+    // viewports so a scroll and a focus move do not have to be reconciled -
+    // ring-y already carries the scroll offset.
+    Rectangle {
+        x: fs.ring-x;
+        y: fs.ring-y;
+        width: fs.ring-w;
+        height: fs.ring-h;
+        background: transparent;
+        animate x, y, width, height { duration: 160ms; easing: ease-out; }
+        FocusRing {
+            focused: true;
+            radius-inner: fs.ring-r;
+            box-width: parent.width;
+            box-height: parent.height;
         }
     }
 }

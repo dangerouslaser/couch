@@ -55,9 +55,42 @@ ever exists in a runtime string is never embedded and renders as a blank gap -
 which is what happened to every `·` separator when the subtitles were composed
 in Rust. Compose such strings in `.slint` with the separator as a literal.
 
+The compiler seeds that set before it looks at any literal, with `a-z`, `A-Z`,
+`0-9`, `●`, `…`, space, and the punctuation `!"#$%&'()*+,-./:;<=>?@[\]^_{|}~`
+(see `passes/embed_glyphs.rs`). So the rule bites for anything outside that: an
+accented letter, a currency symbol, an arrow - and, of printable ASCII, the
+backtick, which is the one character the seed leaves out.
+
+The cost of a size is the whole set at that size, in every embedded face, and
+it goes as the square of the size. Measured against this UI: 32KB at 20px, 40KB
+at 26px, 162KB at 48px, 327KB at 72px. Reusing a size the UI already asks for
+is free; picking one two pixels away is not.
+
 `SLINT_FONT_PATH` and `SLINT_DEFAULT_FONT`, set in `build.rs`, choose the face.
 Ship every weight the UI asks for: `font-weight: 600` against a single Regular
 face gets synthesised rather than resolved.
+
+## `.slint` can grow a string but not shrink one
+
+The string members are `is-empty`, `character-count`, `is-float`, `to-float`,
+`to-lowercase`, `to-uppercase`. There is no substring, no slice, no index. `s +
+"a"` is available; taking that `a` off again is not, which means a backspace
+cannot be written in `.slint` at all.
+
+`TextInput` is the way out, and it is worth reaching for rather than working
+around: it owns a real buffer, a cursor, `input-type: password`, and
+scroll-to-cursor. It can be driven without ever being typed into - its
+`key-pressed` callback runs *before* its own handling, so a D-pad's arrows can
+be claimed before it sees them, and a delete is `set-selection-offsets(n-1,
+big)` then `cut()`. `cut` copies to the clipboard first, but
+`Platform::set_clipboard_text` defaults to a no-op and this device implements
+none, so nothing escapes. Offsets are bytes, and are clamped rather than
+checked: an offset past the end lands at the end.
+
+Set `text-cursor-width`, `color`, `selection-background-color` and
+`selection-foreground-color` explicitly. Anything left unset is filled in from
+StyleMetrics and the palette by a compiler pass, which pulls the widget style
+into a binary that has no widgets in it.
 
 ## A component's root cannot see `parent`
 
@@ -106,3 +139,50 @@ simpler screen will be optimistic by several times - measure the real thing.
 `COUCH_REGION=1` prints what the renderer marked dirty each frame. A frame that
 costs far more than its content suggests is almost always claiming a larger
 region than it needs, and that is invisible without it.
+
+## Dirty regions: what costs a frame, measured on the HA100
+
+`COUCH_REGION=1` prints every rectangle the renderer marked dirty, with
+geometry. Read it before optimising anything: three separate theories about a
+stutter here were wrong, and the rectangles settled it in one run each.
+
+The case: the focus ring appeared to skip. It did not - the animation frames
+were a tidy 12% of the screen at ~2.2ms, stepping 1-2px. Every focus move also
+emitted **one 452x654 frame, ~23ms** immediately before the animation started.
+The move hitched, then glided.
+
+Things that turned out **not** to be the cause, each disproved by measurement:
+the animation itself (removing it left the frame exactly where it was); the
+ring's clamping; an `animate` block whose duration read a property; a layout
+feedback loop in the row window; the dot indicators; focus arriving as a bound
+`in property` versus an imperative function call; focus owned by the component
+root versus a zero-size child; and the ring living inside a clipped, scrolling
+subtree.
+
+What it was: **three focus rings, one per section.** Each had a `focused`
+expression over `focus-row`, so all three re-evaluated on every move - including
+moves between rooms, where two of them answer false before and after. Two of
+those rings sat at the very top and the very bottom of the pane, and
+`DirtyRegion::MAX_COUNT` is 3: past three rectangles Slint merges, and the merge
+of "something at the top, something at the bottom" is the whole pane.
+
+Two lessons worth keeping:
+
+**Slint propagates on dependency, not on value.** Hoisting the expressions into
+named `bool` properties changed nothing. If an element must not repaint, it must
+not *depend* on the changing property at all - naming the expression is not
+enough.
+
+**Count your dirty rectangles.** Past three they merge into a bounding box, so
+two cheap changes far apart on screen cost more than one expensive change. The
+fix was one ring for the whole pane, positioned over whichever cell or row has
+focus: one reader, one band.
+
+Bisect by disabling readers, not by reasoning about them. Setting each
+`focused:` to a constant `false` in turn took twelve moves from thirteen
+oversized frames to one and named the culprit in a single run, after several
+hours of plausible theories had not.
+
+Section offsets for that single ring are arithmetic over the same furniture
+heights the row window uses, not read back off laid-out elements - reading the
+layout back is its own trap, see the note on the row window above.
