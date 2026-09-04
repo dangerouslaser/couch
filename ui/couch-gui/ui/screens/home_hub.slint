@@ -526,13 +526,12 @@ export component HomeHub inherits Rectangle {
     in property <int> first-room-row;
     in property <int> scenes-row;
     // Whether left and right will change area from where focus currently is.
-    in property <bool> area-keys-active;
 
     property <length> ring-bleed: 6px;
     // Measured off our own height rather than the parent's, which a component
     // root cannot see. The strip is conditional, and so is the gap above it.
     property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom
-                              - 36px - 14px;
+                              - 6px - 14px;
 
     // A slide rather than a cross-fade, and only over the part that changes.
     // Blending two layers costs roughly twice writing each pixel once, which on
@@ -607,50 +606,16 @@ export component HomeHub inherits Rectangle {
         spacing: 14px;
 
         // Left and right move between areas, up and down between rooms. The
-        // chevrons and dots are the only thing telling a user the sideways axis
-        // exists, so they are not decoration.
-        VerticalLayout {
-            height: 36px;
-            spacing: 4px;
-
-            HorizontalLayout {
-                height: 26px;
-                padding-left: Theme.pad-side;
-                padding-right: Theme.pad-side;
-                Image {
-                    source: @image-url("../../assets/chevron-left.png");
-                    width: 18px; height: 18px;
-                    colorize: root.area-count > 1 && root.area-keys-active
-                        ? Theme.text-secondary : Theme.text-disabled;
-                    y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: root.area-name;
-                    font-size: 16px;
-                    letter-spacing: 0.12 * 16px;
-                    color: Theme.accent;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                Image {
-                    source: @image-url("../../assets/chevron-right.png");
-                    width: 18px; height: 18px;
-                    colorize: root.area-count > 1 && root.area-keys-active
-                        ? Theme.text-secondary : Theme.text-disabled;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            HorizontalLayout {
-                height: 6px;
-                spacing: 6px;
-                alignment: center;
-                for dot[i] in root.area-dots: Rectangle {
-                    width: 6px; height: 6px;
-                    border-radius: 3px;
-                    background: i == root.area-index ? Theme.accent : Theme.border-raised;
-                }
+        // Only the dots now: the name and the chevrons live in the status bar,
+        // which is the line that is always on screen anyway.
+        HorizontalLayout {
+            height: 6px;
+            spacing: 6px;
+            alignment: center;
+            for dot[i] in root.area-dots: Rectangle {
+                width: 6px; height: 6px;
+                border-radius: 3px;
+                background: i == root.area-index ? Theme.accent : Theme.border-raised;
             }
         }
 

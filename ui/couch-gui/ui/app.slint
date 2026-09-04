@@ -135,7 +135,7 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.context-title;
+        title: root.setup-mode ? root.context-title : root.area-name;
         battery: root.battery;
         charging: root.charging;
     }
@@ -160,7 +160,6 @@ export component App inherits Window {
         focus-col: root.focus-col;
         first-room-row: root.first-room-row;
         scenes-row: root.scenes-row;
-        area-keys-active: root.horizontal-is-area;
     }
 
     PairOverlay {

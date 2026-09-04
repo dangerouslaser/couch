@@ -2,6 +2,11 @@ import { Theme } from "../theme.slint";
 
 // Fixed, present on every screen. The centre title is the only thing that
 // changes between screens, so it is a single property on the shell.
+//
+// It carries the area name rather than a constant "HOME": a static word on the
+// one line always on screen was spending the most valuable strip in the UI on
+// nothing, and the name has to be somewhere. The hub below keeps only the page
+// dots, which buys the room list most of a row.
 export component StatusBar inherits Rectangle {
     in property <string> clock;
     in property <string> title;
@@ -34,6 +39,7 @@ export component StatusBar inherits Rectangle {
         letter-spacing: 0.12 * 16px;
         color: Theme.accent;
     }
+
 
     // Positioned rather than laid out: a HorizontalLayout given an explicit x/y
     // inside a Rectangle does not size itself here, and the cluster is only two
