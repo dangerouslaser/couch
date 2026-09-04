@@ -24,6 +24,7 @@ pub mod alsa;
 pub mod ctl;
 pub mod error;
 pub mod ha;
+pub mod keys;
 pub mod level;
 pub mod wav;
 pub mod ws;

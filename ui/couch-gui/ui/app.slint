@@ -2,6 +2,7 @@ import { Theme } from "theme.slint";
 import { StatusBar } from "components/status_bar.slint";
 import { VolumeOverlay } from "components/volume_overlay.slint";
 import { PairOverlay } from "components/pair_overlay.slint";
+import { MicOverlay } from "components/mic_overlay.slint";
 import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
 
@@ -59,6 +60,12 @@ export component App inherits Window {
     in-out property <int> approval: 0;
 
     // --- volume overlay -------------------------------------------------------
+    // The microphone is open. Driven by whether the capture thread is alive,
+    // never by a flag - see src/mic.rs.
+    in-out property <bool> recording: false;
+    in-out property <float> mic-level: 0;
+    in-out property <bool> mic-latched: false;
+
     // A browser is asking to pair; the digits live only here and on that
     // browser's screen.
     in-out property <bool> pair-shown: false;
@@ -74,6 +81,7 @@ export component App inherits Window {
     // Changing area replaces the whole list, so the old scroll position means
     // nothing: start the new area at the top.
     public function begin-swap() { hub.begin-swap(); }
+    public function end-swap() { hub.end-swap(); }
     public function reset-scroll() { hub.reset-scroll(); }
 
     property <int> act-count: root.activities.length;
@@ -166,6 +174,14 @@ export component App inherits Window {
         focus-col: root.focus-col;
         first-room-row: root.first-room-row;
         scenes-row: root.scenes-row;
+    }
+
+    MicOverlay {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        shown: root.recording;
+        level: root.mic-level;
+        latched: root.mic-latched;
     }
 
     PairOverlay {

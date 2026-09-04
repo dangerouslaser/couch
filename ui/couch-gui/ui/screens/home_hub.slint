@@ -152,6 +152,15 @@ component AreaPane inherits Rectangle {
     /// something different either side of it, and the ring should land on the
     /// new page rather than travel to it.
     public function begin-swap() { fs.anim = false; }
+    /// Re-arms the animation once the new page is whole.
+    ///
+    /// Without this the flag stays off until the next ensure- call, and those
+    /// run *after* the focus they are reacting to has already moved - so the
+    /// first key press after changing area jumped instead of animating. Re-
+    /// arming here works because a duration is read when the property changes,
+    /// not when the frame is drawn: the swap's own moves have already happened
+    /// by this point, and the next one is the user's.
+    public function end-swap() { fs.anim = true; }
 
     public function ensure-col-visible() {
         fs.anim = true;
@@ -640,6 +649,7 @@ export component HomeHub inherits Rectangle {
     }
     public function ensure-col-visible() { front.ensure-col-visible(); }
     public function begin-swap() { front.begin-swap(); }
+    public function end-swap() { front.end-swap(); }
     public function reset-scroll() {
         front.anim-scroll = false;
         front.scroll = 0px;

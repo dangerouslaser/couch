@@ -39,6 +39,7 @@ commands:
   list                 every capture device, and what each will accept
   sweep                record briefly from every device and say which one hears
   record               record one device to a WAV and analyse it
+  listen               press a key to start, speak, press a key to stop
   analyse FILE.wav     the same analysis, on a file that already exists
   controls [MATCH]     the card's mixer controls, their values and their items
   set NAME=VALUE ...   set mixer controls by name
@@ -92,6 +93,7 @@ fn main() -> ExitCode {
         "list" => list(&args),
         "sweep" => sweep(&args),
         "record" => record(&args),
+        "listen" => listen(&args),
         "analyse" | "analyze" => analyse_file(&args),
         "controls" => controls(&args),
         "set" => set(&args),
@@ -353,6 +355,71 @@ fn record(args: &Args) -> couch_voice::Result<()> {
         say!("{overruns} overrun(s): the kernel dropped audio while we were elsewhere.");
         say!("Harmless once or twice; a lot of them means the period is too small.");
     }
+    Ok(())
+}
+
+/// Record between two key presses on the remote's own keypad.
+///
+/// The point is that the person holding the device decides when the recording
+/// starts, instead of a window opening when a command ran and closing before
+/// they had read that it had. Every recording taken the other way in this
+/// project's history caught someone about to speak, or already finished.
+fn listen(args: &Args) -> couch_voice::Result<()> {
+    let mut pad = couch_voice::keys::Keypad::open();
+    if !pad.present() {
+        say!("no keypad - falling back to a timed recording");
+        return record(args);
+    }
+    pad.drain();
+
+    say!("Press any key on the remote to START recording.");
+    if pad.wait(Duration::from_secs(120)).is_none() {
+        say!("nothing pressed in two minutes; giving up");
+        return Ok(());
+    }
+    say!("RECORDING - speak now, then press any key to STOP.");
+
+    let wanted = Wanted {
+        rate: args.rate,
+        channels: args.channels,
+        sample_format: abi::FORMAT_S16_LE,
+        limit: Duration::from_secs(120),
+        ..Wanted::default()
+    };
+    let mut capture = Pcm::open(&args.device)?.configure(&wanted)?;
+    let stop = capture.stop_handle();
+
+    // The keypad is watched on another thread so the capture loop keeps
+    // draining the card; a missed period is an overrun, and an overrun in the
+    // middle of a sentence is a hole in the word.
+    let watcher = std::thread::spawn(move || {
+        let mut pad = couch_voice::keys::Keypad::open();
+        // Deaf for a moment. The key that started this is still under a thumb,
+        // and its bounce arrives on a node this thread only just opened - which
+        // ended one recording after three seconds with half a sentence in it.
+        std::thread::sleep(Duration::from_millis(600));
+        pad.drain();
+        pad.wait(Duration::from_secs(120));
+        stop.stop();
+    });
+
+    let mut buf = vec![0i16; capture.chunk_frames().max(1)];
+    let mut samples = Vec::new();
+    loop {
+        let n = capture.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        samples.extend_from_slice(&buf[..n]);
+    }
+    let _ = watcher.join();
+    say!("stopped.");
+
+    let mut w = wav::Writer::create(&args.out, args.rate, 1)?;
+    w.write(&samples)?;
+    w.finish()?;
+    let a = analyse(&samples, args.rate);
+    report(&a, &args.out);
     Ok(())
 }
 

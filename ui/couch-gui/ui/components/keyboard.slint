@@ -1,0 +1,605 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "focus_ring.slint";
+
+// The on-screen keyboard.
+//
+// This is a remote control, so the D-pad is the input that has to work: six
+// keys, one of which is OK. Touch may or may not arrive from the digitizer -
+// that is unverified on the hardware - so it is added as an enhancement that
+// drives the same focus state the D-pad drives, and costs nothing if no
+// pointer event ever comes.
+//
+// Three things shaped the layout more than taste did:
+//
+// - Glyphs are rasterised into the binary per font size, for the whole charset
+//   rather than the characters actually used. This uses only sizes and weights
+//   couch-gui already pays for - 15px/400, 26px/400 and 26px/600 - because
+//   introducing a fourth is not free: dropping the key faces from 26px to 24px
+//   was measured at 40KB, for nothing anyone would see.
+//
+// - Those glyphs come from string literals that appear in .slint, and a
+//   keyboard emits nothing but runtime strings. Slint seeds its own coverage
+//   with the alphabet, the digits and most punctuation, so what is actually at
+//   risk here is the backtick: it is in no default set, and the only reason the
+//   font has one is that it is written out below. Generate these faces in Rust
+//   instead of listing them and that key goes blank.
+//
+// - The alphabet is arranged in reading order rather than QWERTY. QWERTY pays
+//   for itself when ten fingers know where the keys are; with a D-pad you hunt,
+//   and hunting is faster when position is predictable from the alphabet. The
+//   same argument says left at the left edge should wrap to the end of the row
+//   above rather than to the end of the same row: the grid is one sequence, so
+//   the keys either side of `a` are `@` and `b`, and no cell is a dead end.
+export component Keyboard inherits Rectangle {
+    // --- what a consumer sets and reads ---------------------------------------
+    in property <string> title: "ENTER TEXT";
+    in property <string> placeholder;
+    // Masks the field. WPA passphrases are the first consumer, and they are
+    // long enough that being able to look at what you typed matters, so the
+    // mask has a SHOW key rather than being one-way.
+    in property <bool> password;
+    in-out property <string> text;
+    callback accepted(string);
+    callback cancelled();
+
+    // Focus is taken on creation: this is a modal thing, and a keyboard that
+    // ignores the D-pad until someone remembers to call a function is a trap.
+    // Instantiate it conditionally rather than keeping it hidden.
+    public function take-focus() { input.focus(); }
+
+    public function reset() {
+        root.text = "";
+        root.caps = false;
+        root.symbols = false;
+        root.revealed = false;
+        root.region = 0;
+        root.cell = root.home-cell;
+        root.saved-grid = root.home-cell;
+        root.saved-fn = 2;
+        root.saved-commit = 1;
+    }
+
+    // --- the faces ------------------------------------------------------------
+    //
+    // Every page is the same 7x6 rectangle, and the first two rows are the same
+    // on all of them. That buys three things: the digits and the four
+    // characters an address needs are never behind a page switch; the focus
+    // index still means something after a switch, so SHIFT lands you on the
+    // capital of the letter you were on; and a switch redraws four rows instead
+    // of six.
+    //
+    // Rows three to six carry the alphabet, or - on the symbol page - the 28
+    // punctuation marks that are not already on row two. Together with the four
+    // there and the space key, that is every printable ASCII character, which
+    // is exactly what a WPA passphrase is allowed to contain.
+    //
+    // The two fixed rows are a separate array from the three that swap, so that
+    // a key on them reads from a constant and never becomes dirty. Sharing one
+    // array would leave the values identical and the bindings invalidated
+    // anyway, and the renderer redraws what was invalidated: it is the
+    // difference between half the panel on a page switch and a third of it.
+    property <[string]> head: [
+        "1", "2", "3", "4", "5", "6", "7",
+        "8", "9", "0", "-", "_", ".", "@",
+    ];
+    property <[string]> tail-lower: [
+        "a", "b", "c", "d", "e", "f", "g",
+        "h", "i", "j", "k", "l", "m", "n",
+        "o", "p", "q", "r", "s", "t", "u",
+        "v", "w", "x", "y", "z", "'", "?",
+    ];
+    property <[string]> tail-upper: [
+        "A", "B", "C", "D", "E", "F", "G",
+        "H", "I", "J", "K", "L", "M", "N",
+        "O", "P", "Q", "R", "S", "T", "U",
+        "V", "W", "X", "Y", "Z", "'", "?",
+    ];
+    // ASCII order, which is arbitrary but is the one order somebody might
+    // predict, and it keeps the bracket pairs near each other.
+    property <[string]> tail-symbol: [
+        "!", "\"", "#", "$", "%", "&", "'",
+        "(", ")", "*", "+", ",", "/", ":",
+        ";", "<", "=", ">", "?", "[", "\\",
+        "]", "^", "`", "{", "|", "}", "~",
+    ];
+
+    property <bool> caps: false;
+    property <bool> symbols: false;
+    property <bool> revealed: false;
+    property <[string]> tail: root.symbols ? root.tail-symbol
+                            : root.caps ? root.tail-upper : root.tail-lower;
+    property <int> head-count: 14;
+
+    function face(i: int) -> string {
+        return i < root.head-count ? root.head[i] : root.tail[i - root.head-count];
+    }
+
+    // The repeater iterates a fixed model of cells rather than the characters
+    // themselves, so switching page rewrites the faces of 28 keys instead of
+    // tearing down and rebuilding 42 elements. The redraw is the same either
+    // way; the instantiation is not.
+    property <[int]> slots: [
+         0,  1,  2,  3,  4,  5,  6,
+         7,  8,  9, 10, 11, 12, 13,
+        14, 15, 16, 17, 18, 19, 20,
+        21, 22, 23, 24, 25, 26, 27,
+        28, 29, 30, 31, 32, 33, 34,
+        35, 36, 37, 38, 39, 40, 41,
+    ];
+
+    // The bars are counted the same way, as with the hub's page dots - Slint
+    // has no numeric range loop and only the index is ever read. The function
+    // bar grows a SHOW key in password mode, which changes at most once in a
+    // session, so rebuilding that repeater costs nothing.
+    property <[bool]> fn-slots: root.password ? [true, true, true, true, true]
+                                              : [true, true, true, true];
+    property <[bool]> commit-slots: [true, true];
+
+    // --- geometry -------------------------------------------------------------
+    //
+    // At the panel's 480x744 - the full screen less the status bar - this lands
+    // on whole pixels everywhere: 56px keys, 8px gutters, 20px margins. Whole
+    // pixels matter here because a rounded rectangle on a fractional boundary
+    // is anti-aliased along every edge, and anti-aliased rounded rectangles are
+    // what this renderer spends its frame on.
+    property <int> cols: 7;
+    property <int> rows: 6;
+    property <int> count: 42;
+    property <int> home-cell: 14;       // 'a', the first letter
+
+    property <length> gap: 8px;
+    property <length> content-w: root.width - 2 * Theme.pad-side;
+    property <length> key-w: Math.floor((root.content-w - (root.cols - 1) * root.gap)
+                                        / root.cols / 1px) * 1px;
+    property <length> key-h: 63px;
+    property <length> grid-w: root.cols * root.key-w + (root.cols - 1) * root.gap;
+    property <length> grid-h: root.rows * root.key-h + (root.rows - 1) * root.gap;
+    property <length> grid-x: Math.floor((root.content-w - root.grid-w) / 2 / 1px) * 1px;
+
+    property <length> bar-h: 64px;
+    property <int> fn-count: root.password ? 5 : 4;
+    property <length> fn-w: Math.floor((root.content-w - (root.fn-count - 1) * root.gap)
+                                       / root.fn-count / 1px) * 1px;
+    property <length> commit-w: Math.floor((root.content-w - root.gap) / 2 / 1px) * 1px;
+
+    // --- focus ----------------------------------------------------------------
+    //
+    // A region plus a cell, not Slint's per-element focus: the D-pad arrives as
+    // key codes with no geometry attached, and the ring is authored in reading
+    // order rather than derived from layout. Each region remembers where focus
+    // was when it left, so stepping down to SPACE and back up returns to the
+    // letter you were on.
+    property <int> region: 0;           // 0 grid, 1 function bar, 2 commit bar
+    property <int> cell: root.home-cell;
+    property <int> saved-grid: root.home-cell;
+    property <int> saved-fn: 2;         // SPACE
+    property <int> saved-commit: 1;     // DONE
+
+    // The ring for a region that does not have focus stays parked where it was
+    // rather than tracking `cell`, which now means something else. Otherwise it
+    // animates in from wherever the other region's index happened to point.
+    property <int> grid-cell: root.region == 0 ? root.cell : root.saved-grid;
+    property <int> fn-cell: root.region == 1 ? root.cell : root.saved-fn;
+    property <int> commit-cell: root.region == 2 ? root.cell : root.saved-commit;
+
+    // A touch should land instantly under the finger; a key press should be
+    // followed by the eye. Same ring, two speeds.
+    property <bool> anim: true;
+
+    // The function bar loses its SHOW key when the field stops being a
+    // password, and focus can be standing on it when that happens. Nothing does
+    // this today; a component built before its consumer should survive its own
+    // properties changing.
+    changed password => {
+        if (root.saved-fn >= root.fn-count) { root.saved-fn = 2; }
+        if (root.region == 1 && root.cell >= root.fn-count) { root.cell = 2; }
+    }
+
+    function save() {
+        if (root.region == 0) { root.saved-grid = root.cell; }
+        else if (root.region == 1) { root.saved-fn = root.cell; }
+        else { root.saved-commit = root.cell; }
+    }
+
+    function enter(r: int) {
+        root.save();
+        root.region = r;
+        root.cell = r == 0 ? root.saved-grid
+                  : r == 1 ? root.saved-fn : root.saved-commit;
+    }
+
+    // Vertically the whole keyboard is one ring: off the top row of the grid is
+    // DONE, off the bottom of DONE is the grid again. On a panel this tall that
+    // is worth several presses.
+    function move-up() {
+        root.anim = true;
+        if (root.region == 0) {
+            if (root.cell >= root.cols) { root.cell -= root.cols; } else { root.enter(2); }
+        } else if (root.region == 1) {
+            root.enter(0);
+        } else {
+            root.enter(1);
+        }
+    }
+
+    function move-down() {
+        root.anim = true;
+        if (root.region == 0) {
+            if (root.cell + root.cols < root.count) { root.cell += root.cols; }
+            else { root.enter(1); }
+        } else if (root.region == 1) {
+            root.enter(2);
+        } else {
+            root.enter(0);
+        }
+    }
+
+    function move-h(d: int) {
+        root.anim = true;
+        if (root.region == 0) {
+            root.cell = Math.mod(root.cell + d + root.count, root.count);
+        } else if (root.region == 1) {
+            root.cell = Math.mod(root.cell + d + root.fn-count, root.fn-count);
+        } else {
+            root.cell = Math.mod(root.cell + d + 2, 2);
+        }
+    }
+
+    // --- editing --------------------------------------------------------------
+    //
+    // The text lives in a TextInput rather than in a string property here,
+    // because .slint can concatenate a string but cannot take a character off
+    // the end of one - there is no substring. TextInput can, and brings the
+    // cursor, the password mask and the scroll-to-cursor with it.
+    //
+    // It is driven rather than typed into: the hardware has no character keys,
+    // so DEL selects the last character and cuts it. `cut` copies first, but
+    // the device's platform implements no clipboard and the default is a
+    // no-op, so nothing leaves the process.
+    function insert(ch: string) {
+        root.text = root.text + ch;
+    }
+
+    // The caret lives at the end, always. Left and right belong to the grid, so
+    // there is no way to put it anywhere else and no way to get it back if it
+    // ends up there - which is exactly what happens to text a caller seeds,
+    // since a fresh TextInput starts its cursor at offset zero. An offset past
+    // the end clamps to the end.
+    changed text => { input.set-selection-offsets(2147483647, 2147483647); }
+
+    function backspace() {
+        if (root.text.character-count <= 0) { return; }
+        // Character count is a byte offset only while the text is ASCII, which
+        // is all this keyboard can produce. Seeded with something wider, the
+        // offset lands mid-character, Slint rounds it up to the end, and the
+        // selection comes out empty - a key that does nothing rather than one
+        // that eats the tail.
+        input.set-selection-offsets(root.text.character-count - 1, 2147483647);
+        input.cut();
+    }
+
+    function activate() {
+        if (root.region == 0) { root.insert(root.face(root.cell)); return; }
+        if (root.region == 1) {
+            if (root.cell == 0) { root.caps = !root.caps; root.symbols = false; return; }
+            if (root.cell == 1) { root.symbols = !root.symbols; return; }
+            if (root.cell == 2) { root.insert(" "); return; }
+            if (root.cell == 3) { root.backspace(); return; }
+            root.revealed = !root.revealed;
+            return;
+        }
+        if (root.cell == 0) { root.cancelled(); return; }
+        root.accepted(root.text);
+    }
+
+    function fn-label(i: int) -> string {
+        if (i == 0) { return "SHIFT"; }
+        if (i == 1) { return root.symbols ? (root.caps ? "ABC" : "abc") : "#+="; }
+        if (i == 2) { return "SPACE"; }
+        if (i == 3) { return "DEL"; }
+        return root.revealed ? "HIDE" : "SHOW";
+    }
+
+    // SHIFT, the symbol page and SHOW are latches, not one-shots. A one-shot
+    // flips the page out from under the cursor after every keystroke, which on
+    // a D-pad is disorienting, and a passphrase with four capitals in it would
+    // pay for the convenience four times over.
+    function fn-latched(i: int) -> bool {
+        return (i == 0 && root.caps) || (i == 1 && root.symbols) || (i == 4 && root.revealed);
+    }
+
+    function touch-grid(px: length, py: length) {
+        root.anim = false;
+        if (root.region != 0) { root.save(); root.region = 0; }
+        root.cell = min(root.rows - 1, max(0, Math.floor(py / (root.key-h + root.gap)))) * root.cols
+                  + min(root.cols - 1, max(0, Math.floor((px - root.grid-x)
+                                                         / (root.key-w + root.gap))));
+    }
+
+    // Pressing a bar key moves the ring under the finger before the release
+    // decides anything, which is the same feedback a key on the grid gives and
+    // the only press feedback either of them needs.
+    function touch-bar(r: int, i: int) {
+        root.anim = false;
+        root.save();
+        root.region = r;
+        root.cell = i;
+    }
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding-left: Theme.pad-side;
+        padding-right: Theme.pad-side;
+        padding-top: Theme.pad-top;
+        padding-bottom: Theme.pad-bottom;
+        spacing: 0px;
+
+        Text {
+            height: 19px;
+            text: root.title;
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+        }
+
+        Rectangle { height: 10px; }
+
+        // --- the field --------------------------------------------------------
+        Rectangle {
+            height: 64px;
+            background: Theme.surface-recessed;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.r-card;
+
+            // The viewport is a separate, square-cornered rectangle so the clip
+            // the scrolling text needs is a rectangle rather than a rounded one.
+            Rectangle {
+                x: 18px;
+                width: parent.width - 36px;
+                height: parent.height;
+                clip: true;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    vertical-alignment: center;
+                    text: root.text == "" ? root.placeholder : "";
+                    font-size: 26px;
+                    color: Theme.text-disabled;
+                }
+
+                input := TextInput {
+                    // How far the text is pushed left to keep the caret in
+                    // view; see cursor-position-changed below.
+                    property <length> shift;
+
+                    x: min(0px, max(parent.width - self.width - self.text-cursor-width, self.shift));
+                    width: max(parent.width - self.text-cursor-width, self.preferred-width);
+                    height: 100%;
+                    vertical-alignment: center;
+                    single-line: true;
+                    font-size: 26px;
+
+                    // These four are set rather than left to default because a
+                    // compiler pass fills any of them that is missing from
+                    // StyleMetrics and the palette, which drags the widget
+                    // style into a binary that has no widgets in it.
+                    color: Theme.text;
+                    text-cursor-width: 2px;
+                    selection-background-color: Theme.accent;
+                    selection-foreground-color: Theme.bg;
+                    text <=> root.text;
+                    input-type: root.password && !root.revealed ? InputType.password
+                                                                : InputType.text;
+
+                    // The field scrolls under the clip instead of eliding,
+                    // because the end is the part being typed.
+                    cursor-position-changed(p) => {
+                        if (p.x + self.shift < 0px) {
+                            self.shift = -p.x;
+                        } else if (p.x + self.shift > parent.width - self.text-cursor-width) {
+                            self.shift = parent.width - p.x - self.text-cursor-width;
+                        }
+                    }
+
+                    // The keyboard's own handler runs before TextInput's, which
+                    // is how the arrows stay with the grid instead of moving the
+                    // caret. Anything not claimed here falls through to
+                    // TextInput, so a real keyboard still types on a desktop.
+                    key-pressed(e) => {
+                        if (e.text == Key.UpArrow)    { root.move-up();    return accept; }
+                        if (e.text == Key.DownArrow)  { root.move-down();  return accept; }
+                        if (e.text == Key.LeftArrow)  { root.move-h(-1);   return accept; }
+                        if (e.text == Key.RightArrow) { root.move-h(1);    return accept; }
+                        if (e.text == Key.Return)     { root.activate();   return accept; }
+                        // BACK deletes while there is something to delete, and
+                        // only leaves once the field is empty. The remote has no
+                        // backspace key, and losing a half-typed passphrase to
+                        // the button people press by reflex is the worse of the
+                        // two failures.
+                        if (e.text == Key.Escape) {
+                            if (root.text.character-count > 0) { root.backspace(); }
+                            else { root.cancelled(); }
+                            return accept;
+                        }
+                        // Swallowed rather than passed on: TextInput reads HOME
+                        // as "move the caret to the start", and an invisible
+                        // caret in the middle of a passphrase is unfixable from
+                        // a D-pad.
+                        if (e.text == Key.Home) { return accept; }
+                        return reject;
+                    }
+                }
+            }
+        }
+
+        // Absorbs whatever height the caller gave beyond what the keyboard
+        // needs - 29px on the panel. Air above the keys reads as spacing; air
+        // below them reads as a mistake.
+        Rectangle { vertical-stretch: 1; min-height: 8px; }
+
+        // --- the grid ---------------------------------------------------------
+        Rectangle {
+            height: root.grid-h;
+            vertical-stretch: 0;
+
+            for k[i] in root.slots: Rectangle {
+                x: root.grid-x + Math.mod(i, root.cols) * (root.key-w + root.gap);
+                y: Math.floor(i / root.cols) * (root.key-h + root.gap);
+                width: root.key-w;
+                height: root.key-h;
+                // No border on the key faces. At this density the fill alone
+                // reads as a key, and forty-two more anti-aliased outlines is
+                // the kind of thing this renderer charges for - it is already
+                // spending most of a frame on rounded corners.
+                background: Theme.surface-raised;
+                border-radius: Theme.r-control;
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: root.face(i);
+                    font-size: 26px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+            }
+
+            // One ring that moves, rather than a border per key switched on and
+            // off. Touch moves the same ring the D-pad moves, so a press needs
+            // no highlight of its own.
+            Rectangle {
+                x: root.grid-x + Math.mod(root.grid-cell, root.cols) * (root.key-w + root.gap);
+                y: Math.floor(root.grid-cell / root.cols) * (root.key-h + root.gap);
+                width: root.key-w;
+                height: root.key-h;
+                background: transparent;
+                animate x, y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+                FocusRing {
+                    focused: root.region == 0;
+                    radius-inner: Theme.r-control;
+                    box-width: parent.width;
+                    box-height: parent.height;
+                }
+            }
+
+            // One area for the whole grid rather than one per key: the cell is
+            // arithmetic on the coordinates, and 42 hit-test items to answer a
+            // question a division answers is not a trade worth making. It also
+            // means a finger that slides drags the ring with it.
+            TouchArea {
+                width: 100%;
+                height: 100%;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        root.touch-grid(self.mouse-x, self.mouse-y);
+                    }
+                }
+                moved => {
+                    if (self.pressed) { root.touch-grid(self.mouse-x, self.mouse-y); }
+                }
+                clicked => { root.activate(); }
+            }
+        }
+
+        Rectangle { height: 24px; }
+
+        // --- modes and editing ------------------------------------------------
+        Rectangle {
+            height: root.bar-h;
+            vertical-stretch: 0;
+
+            for f[i] in root.fn-slots: Rectangle {
+                x: i * (root.fn-w + root.gap);
+                width: root.fn-w;
+                height: root.bar-h;
+                background: root.fn-latched(i) ? Theme.accent-bg : Theme.surface;
+                border-width: 1px;
+                border-color: root.fn-latched(i) ? Theme.accent : Theme.border;
+                border-radius: Theme.r-control;
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: root.fn-label(i);
+                    font-size: 15px;
+                    letter-spacing: 0.14 * 15px;
+                    color: root.fn-latched(i) ? Theme.accent : Theme.text-secondary;
+                }
+
+                TouchArea {
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) { root.touch-bar(1, i); }
+                    }
+                    clicked => { root.touch-bar(1, i); root.activate(); }
+                }
+            }
+
+            Rectangle {
+                x: root.fn-cell * (root.fn-w + root.gap);
+                width: root.fn-w;
+                height: root.bar-h;
+                background: transparent;
+                animate x { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+                FocusRing {
+                    focused: root.region == 1;
+                    radius-inner: Theme.r-control;
+                    box-width: parent.width;
+                    box-height: parent.height;
+                }
+            }
+        }
+
+        Rectangle { height: 12px; }
+
+        // --- commit -----------------------------------------------------------
+        Rectangle {
+            height: root.bar-h;
+            vertical-stretch: 0;
+
+            for c[i] in root.commit-slots: Rectangle {
+                x: i * (root.commit-w + root.gap);
+                width: root.commit-w;
+                height: root.bar-h;
+                background: i == 1 ? Theme.accent : Theme.surface;
+                border-width: 1px;
+                border-color: i == 1 ? Theme.accent : Theme.border;
+                border-radius: Theme.r-control;
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: i == 1 ? "DONE" : "CANCEL";
+                    font-size: 15px;
+                    letter-spacing: 0.14 * 15px;
+                    color: i == 1 ? Theme.bg : Theme.text-secondary;
+                }
+
+                TouchArea {
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) { root.touch-bar(2, i); }
+                    }
+                    clicked => { root.touch-bar(2, i); root.activate(); }
+                }
+            }
+
+            Rectangle {
+                x: root.commit-cell * (root.commit-w + root.gap);
+                width: root.commit-w;
+                height: root.bar-h;
+                background: transparent;
+                animate x { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+                FocusRing {
+                    focused: root.region == 2;
+                    radius-inner: Theme.r-control;
+                    box-width: parent.width;
+                    box-height: parent.height;
+                }
+            }
+        }
+    }
+
+    init => { input.focus(); }
+}

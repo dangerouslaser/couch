@@ -4,6 +4,7 @@
 //! platform underneath them - panel, input, and the device state the UI shows.
 
 mod keypad;
+mod mic;
 mod panel;
 mod qr;
 mod system;
@@ -179,6 +180,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_focus_row(if a.activities.is_empty() { 0 } else { 1 });
             app.set_focus_col(0);
             app.invoke_reset_scroll();
+            // The page is whole; the ring may animate again.
+            app.invoke_end_swap();
         }
     };
 
@@ -256,6 +259,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The panel is a touchscreen too. Slint does the hit testing once the
     // pointer events are fed in, so this is only a translation layer.
+    let mut mic = mic::Mic::new();
+    // Push to talk, with a latch. Hold the key and it records while held;
+    // tap it and it stays on until the next tap. The button is small and the
+    // thing being dictated is a sentence, so insisting on a hold would be a
+    // worse remote - but a hold is what a hand does without being told, and
+    // both have to mean the obvious thing.
+    let mut mic_down_at = 0u64;
+    let mut mic_latched = false;
+    const LATCH_UNDER_US: u64 = 600_000;
     let mut pointer = touch::Touch::open();
     println!(
         "couch-gui: touchscreen {}",
@@ -288,6 +300,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 in_sum += press.latency_us;
                 in_max = in_max.max(press.latency_us);
             }
+            // Hold to talk. The key is not routed into the UI: it opens the
+            // microphone and nothing else, so there is no screen on which it
+            // means something different.
+            match press.mic {
+                Some(true) => {
+                    if mic_latched {
+                        mic_latched = false;
+                        mic.stop();
+                    } else {
+                        mic_down_at = now_monotonic_us();
+                        mic.start();
+                    }
+                }
+                Some(false) => {
+                    if mic.recording() {
+                        if now_monotonic_us() - mic_down_at < LATCH_UNDER_US {
+                            mic_latched = true;
+                        } else {
+                            mic.stop();
+                        }
+                    }
+                }
+                None => {}
+            }
             if let Some(key) = press.key {
                 let text = SharedString::from(char::from(key));
                 window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
@@ -311,6 +347,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 1 => WindowEvent::PointerMoved { position },
                 _ => WindowEvent::PointerReleased { position, button: PointerEventButton::Left },
             });
+        }
+
+        // The meter has to keep up with a voice, so it is read every frame
+        // rather than on the one-second tick.
+        if app.get_recording() != mic.recording() {
+            app.set_recording(mic.recording());
+        }
+        if mic.recording() {
+            app.set_mic_level(mic.meter());
+        } else if mic_latched {
+            // The capture hit its own limit while latched; the latch must not
+            // outlive it or the next press would only clear a flag.
+            mic_latched = false;
+        }
+        if app.get_mic_latched() != mic_latched {
+            app.set_mic_latched(mic_latched);
         }
 
         let now = now_monotonic_us();

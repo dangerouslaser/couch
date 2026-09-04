@@ -808,3 +808,50 @@ Accuracy was not established. The test recording came off a microphone whose
 response is discussed above, and the transcript was recognisably English
 without being right. Judging the model needs a clean input, which needs the
 microphone question answered first.
+
+## Accuracy, on this microphone, with known ground truth
+
+Two sentences read into the remote through the mic key, recorded by `couch-gui`
+at 16kHz mono and decoded by the 20M streaming zipformer on the device itself.
+
+| said | heard |
+|---|---|
+| The birch canoe slid on the smooth planks | THE BIRCH CANOE SLID ON THE SMOOTH PLANKS |
+| Play season **four** episode **two** of The **Sopranos** | PLAY SEASON **FOR** EPISODE **TO** OF THE **SOPRAMUS** |
+
+The first sentence is a standard Harvard-list sentence and came back **without a
+single error**, which answers the question the microphone section left open: the
+capture path is good, and this model handles ordinary English on this hardware.
+
+The second is 5 of 8, and every error is one of two kinds:
+
+**Homophones.** "four" and "for", "two" and "to" are acoustically identical. No
+microphone and no model size fixes them; only context does. In a media search
+the context is absolute - "season for" is never right - so a table of the half
+dozen number homophones, applied only after `season`, `episode`, `part` or
+`volume`, resolves them completely.
+
+**The proper noun.** "Sopranos" became "SOPRAMUS", which is exactly what a
+20M model trained on read speech does with a title it has never seen.
+
+sherpa-onnx has hotword biasing for this, but it wants the phrases in the
+model's own token space and this model ships no `bpe.model`, so it cannot be
+used without re-exporting. That is not worth doing, because the better fix is a
+layer up: **the search target is a finite set we already have.** Kodi will list
+every title in the library over JSON-RPC, and matching a noisy transcript into
+that list is both easier and more robust than biasing a decoder.
+
+Both together, against a ten-title stand-in library:
+
+```
+heard:    PLAY SEASON FOR EPISODE TO OF THE SOPRAMUS
+resolved: PLAY SEASON FOUR EPISODE TWO OF THE SOPRANOS
+```
+
+"sopramus" matches "The Sopranos" at 0.75 similarity and nothing else close,
+which is a comfortable margin - the errors a recogniser makes are phonetic, and
+phonetic neighbours of a title in your library are usually that title.
+
+So the accuracy answer is: good enough, provided the transcript is resolved
+against the library rather than used raw. Which is the right design regardless,
+because a search string that is not a title in the library is not useful.

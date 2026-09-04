@@ -15,6 +15,12 @@ use std::os::unix::io::AsRawFd;
 
 use slint::platform::Key;
 
+/// The microphone key, measured on the hardware: it is the only key that
+/// arrives as code 61 on mt_gpio_kpd. It is deliberately not in `map_key` -
+/// it drives recording, not the focus ring, and it is the one key whose
+/// release matters as much as its press.
+pub const KEY_MIC: u16 = 61;
+
 pub const REPEAT_DELAY_MS: u64 = 400;
 pub const REPEAT_RATE_MS: u64 = 70;
 
@@ -33,6 +39,9 @@ pub struct Keypad {
 
 pub struct Press {
     pub key: Option<Key>,
+    /// Some(true) when the microphone key went down, Some(false) when it came
+    /// back up. Hold to talk, so both edges are events.
+    pub mic: Option<bool>,
     /// Microseconds between the kernel timestamping the event and us seeing it.
     pub latency_us: u64,
     pub repeat: bool,
@@ -83,6 +92,14 @@ impl Keypad {
                     if code == self.held {
                         self.held = 0;
                     }
+                    if code == KEY_MIC {
+                        return Some(Press {
+                            key: None,
+                            mic: Some(false),
+                            latency_us: 0,
+                            repeat: false,
+                        });
+                    }
                     continue;
                 }
                 if value != 1 {
@@ -92,11 +109,22 @@ impl Keypad {
                 // measured on the same clock: subtracting an epoch from a
                 // monotonic uptime saturates to zero and reads as "no latency".
                 let stamp = sec * 1_000_000 + usec;
+                if code == KEY_MIC {
+                    // Not held for repeat: a key you hold down to talk must not
+                    // also be a key that repeats.
+                    return Some(Press {
+                        key: None,
+                        mic: Some(true),
+                        latency_us: now_realtime_us().saturating_sub(stamp),
+                        repeat: false,
+                    });
+                }
                 self.held = code;
                 self.held_since = now_monotonic_us();
                 self.last_repeat = 0;
                 out = Some(Press {
                     key: map_key(code),
+                    mic: None,
                     latency_us: now_realtime_us().saturating_sub(stamp),
                     repeat: false,
                 });
@@ -112,7 +140,12 @@ impl Keypad {
             };
             if now >= due {
                 self.last_repeat = now;
-                out = Some(Press { key: map_key(self.held), latency_us: 0, repeat: true });
+                out = Some(Press {
+                    key: map_key(self.held),
+                    mic: None,
+                    latency_us: 0,
+                    repeat: true,
+                });
             }
         }
         out

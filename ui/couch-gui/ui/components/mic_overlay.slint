@@ -1,0 +1,80 @@
+import { Theme } from "../theme.slint";
+
+// Shown while, and only while, the microphone is open.
+//
+// Unmissable on purpose. A device with a microphone in someone's living room
+// owes them an obvious answer to "is it listening", and a discreet indicator is
+// a worse answer than none - it trains people not to look. The bar is driven
+// from the capture thread's own liveness, so it cannot be lit while the
+// microphone is shut, or dark while it is open.
+export component MicOverlay inherits Rectangle {
+    in property <bool> shown: false;
+    in property <float> level;      // 0..1
+    /// Tapped rather than held, so it stays on until the next press.
+    in property <bool> latched: false;
+
+    visible: root.shown;
+    background: #000000E0;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 20px;
+        padding-left: 34px;
+        padding-right: 34px;
+
+        Rectangle {
+            height: 84px;
+            background: Theme.surface-raised;
+            border-radius: Theme.r-card;
+            border-width: 2px;
+            border-color: #E04030;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 14px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 22px; height: 22px;
+                        border-radius: 11px;
+                        background: #E04030;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "LISTENING";
+                        font-size: 26px;
+                        font-weight: 700;
+                        letter-spacing: 2px;
+                        color: Theme.text;
+                    }
+                }
+            }
+        }
+
+        // The meter is the honest part: it moves with what the capsule hears,
+        // so a microphone that is open but deaf looks different from one that
+        // is working.
+        Rectangle {
+            height: 12px;
+            background: Theme.surface;
+            border-radius: 6px;
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width * max(0.0, min(1.0, root.level));
+                height: parent.height;
+                border-radius: 6px;
+                background: Theme.accent;
+            }
+        }
+
+        Text {
+            text: root.latched ? "Press the mic key again to finish."
+                               : "Release the mic key to finish.";
+            font-size: 19px;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+    }
+}
