@@ -1,0 +1,39 @@
+[package]
+name = "couch-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Microphone capture and a Home Assistant Assist pipeline client for Couch"
+
+# Two dependencies, and the second is not what it looks like.
+#
+# serde_json because Home Assistant's WebSocket API is JSON and the pipeline
+# events are a dozen differently-shaped objects that gain nothing from being
+# typed - a new Home Assistant release must be able to add one without this
+# client failing to parse the connection. `Value` and `json!` are the whole
+# usage; there is no `serde` derive here, so the proc-macro half of that
+# dependency tree never gets built.
+#
+# libc for exactly two symbols, `ioctl` and `poll`. It contains no C - it is
+# extern declarations against the libc std already links, which for
+# armv7-unknown-linux-musleabihf is the musl rustup ships. So it needs no cross
+# sysroot and no cross-gcc, which is the constraint that rules out alsa-lib and
+# therefore rules out every ALSA crate on crates.io: they all bind libasound.
+#
+# Nothing here does TLS, WebSocket framing or base64/SHA-1, all of which this
+# crate does itself in src/ws.rs. See the module for why that is smaller than
+# the alternative rather than merely more fun.
+[dependencies]
+serde_json = "1"
+libc = "0.2"
+
+# The probe is a second binary rather than a subcommand so that the thing I ask
+# someone to run on a device with a microphone in it contains no network code
+# at all. It links the capture half of the library and nothing else.
+[[bin]]
+name = "couch-voice"
+path = "src/main.rs"
+
+[[bin]]
+name = "couch-mic"
+path = "src/bin/couch-mic.rs"
