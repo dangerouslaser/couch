@@ -74,27 +74,47 @@ export component HomeHub inherits Rectangle {
     in property <[LiveActivity]> activities;
     in property <[AreaRow]> areas;
     in property <[SceneCell]> scenes;
-    // Areas beyond what fits collapse into one "More areas" stop rather than
-    // scrolling or paginating. The hub must never scroll, and left/right are
-    // already spoken for by the focus ring, so pagination would need the soft
-    // keys - a bigger decision than this row.
-    in property <int> more-count: 0;
     in property <int> focus-index;
     in property <int> pressed-index: -1;
-    property <int> more-base: root.activities.length + root.areas.length;
-    property <int> scene-base: root.more-base + (root.more-count > 0 ? 1 : 0);
+    property <int> scene-base: root.activities.length + root.areas.length;
+
+    // The area list scrolls rather than paginating. Everything else on the hub
+    // stays put, so the strip, the labels and the scenes never move - only the
+    // rows travel under a fixed window.
+    property <length> row-pitch: 101px;      // 90px row + 11px gap
+    property <length> ring-bleed: 6px;       // ring offset + width
+    property <length> rows-h: root.activities.length > 0 ? 393px : 494px;
+    in-out property <length> scroll: 0px;
+    property <length> max-scroll: max(0px, root.areas.length * root.row-pitch
+                                           - 11px - root.rows-h);
+
+    // Minimal scrolling: move only far enough to bring the focused row fully
+    // into the window, and not at all while it is already there. Recomputing
+    // from the index alone would scroll on moves that did not need it.
+    public function ensure-visible() {
+        if (root.focus-index < root.activities.length) { return; }
+        if (root.focus-index >= root.scene-base) { return; }
+        self.row-into-view((root.focus-index - root.activities.length) * root.row-pitch);
+    }
+    function row-into-view(row-y: length) {
+        if (row-y < root.scroll) {
+            root.scroll = row-y;
+        } else if (row-y + 90px > root.scroll + root.rows-h) {
+            root.scroll = min(root.max-scroll, row-y + 90px - root.rows-h);
+        }
+    }
 
     // Stops are a single linear ring in reading order: activities, then areas,
     // then scenes. Declared here so the shell can wrap without knowing layout.
     out property <int> stop-count: root.activities.length + root.areas.length
-        + (root.more-count > 0 ? 1 : 0) + root.scenes.length;
+        + root.scenes.length;
 
     background: Theme.bg;
 
     VerticalLayout {
         padding-top: Theme.pad-top;
-        padding-left: Theme.pad-side;
-        padding-right: Theme.pad-side;
+        padding-left: Theme.pad-side - root.ring-bleed;
+        padding-right: Theme.pad-side - root.ring-bleed;
         padding-bottom: Theme.pad-bottom;
         spacing: 14px;
 
@@ -103,6 +123,8 @@ export component HomeHub inherits Rectangle {
         if root.activities.length > 0: HorizontalLayout {
             height: 66px;
             spacing: 10px;
+            padding-left: root.ring-bleed;
+            padding-right: root.ring-bleed;
             for act[i] in root.activities: Rectangle {
                 background: root.pressed-index == i ? Theme.surface-press : Theme.surface-raised;
                 border-width: 1px;
@@ -165,11 +187,19 @@ export component HomeHub inherits Rectangle {
             }
         }
 
-        SectionLabel { text: "AREAS"; height: 19px; }
+        SectionLabel { text: "AREAS"; height: 19px; x: root.ring-bleed; }
 
-        VerticalLayout {
-            spacing: 11px;
-            for area[i] in root.areas: Rectangle {
+        Rectangle {
+            height: root.rows-h + 2 * root.ring-bleed;
+            clip: true;
+            Rectangle {
+                y: root.ring-bleed - root.scroll;
+                height: max(0px, root.areas.length * root.row-pitch - 11px);
+                VerticalLayout {
+                    spacing: 11px;
+                    padding-left: root.ring-bleed;
+                    padding-right: root.ring-bleed;
+                    for area[i] in root.areas: Rectangle {
                 height: 90px;
                 background: root.pressed-index == root.activities.length + i
                     ? Theme.surface-press
@@ -257,65 +287,17 @@ export component HomeHub inherits Rectangle {
                 }
             }
 
-            if root.more-count > 0: Rectangle {
-                height: 90px;
-                background: root.pressed-index == root.more-base
-                    ? Theme.surface-press : Theme.surface-recessed;
-                border-width: 1px;
-                border-color: Theme.border-dim;
-                border-radius: Theme.r-row;
-
-                FocusRing {
-                    focused: root.focus-index == root.more-base;
-                    radius-inner: Theme.r-row;
-                    box-width: parent.width; box-height: parent.height;
-                }
-
-                HorizontalLayout {
-                    padding: 18px;
-                    spacing: 16px;
-
-                    Rectangle {
-                        width: 52px;
-                        height: 52px;
-                        border-radius: Theme.r-disc;
-                        background: Theme.surface-icon-idle;
-                        border-width: 1px;
-                        border-color: Theme.border-icon-idle;
-                        Image {
-                            source: @image-url("../../assets/chevron-right.png");
-                            width: 20px; height: 20px;
-                            colorize: Theme.text-secondary;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-                        Text {
-                            text: "More areas";
-                            font-size: 26px;
-                            font-weight: 600;
-                            color: Theme.text-secondary;
-                        }
-                        Text {
-                            text: root.more-count + " more";
-                            font-size: 19px;
-                            color: Theme.text-quaternary;
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 0; width: 0px; }
-                }
             }
         }
+        }
 
-        SectionLabel { text: "WHOLE HOME"; height: 19px; }
+        SectionLabel { text: "WHOLE HOME"; height: 19px; x: root.ring-bleed; }
 
         HorizontalLayout {
             height: 74px;
             spacing: 11px;
+            padding-left: root.ring-bleed;
+            padding-right: root.ring-bleed;
             for scene[i] in root.scenes: Rectangle {
                 background: root.pressed-index == root.scene-base + i
                     ? Theme.surface-press : Theme.surface;

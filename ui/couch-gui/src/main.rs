@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reference content from the design handoff, so the hub renders as designed
     // until a hub daemon exists to supply it. Areas come from local config in
     // the real thing, which is why they are present before any bridge answers.
-    let activities_shown = true;
+
     app.set_activities(ModelRc::new(VecModel::from(vec![
         LiveActivity { kind: 0, title: "Midnight Ferry".into(),
                        source: "SONOS".into(), place: "KITCHEN".into() },
@@ -80,25 +80,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             i += 1;
         }
     }
-    // What fits, measured against the 800px the hub may never exceed:
-    // 704px of content once the status bar and padding are taken, less the
-    // labels, the scene row, and - when anything is playing - the activity
-    // strip. That leaves room for four rows, or five when the strip is hidden.
-    // Anything past that collapses into a single "More areas" stop, so the
-    // hub's height is the same whether a home has four areas or forty.
-    let capacity = if activities_shown { 4 } else { 5 };
-    let more = areas.len().saturating_sub(capacity);
-    if more > 0 {
-        // The overflow row occupies a slot of its own.
-        areas.truncate(capacity - 1);
-    }
-    app.set_more_count((if more > 0 { more + 1 } else { 0 }) as i32);
+    // The area list scrolls, so every area is reachable regardless of count.
     app.set_areas(ModelRc::new(VecModel::from(areas)));
 
     app.set_scenes(ModelRc::new(VecModel::from(vec![
         SceneCell { name: "Movie night".into(), active: false },
         SceneCell { name: "All off".into(), active: false },
     ])));
+
+    // COUCH_FOCUS parks focus on a given stop, so a screenshot can show any
+    // focus position without driving the keypad.
+    if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
+        app.set_focus_index(n);
+        app.invoke_settle_focus();
+    }
 
     app.on_activated(|index| println!("couch-gui: activated stop {index}"));
     app.on_back(|| println!("couch-gui: back"));
