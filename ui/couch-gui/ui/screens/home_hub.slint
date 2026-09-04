@@ -1,5 +1,4 @@
 import { Theme } from "../theme.slint";
-import { IconDisplay, IconSet } from "@lucide";
 import { FocusRing } from "../components/focus_ring.slint";
 import { SectionLabel } from "../components/section_label.slint";
 
@@ -30,36 +29,40 @@ export struct SceneCell {
     active: bool,
 }
 
-// Room icons are Lucide, drawn as real vector paths rather than rasterised
-// alpha masks. That needs the "path" feature on both i-slint-core and the
-// software renderer - the slint facade forwards it from neither, which is why
-// Cargo.toml names those two crates directly.
+// Room icons are Lucide, rasterised to alpha masks by tools/mkuiicons.sh and
+// tinted at runtime so the colour still comes from the theme.
 //
-// Selected with a ternary chain rather than ten conditional elements: the icon
-// is a value, so picking it is an expression.
+// lucide-slint would draw these as real vector paths and was tried: it works,
+// but it costs 186KB, about 10% more per frame, and two direct dependencies
+// that exist only to switch on a feature flag. The design is authored so that
+// every glyph is a rectangle, a circle or a triangle, so the vector capability
+// had nothing else to pay for itself with. See docs/slint-notes.md.
 component RoomIcon inherits Rectangle {
     in property <int> shape;
     in property <color> ink;
     width: 24px;
     height: 24px;
 
-    IconDisplay {
-        width: 100%;
-        height: 100%;
-        size: 24px;
-        stroke: root.ink;
-        stroke-width: 2.2;
-        icon: root.shape == 0 ? IconSet.Sofa
-            : root.shape == 1 ? IconSet.Bed
-            : root.shape == 2 ? IconSet.CookingPot
-            : root.shape == 3 ? IconSet.BookOpen
-            : root.shape == 4 ? IconSet.DoorOpen
-            : root.shape == 5 ? IconSet.Car
-            : root.shape == 6 ? IconSet.Trees
-            : root.shape == 7 ? IconSet.Lamp
-            : root.shape == 8 ? IconSet.Tv
-            : IconSet.House;
-    }
+    if root.shape == 0: Image { source: @image-url("../../assets/icon-sofa.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 1: Image { source: @image-url("../../assets/icon-bed.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 2: Image { source: @image-url("../../assets/icon-cooking-pot.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 3: Image { source: @image-url("../../assets/icon-book-open.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 4: Image { source: @image-url("../../assets/icon-door-open.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 5: Image { source: @image-url("../../assets/icon-car.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 6: Image { source: @image-url("../../assets/icon-trees.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 7: Image { source: @image-url("../../assets/icon-lamp.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape == 8: Image { source: @image-url("../../assets/icon-tv.png");
+        width: 100%; height: 100%; colorize: root.ink; }
+    if root.shape >= 9: Image { source: @image-url("../../assets/icon-house.png");
+        width: 100%; height: 100%; colorize: root.ink; }
 }
 
 component AreaPane inherits Rectangle {
@@ -373,11 +376,10 @@ export component HomeHub inherits Rectangle {
                             Rectangle { width: 4px; height: 8px;  background: Theme.accent;
                                         y: parent.height - self.height; }
                         }
-                        if act.kind == 1: Path {
+                        if act.kind == 1: Image {
+                            source: @image-url("../../assets/glyph-play.png");
                             width: 14px; height: 18px;
-                            viewbox-width: 14; viewbox-height: 18;
-                            commands: "M 0 0 L 14 9 L 0 18 Z";
-                            fill: Theme.accent;
+                            colorize: Theme.accent;
                         }
                     }
 
