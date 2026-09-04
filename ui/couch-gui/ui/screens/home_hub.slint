@@ -136,8 +136,9 @@ component AreaPane inherits Rectangle {
         easing: ease-out;
     }
 
-    /// Called before a page's content is swapped in, so the ring lands rather
-    /// than travelling to a row that is about to stop existing.
+    /// Called before a page's content is swapped in: the row index means
+    /// something different either side of it, and the ring should land on the
+    /// new page rather than travel to it.
     public function begin-swap() { fs.anim = false; }
 
     public function ensure-col-visible() {
@@ -515,7 +516,13 @@ component AreaPane inherits Rectangle {
             easing: ease-out;
         }
         FocusRing {
-            focused: true;
+            // A negative row means this pane has no focus - the incoming page
+            // during a slide is passed -1. "On the strip" is row < first room,
+            // and -1 satisfies that, so the page sliding in drew a ring on its
+            // activity strip the whole way across and then handed over to the
+            // real ring on the first room. That is the "up to activities and
+            // back down" this looked like; it was never the animation.
+            focused: root.focus-row >= 0;
             radius-inner: fs.ring-r;
             box-width: parent.width;
             box-height: parent.height;
