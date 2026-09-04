@@ -73,6 +73,7 @@ export component App inherits Window {
     public function settle-focus() { hub.ensure-visible(); }
     // Changing area replaces the whole list, so the old scroll position means
     // nothing: start the new area at the top.
+    public function begin-swap() { hub.begin-swap(); }
     public function reset-scroll() { hub.reset-scroll(); }
 
     property <int> act-count: root.activities.length;

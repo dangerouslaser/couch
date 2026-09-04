@@ -166,6 +166,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let areas = areas.clone();
         move |app: &App, index: usize| {
             let a = &areas[index];
+            // Before anything else: the row indices are about to mean something
+            // different, and the ring must not animate through the difference.
+            app.invoke_begin_swap();
             app.set_area_name(a.name.into());
             app.set_area_index(index as i32);
             app.set_activities(ModelRc::new(VecModel::from(a.activities.clone())));

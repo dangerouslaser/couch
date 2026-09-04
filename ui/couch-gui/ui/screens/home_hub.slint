@@ -136,7 +136,12 @@ component AreaPane inherits Rectangle {
         easing: ease-out;
     }
 
+    /// Called before a page's content is swapped in, so the ring lands rather
+    /// than travelling to a row that is about to stop existing.
+    public function begin-swap() { fs.anim = false; }
+
     public function ensure-col-visible() {
+        fs.anim = true;
         root.anim-scroll = true;
         if (root.focus-row < root.first-room-row && root.activities.length > 0) {
             root.act-scroll = min(root.act-max,
@@ -220,6 +225,16 @@ component AreaPane inherits Rectangle {
         property <length> ring-h: fs.on-strip ? 66px : fs.on-scenes ? 74px : 90px;
         property <length> ring-r: fs.on-strip || fs.on-scenes
                                   ? Theme.r-card : Theme.r-row;
+        // Off across a page change, on for a focus move.
+        //
+        // Filling the new area sets its activities before its focus row, so for
+        // that instant the old row index is read against the new
+        // first-room-row - and an old row 0 in an area that has a strip means
+        // "the strip". The ring set off for it, then turned round when the
+        // focus row landed, which read as the highlight going up to the
+        // activities and back down. Landing is also what a page change should
+        // look like: nothing travelled, the page underneath changed.
+        property <bool> anim: true;
     }
 
     background: Theme.bg;
@@ -495,7 +510,10 @@ component AreaPane inherits Rectangle {
         width: fs.ring-w;
         height: fs.ring-h;
         background: transparent;
-        animate x, y, width, height { duration: 160ms; easing: ease-out; }
+        animate x, y, width, height {
+            duration: fs.anim ? 160ms : 0ms;
+            easing: ease-out;
+        }
         FocusRing {
             focused: true;
             radius-inner: fs.ring-r;
@@ -591,6 +609,7 @@ export component HomeHub inherits Rectangle {
         front.ensure-col-visible();
     }
     public function ensure-col-visible() { front.ensure-col-visible(); }
+    public function begin-swap() { front.begin-swap(); }
     public function reset-scroll() {
         front.anim-scroll = false;
         front.scroll = 0px;
