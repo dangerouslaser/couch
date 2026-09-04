@@ -7,10 +7,12 @@ mod keypad;
 mod panel;
 mod qr;
 mod system;
+mod touch;
 
 use std::time::Duration;
 
-use slint::platform::WindowEvent;
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::LogicalPosition;
 use slint::{Model, ModelRc, PhysicalSize, SharedString, VecModel};
 
 use keypad::{now_monotonic_us, Keypad};
@@ -252,6 +254,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pad = Keypad::open();
     println!("couch-gui: {} keypad device(s)", pad.device_count());
 
+    // The panel is a touchscreen too. Slint does the hit testing once the
+    // pointer events are fed in, so this is only a translation layer.
+    let mut pointer = touch::Touch::open();
+    println!(
+        "couch-gui: touchscreen {}",
+        if pointer.present() { "present" } else { "absent" }
+    );
+
     // Cached because reading it spawns a process; the offset only changes when
     // the timezone does.
     let mut tz_offset = system::utc_offset_seconds();
@@ -283,6 +293,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
                 window.dispatch_event(WindowEvent::KeyReleased { text });
             }
+        }
+
+        // Slint's own hit testing decides what a tap lands on, so nothing here
+        // needs to know what is on screen.
+        while let Some(event) = pointer.poll() {
+            let (position, ev) = match event {
+                touch::Event::Pressed { x, y } => (
+                    LogicalPosition::new(x, y),
+                    0,
+                ),
+                touch::Event::Moved { x, y } => (LogicalPosition::new(x, y), 1),
+                touch::Event::Released { x, y } => (LogicalPosition::new(x, y), 2),
+            };
+            window.dispatch_event(match ev {
+                0 => WindowEvent::PointerPressed { position, button: PointerEventButton::Left },
+                1 => WindowEvent::PointerMoved { position },
+                _ => WindowEvent::PointerReleased { position, button: PointerEventButton::Left },
+            });
         }
 
         let now = now_monotonic_us();

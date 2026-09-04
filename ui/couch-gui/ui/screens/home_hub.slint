@@ -75,6 +75,13 @@ component AreaPane inherits Rectangle {
     // it is the one thing on the page that does not slide with the rest, so
     // popping into place at the end reads as a stutter against the motion that
     // just finished.
+    // A tap names a stop; it does not act on it. Touch and the D-pad then
+    // agree on one selection, and the ring is always the truth about what OK
+    // will do - which it would not be if a finger could act somewhere the ring
+    // is not. The keyboard, where a key has no meaningful selected state, is
+    // where direct activation belongs instead.
+    callback pick(int, int);
+
     in property <bool> ring-hidden: false;
     in property <int> focus-row;
     in property <int> focus-col;
@@ -270,6 +277,7 @@ component AreaPane inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for act[i] in root.activities: Rectangle {
                         width: root.cell-w;
+                        TouchArea { clicked => { root.pick(0, i); } }
                         background: Theme.surface-raised;
                         border-width: 1px;
                         border-color: Theme.border-raised;
@@ -352,6 +360,7 @@ component AreaPane inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for area[i] in root.rooms: Rectangle {
                 height: 90px;
+                TouchArea { clicked => { root.pick(root.first-room-row + i, 0); } }
                 background: area.idle ? Theme.surface-idle : Theme.surface;
                 border-width: 1px;
                 border-color: area.idle ? Theme.border-idle : Theme.border;
@@ -456,6 +465,7 @@ component AreaPane inherits Rectangle {
                     padding-right: root.ring-bleed;
                     for scene[i] in root.scenes: Rectangle {
                         width: root.cell-w;
+                        TouchArea { clicked => { root.pick(root.scenes-row, i); } }
                         background: Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
@@ -543,6 +553,7 @@ component AreaPane inherits Rectangle {
 }
 
 export component HomeHub inherits Rectangle {
+    callback pick(int, int);
     in property <[LiveActivity]> activities;
     in property <string> area-name;
     in property <int> area-index;
@@ -670,6 +681,7 @@ export component HomeHub inherits Rectangle {
                     rooms: root.rooms;
                     scenes: root.scenes;
                     ring-hidden: root.sliding;
+                    pick(r, c) => { root.pick(r, c); }
                     focus-row: root.focus-row;
                     focus-col: root.focus-col;
                     first-room-row: root.first-room-row;

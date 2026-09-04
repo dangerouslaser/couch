@@ -146,6 +146,11 @@ export component App inherits Window {
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
+        pick(r, c) => {
+            root.focus-row = r;
+            root.focus-col = c;
+            hub.ensure-visible();
+        }
         activities: root.activities;
         activities-next: root.activities-next;
         rooms: root.rooms;
