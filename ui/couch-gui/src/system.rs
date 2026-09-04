@@ -102,16 +102,29 @@ pub fn approval_state() -> Approval {
     }
 }
 
-/// The four digits couch-confd wants shown, if a browser is trying to pair.
+/// The four digits couch-confd wants shown, and how many seconds they have
+/// left, if a browser is trying to pair.
 ///
-/// The daemon deletes the file when the PIN is spent or refused, but it has no
-/// timer of its own - expiry is noticed on the next request - so a PIN nobody
-/// follows up on can outlive its usefulness on disk. The caller runs its own
-/// countdown over what it reads here rather than trusting the file to vanish.
-pub fn pairing_pin() -> Option<String> {
-    let pin = read_trimmed("/tmp/couch.pin")?;
+/// The deadline comes out of the file rather than being counted from when this
+/// process first saw it. Timing it locally meant a `couch-gui` restart handed a
+/// stale PIN a fresh two minutes - which, with a daemon that only expired the
+/// challenge when a request arrived, left the panel stuck on a PIN forever.
+/// Both processes read the same clock, so an absolute deadline agrees between
+/// them even if the device's clock is wrong.
+pub fn pairing_pin() -> Option<(String, i32)> {
+    let raw = read_trimmed("/tmp/couch.pin")?;
+    let mut parts = raw.split_whitespace();
+    let pin = parts.next()?.to_string();
     // Anything else is a file we did not write.
-    (pin.len() == 4 && pin.bytes().all(|b| b.is_ascii_digit())).then_some(pin)
+    if pin.len() != 4 || !pin.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let deadline: i64 = parts.next()?.parse().ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some((pin, (deadline - now).clamp(0, 3600) as i32))
 }
 
 fn read_trimmed(path: &str) -> Option<String> {

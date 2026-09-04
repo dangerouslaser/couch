@@ -173,13 +173,6 @@ component AreaPane inherits Rectangle {
                         border-color: Theme.border-raised;
                         border-radius: Theme.r-card;
 
-                        FocusRing {
-                            focused: root.focus-row < root.first-room-row
-                                     && root.focus-col == i;
-                            radius-inner: Theme.r-card;
-                            box-width: parent.width; box-height: parent.height;
-                        }
-
                         HorizontalLayout {
                             padding-left: 14px;
                             padding-right: 14px;
@@ -227,6 +220,18 @@ component AreaPane inherits Rectangle {
                         }
                     }
                 }
+                Rectangle {
+                    x: root.ring-bleed + root.focus-col * (root.cell-w + 10px);
+                    y: root.ring-bleed;
+                    width: root.cell-w;
+                    height: 66px;
+                    background: transparent;
+                    animate x { duration: 160ms; easing: ease-out; }
+                    FocusRing {
+                        focused: root.focus-row < root.first-room-row;
+                        box-width: parent.width; box-height: parent.height;
+                    }
+                }
             }
         }
 
@@ -262,12 +267,6 @@ component AreaPane inherits Rectangle {
                 border-width: 1px;
                 border-color: area.idle ? Theme.border-idle : Theme.border;
                 border-radius: Theme.r-row;
-
-                FocusRing {
-                    focused: root.focus-row == root.first-room-row + i;
-                    radius-inner: Theme.r-row;
-                    box-width: parent.width; box-height: parent.height;
-                }
 
                 HorizontalLayout {
                     padding: 18px;
@@ -343,6 +342,30 @@ component AreaPane inherits Rectangle {
             }
 
             }
+
+            // One ring, moved, rather than one per row switched on and off.
+            // Switching is a jump however fast the list scrolls underneath;
+            // this is the thing the eye actually follows. It also costs less to
+            // draw - N conditional borders become one - which is what paid for
+            // the animation.
+            //
+            // It lives inside the scrolling content, so a focus move that also
+            // scrolls does not need the two to be reconciled: the ring travels
+            // with the rows and only the row-to-row step is animated here.
+            Rectangle {
+                x: root.ring-bleed;
+                y: (root.focus-row - root.first-room-row) * root.row-pitch;
+                width: parent.width - 2 * root.ring-bleed;
+                height: 90px;
+                background: transparent;
+                animate y { duration: 160ms; easing: ease-out; }
+                FocusRing {
+                    focused: root.focus-row >= root.first-room-row
+                             && root.focus-row < root.scenes-row;
+                    radius-inner: Theme.r-row;
+                    box-width: parent.width; box-height: parent.height;
+                }
+            }
           }
         }
         }
@@ -372,12 +395,6 @@ component AreaPane inherits Rectangle {
                         border-color: Theme.border;
                         border-radius: Theme.r-card;
 
-                        FocusRing {
-                            focused: root.focus-row == root.scenes-row && root.focus-col == i;
-                            radius-inner: Theme.r-card;
-                            box-width: parent.width; box-height: parent.height;
-                        }
-
                         HorizontalLayout {
                             padding-left: 18px;
                             padding-right: 18px;
@@ -406,6 +423,19 @@ component AreaPane inherits Rectangle {
                                 }
                             }
                         }
+                    }
+                }
+                Rectangle {
+                    x: root.ring-bleed + root.focus-col * (root.cell-w + 10px);
+                    y: root.ring-bleed;
+                    width: root.cell-w;
+                    height: 74px;
+                    background: transparent;
+                    animate x { duration: 160ms; easing: ease-out; }
+                    FocusRing {
+                        focused: root.focus-row == root.scenes-row;
+                        radius-inner: Theme.r-card;
+                        box-width: parent.width; box-height: parent.height;
                     }
                 }
             }

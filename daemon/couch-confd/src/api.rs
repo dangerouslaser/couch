@@ -21,7 +21,7 @@
 //! anybody's house.
 
 use std::io::Read;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use couch_model::{
     Action, Activity, ActivityKind, Area, Config, Device, DeviceKind, Icon, Id, Integration, Room,
@@ -43,7 +43,7 @@ const MAX_BODY: u64 = 512 * 1024;
 pub struct Api {
     store: Mutex<Store>,
     assets: Assets,
-    auth: Auth,
+    auth: Arc<Auth>,
 }
 
 /// What a `POST` to a collection needs: everything else is defaulted and then
@@ -185,7 +185,7 @@ impl Reply {
 }
 
 impl Api {
-    pub fn new(store: Store, assets: Assets, auth: Auth) -> Api {
+    pub fn new(store: Store, assets: Assets, auth: Arc<Auth>) -> Api {
         Api { store: Mutex::new(store), assets, auth }
     }
 

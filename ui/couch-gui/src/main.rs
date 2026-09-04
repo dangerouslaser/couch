@@ -254,10 +254,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tz_offset = system::utc_offset_seconds();
     let mut tz_checked = now_monotonic_us();
     let mut last_tick = 0u64;
-    // Which digits are on screen, and since when - the countdown is this
-    // process's, not the daemon's.
-    let mut pair_shown_since: Option<String> = None;
-    let mut pair_since = 0u64;
     let mut last_setup: Option<bool> = None;
     // COUCH_NAV walks the focus ring on a timer, so its repaint behaviour is
     // observable without someone pressing buttons.
@@ -297,25 +293,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             app.set_clock(SharedString::from(system::clock_24h(tz_offset)));
 
-            // couch-confd writes the PIN and deletes it once it is spent, but
-            // it has no timer - expiry is noticed on its next request - so the
-            // countdown is run here, from when this process first saw these
-            // digits. A PIN nobody follows up on leaves the screen on its own.
+            // The deadline is the daemon's, carried in the file, so restarting
+            // this process cannot extend a PIN that is already on its way out.
             match system::pairing_pin() {
-                Some(pin) => {
-                    if pair_shown_since.as_deref() != Some(pin.as_str()) {
-                        pair_since = now;
-                        pair_shown_since = Some(pin.clone());
-                    }
-                    let left = 120 - ((now - pair_since) / 1_000_000) as i32;
+                Some((pin, left)) => {
                     app.set_pair_pin(SharedString::from(pin));
-                    app.set_pair_seconds(left.max(0));
+                    app.set_pair_seconds(left);
                     app.set_pair_shown(left > 0);
                 }
-                None => {
-                    pair_shown_since = None;
-                    app.set_pair_shown(false);
-                }
+                None => app.set_pair_shown(false),
             }
             match system::battery() {
                 Some(b) => {

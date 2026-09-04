@@ -96,13 +96,24 @@ fn main() {
     };
     println!("couch-confd: listening on http://{}", options.addr);
 
-    let auth = Auth::new(&options.pin_file, options.no_auth);
+    let auth = Arc::new(Auth::new(&options.pin_file, options.no_auth));
     if auth.disabled() {
         // Loud, because the whole point of the PIN is that nobody has to trust
         // the LAN, and this hands that back.
         println!("couch-confd: *** --no-auth: anything on this network can rewrite the config ***");
     } else {
         println!("couch-confd: pairing by PIN, shown via {}", options.pin_file);
+    }
+
+    // A PIN nobody follows up on has to leave the panel by itself. Checking
+    // expiry only when a request arrives got that exactly backwards: the case
+    // where the prompt is unwanted is the case where no request ever comes.
+    {
+        let auth = auth.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            auth.reap();
+        });
     }
 
     let api = Arc::new(Api::new(store, assets, auth));

@@ -15,6 +15,12 @@
 //! That visibility is the quiet second feature: a PIN appearing when nobody
 //! opened the page means somebody else on the network just tried.
 //!
+//! Expiry is enforced by a reaper rather than only noticed on the next request.
+//! The lazy version left `/tmp/couch.pin` on disk whenever nobody followed up -
+//! which is exactly the case where a PIN is showing that nobody asked for - and
+//! the panel sat on it. The file also carries its own deadline, so a `couch-gui`
+//! that restarts does not hand a stale PIN a fresh two minutes.
+//!
 //! Sessions live in memory only. Restarting the daemon logs everyone out, which
 //! is the right way round - a config daemon that survives a reboot holding open
 //! sessions is one that cannot be reset by turning it off and on again.
@@ -23,7 +29,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Long enough to walk to the remote and read it, short enough that a PIN left
 /// on screen because someone wandered off is not a standing invitation.
@@ -103,6 +109,27 @@ impl Auth {
 
     pub fn disabled(&self) -> bool {
         self.disabled
+    }
+
+    /// Called on a timer, so a PIN nobody follows up on still leaves the screen.
+    /// Expiry used to be checked only when a request arrived, which meant the
+    /// one case that matters - a prompt nobody wanted - was the one case
+    /// nothing cleaned up.
+    ///
+    /// It also puts the file back if it has gone missing under a live
+    /// challenge. Asking for a PIN is idempotent, so without this a file
+    /// deleted mid-challenge - a cleared `/tmp`, a stray `rm` - leaves the
+    /// browser waiting on digits the panel can no longer be told to show, and
+    /// "show a new PIN" cannot fix it because there is already a new PIN.
+    pub fn reap(&self) {
+        let mut state = self.state.lock().unwrap();
+        self.expire_locked(&mut state);
+        if let Some(challenge) = &state.challenge {
+            if !self.pin_file.exists() {
+                let deadline = challenge.started + PIN_TTL;
+                self.write_pin_file_until(&challenge.pin, deadline);
+            }
+        }
     }
 
     /// True if this request carries a live session. Also refreshes it, which is
@@ -208,10 +235,29 @@ impl Auth {
         }
     }
 
+    /// `<pin> <unix deadline>`.
+    ///
+    /// The deadline is wall clock rather than a duration because the reader is
+    /// a different process with its own lifetime: a `couch-gui` that restarts
+    /// while a PIN is up must not start the two minutes again. Both processes
+    /// read the same system clock, so an absolute time is consistent between
+    /// them even when the device's clock is wrong.
     fn write_pin_file(&self, pin: &str) {
+        self.write_pin_file_until(pin, Instant::now() + PIN_TTL);
+    }
+
+    /// The deadline is converted from the challenge's monotonic clock to wall
+    /// clock at the moment of writing, so a rewrite carries the time the PIN
+    /// actually has left rather than a fresh two minutes.
+    fn write_pin_file_until(&self, pin: &str, deadline: Instant) {
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
+        let at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() + remaining)
+            .unwrap_or(0);
         // 0600: anything that can read this can pair, so it is a credential for
         // as long as it exists.
-        let _ = write_private(&self.pin_file, pin.as_bytes());
+        let _ = write_private(&self.pin_file, format!("{pin} {at}").as_bytes());
     }
 
     fn clear_pin_file(&self) {
@@ -290,6 +336,25 @@ fn fill_random(out: &mut [u8]) {
 mod tests {
     use super::*;
 
+    fn pin_from_file(path: &Path) -> String {
+        let raw = std::fs::read_to_string(path).unwrap();
+        raw.split_whitespace().next().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_file_carries_a_deadline_so_a_restarted_reader_cannot_extend_it() {
+        let (auth, path) = auth();
+        auth.challenge();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut parts = raw.split_whitespace();
+        let pin = parts.next().unwrap();
+        let deadline: u64 = parts.next().expect("a deadline").parse().expect("seconds");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(pin.len(), 4);
+        assert!(deadline > now, "deadline is in the future");
+        assert!(deadline <= now + PIN_TTL.as_secs());
+    }
+
     fn auth() -> (Auth, PathBuf) {
         let path = std::env::temp_dir().join(format!("couch-pin-test-{}", random_u64()));
         (Auth::new(path.clone(), false), path)
@@ -301,7 +366,7 @@ mod tests {
         assert!(!auth.authenticated(""));
 
         auth.challenge();
-        let shown = std::fs::read_to_string(&path).unwrap();
+        let shown = pin_from_file(&path);
         assert_eq!(shown.len(), 4);
         assert!(shown.chars().all(|c| c.is_ascii_digit()));
 
@@ -315,7 +380,7 @@ mod tests {
     fn a_wrong_pin_burns_an_attempt_and_five_burn_the_challenge() {
         let (auth, path) = auth();
         auth.challenge();
-        let right = std::fs::read_to_string(&path).unwrap();
+        let right = pin_from_file(&path);
         let wrong = format!("{:04}", (right.parse::<u32>().unwrap() + 1) % 10_000);
 
         for expected in (1..MAX_TRIES).rev() {
@@ -331,24 +396,35 @@ mod tests {
     }
 
     #[test]
+    fn a_file_deleted_under_a_live_challenge_comes_back() {
+        let (auth, path) = auth();
+        auth.challenge();
+        let pin = pin_from_file(&path);
+        std::fs::remove_file(&path).unwrap();
+
+        auth.reap();
+        assert_eq!(pin_from_file(&path), pin, "the same PIN, not a new one");
+        // And it is still the PIN that works.
+        assert!(matches!(auth.verify(&pin), Verdict::Paired(_)));
+    }
+
+    #[test]
     fn asking_twice_does_not_move_the_digits_underneath_someone() {
         let (auth, path) = auth();
         auth.challenge();
-        let first = std::fs::read_to_string(&path).unwrap();
+        let first = pin_from_file(&path);
         auth.challenge();
-        assert_eq!(first, std::fs::read_to_string(&path).unwrap());
+        assert_eq!(first, pin_from_file(&path));
     }
 
     #[test]
     fn logging_out_ends_that_session_only() {
         let (auth, path) = auth();
         auth.challenge();
-        let pin = std::fs::read_to_string(&path).unwrap();
-        let Verdict::Paired(one) = auth.verify(&pin) else { panic!() };
+        let Verdict::Paired(one) = auth.verify(&pin_from_file(&path)) else { panic!() };
 
         auth.challenge();
-        let pin = std::fs::read_to_string(&path).unwrap();
-        let Verdict::Paired(two) = auth.verify(&pin) else { panic!() };
+        let Verdict::Paired(two) = auth.verify(&pin_from_file(&path)) else { panic!() };
 
         auth.log_out(&format!("{COOKIE}={one}"));
         assert!(!auth.authenticated(&format!("{COOKIE}={one}")));
