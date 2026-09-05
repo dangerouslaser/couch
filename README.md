@@ -48,7 +48,7 @@ python3 tools/sercmd.py 'uname -a'    # run a command on the device
 * init clears the 512-byte BCB in `para` as its first action, so **the next reboot
   returns to Android by itself**. Only the first 512 bytes are cleared — an `ENV_v1`
   block lives at offset 128K and must survive.
-* Unclaimed sessions self-reboot after 4 minutes. `touch /tmp/stay` keeps one alive.
+* Unclaimed sessions self-reboot after 15 minutes. `touch /tmp/stay` keeps one alive; `stage2.sh` does it once it reaches the GUI, so only a boot that fails before that falls back.
 * If a kernel panics before init runs, the recovery flag persists and it will retry.
   Escape via lk's boot menu: hold Volume Up at power-on, **Volume Up moves the
   selector, Volume Down selects**, choose `[Normal Boot]`.
@@ -327,6 +327,52 @@ dd if=patched.img of=/dev/mmcblk0p12 # from Linux; no Android needed
 
 Measured after: the same three-tap test gives 3 presses, 3 mapped keys, 3 focus
 moves. The 20-tap test went from 8 to 15.
+
+## The keypad interrupt handler runs for 46-62ms with interrupts off
+
+Measured with ftrace (`irq_handler_entry`/`exit`, `sched_switch`) on a real
+press: the `matrix-keypad` row interrupt handler runs 46ms when it lands on
+the idle task and 62ms when it lands on the scan worker, in hard-IRQ context
+with interrupts disabled, so for that long nothing on the one online core
+runs - not the tick, not the GUI's 5ms sleep timer, not the display's
+command-queue completion. While a key is held the line re-fires every ~85ms
+(the generic `gpio-matrix-keypad` driver re-enables the row EINTs after each
+8ms rescan and MediaTek's edge emulation fires again), so a hold spends about
+60% of the core inside that handler.
+
+That one fact explains everything else that was measured: an isolated press
+reaches userspace ~92ms after the kernel stamps it (5ms for a press during
+a hold, when the rows are polled and the EINTs stay masked; 2-3ms with three
+cores online, when the GUI runs elsewhere); a mic hold once starved the
+capture thread to a 0.1s recording; `FBIOPAN_DISPLAY` looked like a kernel
+busy-wait while a key was down, because the hard-IRQ time is charged to the
+task it interrupted; and `kworker/0:1` takes ~22% of the core rescanning.
+
+Nothing in the overlay's keypad node is unusual: `gpio-matrix-keypad`, four
+row EINTs (6, 9, 11, 12) as plain `bias-disable` EINT pins, six column GPIOs,
+`col-scan-delay-us = 200`, `debounce-delay-ms = 8`. The cost is inside the
+scan the driver runs from hard-IRQ context: `gpio-matrix-keypad` activates
+each column GPIO in turn and reads the rows with a `col-scan-delay-us` (200us)
+settle between them, and on this SoC the column GPIO and row EINT operations
+go through the pmic/EINT chip over a slow bus - six columns times the settle,
+inside the handler, with interrupts off. Confirmed by a second capture (IRQ 268
+again 46/62ms). This kernel ships only the `nop` tracer at runtime, so a
+`function_graph` breakdown would need a kernel rebuild and is not worth it.
+
+Two ways out, neither taken yet: lower `col-scan-delay-us` in the overlay (the
+200us is conservative; the matrix is small), or move the scan out of hard-IRQ
+by having the driver's threaded handler do it. For now the number that matters
+is that presses injected through `/dev/input/event1` bypass the scan and arrive
+in 0.3-3ms, so nothing above the driver is at fault, and a held key still
+scrolls (repeat is synthesised in `couch-gui`, and the 5ms in-hold latency is
+fine). It is a real but non-blocking hardware-path cost, documented and left.
+
+Two more facts from the same investigation, for whoever profiles this next:
+`FBIOPAN_DISPLAY` busy-waits in the kernel for as long as any key is held
+(the keypad rescans every 8ms while a key is down), so the GUI paces with a
+timed sleep - see `docs/slint-notes.md`; and the touchscreen's interrupt thread
+(`irq/261-tlsc6x_`, SCHED_FIFO 50) costs about 1.5ms per interrupt at ~100
+interrupts a second while the glass is touched.
 
 Take this one seriously though: `odmdtbo` is shared with Android, so unlike the
 recovery-slot work a bad overlay affects both systems and recovery means
