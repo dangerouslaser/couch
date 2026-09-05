@@ -193,8 +193,9 @@ component AreaPane inherits Rectangle {
         height: 0px;
 
         property <length> rooms-y: root.activities.length > 0 ? root.acts-h + 14px : 0px;
+        // rooms box, the pager slot, the label, and the spacing between each.
         property <length> scenes-y: fs.rooms-y + root.avail + 2 * root.ring-bleed
-                                    + 14px + 19px + 14px;
+                                    + 14px + root.dots-h + 14px + 19px + 14px;
         property <bool> on-strip: root.focus-row < root.first-room-row;
         property <bool> on-scenes: root.focus-row == root.scenes-row;
 

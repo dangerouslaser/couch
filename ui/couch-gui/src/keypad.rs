@@ -119,6 +119,12 @@ impl Keypad {
                         repeat: false,
                     });
                 }
+                // A key this build does not know is worth one line in the log:
+                // the alternative is a button that silently does nothing and a
+                // guess about which code it sends.
+                if map_key(code).is_none() {
+                    println!("couch-gui: unmapped key code {code}");
+                }
                 self.held = code;
                 self.held_since = now_monotonic_us();
                 self.last_repeat = 0;
@@ -158,7 +164,11 @@ fn map_key(code: u16) -> Option<Key> {
         108 => Some(Key::DownArrow),    // KEY_DOWN
         105 => Some(Key::LeftArrow),    // KEY_LEFT
         106 => Some(Key::RightArrow),   // KEY_RIGHT
-        28 | 96 => Some(Key::Return),   // KEY_ENTER / KEY_KPENTER
+        // 353 is KEY_SELECT, which is what this remote's OK button actually
+        // sends - measured, after it silently did nothing for a while. 352 is
+        // KEY_OK, its neighbour in the same block, mapped on the same grounds
+        // that 28 and 96 both are.
+        28 | 96 | 352 | 353 => Some(Key::Return),
         1 | 158 => Some(Key::Escape),   // KEY_ESC / KEY_BACK
         172 => Some(Key::Home),         // KEY_HOMEPAGE
         _ => None,
