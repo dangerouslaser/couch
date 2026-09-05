@@ -44,6 +44,15 @@ enum Intent {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The UI is left on the default affinity deliberately, not pinned off
+    // CPU 0. The input EINT interrupts fire only on CPU 0 and freeze it for
+    // 46-62ms per press (see README), so it is tempting to pin the UI to the
+    // other cores - but the vendor hotplug daemon can take a core offline, and
+    // a UI pinned to a core that vanishes freezes for as long as it stays gone
+    // (measured: a 4.8s frame). The scheduler already migrates the runnable UI
+    // off a core saturated by IRQ time when another is online, which is why the
+    // fix is simply to keep a core available (stage2's hotplug floor), never to
+    // force the UI onto one.
     let mut screen = Panel::open()?;
     println!("couch-gui: panel {}x{}", screen.width, screen.height);
 

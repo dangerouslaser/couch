@@ -359,13 +359,18 @@ inside the handler, with interrupts off. Confirmed by a second capture (IRQ 268
 again 46/62ms). This kernel ships only the `nop` tracer at runtime, so a
 `function_graph` breakdown would need a kernel rebuild and is not worth it.
 
-Two ways out, neither taken yet: lower `col-scan-delay-us` in the overlay (the
-200us is conservative; the matrix is small), or move the scan out of hard-IRQ
-by having the driver's threaded handler do it. For now the number that matters
-is that presses injected through `/dev/input/event1` bypass the scan and arrive
-in 0.3-3ms, so nothing above the driver is at fault, and a held key still
-scrolls (repeat is synthesised in `couch-gui`, and the 5ms in-hold latency is
-fine). It is a real but non-blocking hardware-path cost, documented and left.
+The interrupt is delivered only to CPU 0 (every one of its interrupts is
+serviced there and the kernel refuses to move it), so the way out that works
+without touching the driver is to make sure the UI has another core to run on:
+`stage2.sh` holds a three-core hotplug floor (`/proc/hps/num_base_perf_serv`),
+and the scheduler migrates the runnable UI off the frozen core by itself.
+Measured on a held-key scroll: one core, 81 frames in 5s with a 45.9ms worst
+frame and ~92ms to the first press; three cores, 283 frames, 5.6ms worst,
+2.7ms. Two cores was not enough (a 50ms frame still leaked through), and
+pinning the UI off CPU 0 with `sched_setaffinity` was worse: the hotplug
+daemon can take the pinned core away and the UI then freezes for as long as it
+is gone, 4.8s in one frame. Keep a core available; never force the UI onto one.
+The cost is two cores' idle power, one line in `stage2.sh` to dial back.
 
 Two more facts from the same investigation, for whoever profiles this next:
 `FBIOPAN_DISPLAY` busy-waits in the kernel for as long as any key is held

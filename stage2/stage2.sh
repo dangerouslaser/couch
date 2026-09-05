@@ -211,6 +211,18 @@ GUI="$(dirname "$0")/couch-gui"
 # one evening. Getting here means the rootfs, WiFi and the GUI are all in
 # hand, which is what "claimed" was always meant to mean.
 touch /tmp/stay
+# Hold a three-core hotplug floor. The keypad and touch EINT interrupts land
+# only on CPU 0, and their handlers run 46-62ms in hard-IRQ with interrupts
+# off (see README): whatever runs on CPU 0 during a key press stalls for that
+# long, and at the default single online core that is the UI, every press. The
+# scheduler migrates the runnable UI off CPU 0 when it is saturated by that IRQ
+# time, but only if another core is online - and with a two-core floor the one
+# spare is too often the one the scheduler also parks work on, so a 46ms hitch
+# still leaks through. Three keeps the UI reliably clear of the frozen core.
+# The cost is two cores' idle power; drop this to 2, or remove it, to trade
+# smoothness back for battery. Load-based hotplug still brings the fourth.
+[ -w /proc/hps/num_base_perf_serv ] && echo 3 > /proc/hps/num_base_perf_serv
+for c in 1 2; do [ -w /sys/devices/system/cpu/cpu$c/online ] && echo 1 > /sys/devices/system/cpu/cpu$c/online; done
 if [ -x "$GUI" ]; then
     ( while true; do
         "$GUI" >/tmp/gui.log 2>&1
