@@ -204,6 +204,13 @@ GUI="$(dirname "$0")/couch-gui"
 # to pass here: a variable set in this loop's environment could never be
 # cleared again without killing the loop.
 [ -f /tmp/couch.setup ] && echo "= couch-gui starting in setup mode"
+# Claim the boot. init arms a 15-minute dead-man timer that reboots unless
+# /tmp/stay exists - the bring-up safety net, so a build that never gets this
+# far falls back to Android. The tools claim it over serial when they boot
+# the device; a self-boot had nobody to do it and rebooted at 906s, twice in
+# one evening. Getting here means the rootfs, WiFi and the GUI are all in
+# hand, which is what "claimed" was always meant to mean.
+touch /tmp/stay
 if [ -x "$GUI" ]; then
     ( while true; do
         "$GUI" >/tmp/gui.log 2>&1
