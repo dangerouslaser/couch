@@ -50,8 +50,11 @@ const FBIOPAN_DISPLAY: libc::c_int = 0x4606;
 // _IOW('F', 0x20, __u32) on 32-bit ARM.
 const FBIO_WAITFORVSYNC: libc::c_int = 0x4004_4620;
 
-/// One frame period on the 60Hz panel, for the timed fallback.
+/// One frame period on the 60Hz panel, for the timed pacing.
 const FRAME: Duration = Duration::from_micros(16_667);
+/// A pacing wait longer than this is a stall, and the ioctl that did it is
+/// abandoned for the timed sleep.
+const STALL: Duration = Duration::from_millis(100);
 
 /// How each drawn frame is held back to the panel's refresh.
 ///
@@ -62,12 +65,13 @@ const FRAME: Duration = Duration::from_micros(16_667);
 enum Pacing {
     /// FBIO_WAITFORVSYNC: the driver blocks until the next vertical sync.
     WaitForVsync,
-    /// FBIOPAN_DISPLAY with a zero offset. Measured on this panel in the LVGL
-    /// era: a pan blocks ~17ms waiting for vsync, and an mmap write reaches
-    /// the glass on its own, so the pan changes nothing about what is shown -
-    /// it is only used as the wait.
+    /// FBIOPAN_DISPLAY with a zero offset. A pan blocks ~17ms waiting for
+    /// vsync on an idle panel and changes nothing about what is shown - but
+    /// while a key is held it blocks for the whole hold, in the kernel, with
+    /// nothing else running. Opt-in only; see probe_pacing.
     Pan,
-    /// Neither ioctl blocks here: sleep until one frame after the draw began.
+    /// Sleep until one frame after the draw began. The default: no kernel
+    /// wait to go wrong, and at 60Hz nobody can tell it from vsync.
     Sleep,
 }
 
@@ -172,15 +176,27 @@ impl Panel {
     /// pan.
     fn probe_pacing(&mut self) -> Pacing {
         let choice = std::env::var("COUCH_VSYNC").unwrap_or_default();
+        // The timed sleep is the default, not the fallback. Both ioctls were
+        // measured to work on an idle panel, and FBIOPAN_DISPLAY then stalled
+        // the whole kernel for as long as any key was held: 5.3s of system
+        // time inside cmdqCoreWaitResultAndReleaseTask on a single online
+        // core, nothing else scheduled, the microphone thread starved to a
+        // 0.1s recording. The keypad rescans every 8ms while a key is down
+        // and something in that upsets the display's command queue. Not
+        // ours to fix; opt in with COUCH_VSYNC=auto|pan|wait to experiment.
         let (try_wait, try_pan) = match choice.as_str() {
-            "0" | "sleep" => (false, false),
+            "auto" => (true, true),
             "pan" => (false, true),
             "wait" => (true, false),
-            _ => (true, true),
+            _ => (false, false),
         };
         let mut why = Vec::new();
         if !try_wait && !try_pan {
-            why.push(format!("COUCH_VSYNC={choice}"));
+            why.push(if choice.is_empty() {
+                "default; the ioctls stall while a key is held".to_string()
+            } else {
+                format!("COUCH_VSYNC={choice}")
+            });
         }
 
         let fd = self.fb.as_raw_fd();
@@ -410,6 +426,7 @@ impl Panel {
     /// signal cutting one wait short is not a failure.
     fn pace(&mut self, started: Instant) {
         let fd = self.fb.as_raw_fd();
+        let before = Instant::now();
         let failed = match (self.pacing, self.var.as_mut()) {
             (Pacing::WaitForVsync, _) => wait_for_vsync(fd).err(),
             (Pacing::Pan, Some(var)) => pan_display(fd, var).err(),
@@ -418,6 +435,16 @@ impl Panel {
         if let Some(errno) = failed.filter(|e| *e != libc::EINTR) {
             println!("couch-gui: pacing: {:?} failed with {}, sleeping from now on",
                      self.pacing, errno_name(errno));
+            self.pacing = Pacing::Sleep;
+        }
+        // A wait that outlasts several frames is not pacing any more, it is
+        // the loop being held by the kernel: input queues, animations stop,
+        // and on this panel it lasted as long as a key was down. One line,
+        // and never that ioctl again for the life of the process.
+        let waited = before.elapsed();
+        if self.pacing != Pacing::Sleep && waited > STALL {
+            println!("couch-gui: pacing: {:?} took {}ms, sleeping from now on",
+                     self.pacing, waited.as_millis());
             self.pacing = Pacing::Sleep;
         }
         if self.pacing == Pacing::Sleep {

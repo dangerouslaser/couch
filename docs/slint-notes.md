@@ -229,21 +229,35 @@ hours of plausible theories had not.
 Section offsets for that single ring are arithmetic over the same furniture
 heights the row window uses, not read back off laid-out elements - reading the
 layout back is its own trap, see the note on the row window above.
-## Pacing: FBIOPAN_DISPLAY is the vsync wait on this panel
+## Pacing: a timed sleep, because the pan ioctl stalls while a key is held
 
 `FBIO_WAITFORVSYNC` returns EINVAL on mtkfb. `FBIOPAN_DISPLAY` with the
-startup screeninfo and zero offsets blocks about 17ms - it changes nothing
-about what is shown, page 0 is already displayed - so `panel.rs` issues one
-after each frame's copy and the loop is held to the refresh. `COUCH_VSYNC=0`
-forces a timed 16.67ms sleep instead; `pan` and `wait` force one candidate.
+startup screeninfo and zero offsets blocks about 17ms on an idle panel and
+changes nothing about what is shown, and it was the pacing wait for a day.
+Then a real session showed the loop held for 0.5-6s at a time with key
+presses queuing behind it. Reproduced with a sampler on the device: for
+exactly as long as any key is held, the GUI thread sits in
+`cmdqCoreWaitResultAndReleaseTask` under the pan, burning *system* time
+(5.3s of it in one hold), and nothing else on the single online core runs -
+not the sampler, not the microphone thread, whose recording came out 0.1s
+long. The keypad rescans every 8ms while a key is down (the debounce this
+project lowered), `kworker/0:1` takes ~22% of the core doing it, and that is
+enough to wedge the display's command queue. Touch, audio, and idle gaps were
+each tested and cleared first.
+
+So `panel.rs` paces with a sleep to 16.67ms after the draw began. It never
+enters the kernel to wait, and at 60Hz nobody can tell it from vsync. The
+ioctls remain behind `COUCH_VSYNC=auto|pan|wait` for experiments, and any
+pacing wait over 100ms demotes to the sleep for the life of the process.
 
 Measured under COUCH_NAV, seven ring moves per five seconds:
 
 | | frames / 5s | work per frame |
 |---|---|---|
 | unpaced (before) | ~600 | 2.0 ms |
-| paced, `interactive` governor | 70-77 | 6.3 ms |
-| paced, `performance` governor | 69 | 3.3 ms |
+| paced by the pan, `interactive` governor | 70-77 | 6.3 ms |
+| paced by the pan, `performance` governor | 69 | 3.3 ms |
+| paced by the sleep, `interactive` governor | 70-77 | 6.5 ms |
 
 The work per frame went up because the clock went down, not because the
 frame changed: the governor is `interactive` with a 604.5MHz floor, and once
