@@ -21,7 +21,9 @@ export struct RoomRow {
     idle: bool,
     offline: bool,
     dimmed: bool,       // Study in the reference: idle and recessed further
-    glyph: int,         // 0 square, 1 rounded-top rect, 2 circle, 3 diamond
+    // A Lucide icon, see RoomIcon: 0 sofa, 1 bed, 2 cooking pot, 3 open book,
+    // 4 open door, 5 car, 6 trees, 7 lamp, 8 tv, anything else a house.
+    glyph: int,
 }
 
 export struct SceneCell {
@@ -69,32 +71,75 @@ component AreaPane inherits Rectangle {
     in property <[LiveActivity]> activities;
     in property <[RoomRow]> rooms;
     in property <[SceneCell]> scenes;
-    // Row 0 is the activity strip when there is one; rooms follow; the scenes
-    // row is last. The column only means anything on the horizontal rows.
-    // True while the page is crossing. The ring fades rather than appearing:
-    // it is the one thing on the page that does not slide with the rest, so
-    // popping into place at the end reads as a stutter against the motion that
-    // just finished.
+
+    // Stops are one linear ring in reading order: row 0 is the activity strip
+    // when there is one, the rooms follow, and the scenes row is last. That
+    // arithmetic lives here and nowhere else. The shell reads it back to wrap
+    // around; the host is told what was opened, never which row.
+    //
+    // Not handled: activities appearing or vanishing under focus, which would
+    // shift every row index while focus-row stayed where it was. Deferred
+    // until a daemon exists that can make it happen.
+    in property <int> focus-row;
+    out property <int> first-room-row: root.activities.length > 0 ? 1 : 0;
+    out property <int> scenes-row: root.first-room-row + root.rooms.length;
+    out property <int> row-count: root.scenes-row + 1;
+
     // A tap names a stop; it does not act on it. Touch and the D-pad then
     // agree on one selection, and the ring is always the truth about what OK
     // will do - which it would not be if a finger could act somewhere the ring
     // is not. The keyboard, where a key has no meaningful selected state, is
-    // where direct activation belongs instead.
+    // where direct activation belongs instead. The strip and the scenes row
+    // exist only to be opened, so a tap on those also opens.
     callback pick(int);
-    callback open(int);
+    callback open-strip();
+    callback open-room(int);        // an index into rooms
+    callback open-scenes();
 
+    /// OK: open whatever the ring is on.
+    public function activate() {
+        if (root.focus-row < root.first-room-row) {
+            root.open-strip();
+        } else if (root.focus-row >= root.scenes-row) {
+            root.open-scenes();
+        } else {
+            root.open-room(root.focus-row - root.first-room-row);
+        }
+    }
+
+    // Whether this pane has a ring at all. The page sliding in has none: its
+    // focus is the resident page's the moment it is adopted, and a ring of
+    // its own drew on its strip the whole way across and then handed over to
+    // the real ring on the first room - the "up to the activities and back
+    // down" that was once blamed on the animation.
+    in property <bool> has-focus: true;
+    // Faded out while a page is crossing, back in once it has settled.
     in property <bool> ring-hidden: false;
-    in property <int> focus-row;
-    in property <int> first-room-row;
-    in property <int> scenes-row;
 
     // The area list scrolls rather than paginating. Everything else on the hub
     // stays put, so the strip, the labels and the scenes never move - only the
     // rows travel under a fixed window.
-    property <length> row-pitch: 101px;      // 90px row + 11px gap
+    property <length> row-h: 90px;
+    property <length> row-gap: 11px;
+    property <length> row-pitch: root.row-h + root.row-gap;
     property <length> ring-bleed: 6px;       // ring offset + width
-    // The window is computed from the pane's own height and the furniture
-    // around it, NOT read back off the laid-out box.
+    property <length> gap: 14px;             // between the stacked blocks
+
+    // Furniture heights, each read once by the layout and once by the
+    // arithmetic under it, so the two cannot disagree.
+    property <length> strip-h: 66px;
+    property <length> scenes-card-h: 74px;
+    property <length> label-h: 19px;
+    /// A slot between the rooms and the scenes label, left empty here and drawn
+    /// into by the shell. The pager belongs to the hub, not to a page - it must
+    /// not slide with one - but it belongs *here* on the screen, so the pane
+    /// reserves the space and publishes where it ended up.
+    property <length> dots-h: 6px;
+
+    // Everything under the rooms is anchored to the bottom: its place is the
+    // pane's height less fixed furniture, the same with or without a strip,
+    // and the rooms window is whatever is left between. Computed from the
+    // pane's own height, NOT read back off the laid-out boxes.
     //
     // Reading roomsbox.height here was a cycle: the box's child is sized from
     // rows-h, and rows-h came from the box. Slint resolves it, but it meant any
@@ -102,72 +147,92 @@ component AreaPane inherits Rectangle {
     // re-run dirties the whole component - a 452x654 rect, ~23ms, on the first
     // frame of every focus move. The animation after it was always smooth; the
     // stutter was this frame, at the front of it.
-    property <length> acts-h: root.activities.length == 0
-        ? 0px : 66px + 2 * root.ring-bleed;
-    property <length> scenes-h: 74px + 2 * root.ring-bleed;
-    /// A slot between the rooms and the scenes label, left empty here and drawn
-    /// into by the shell. The pager belongs to the hub, not to a page - it must
-    /// not slide with one - but it belongs *here* on the screen, so the pane
-    /// reserves the space and publishes where it ended up.
-    property <length> dots-h: 6px;
-    // Children of the pane's VerticalLayout: rooms, the pager slot, the label,
-    // scenes, and the activity block when there is one.
-    property <int> kids: 4 + (root.activities.length > 0 ? 1 : 0);
-    property <length> avail: root.height - root.acts-h - root.scenes-h - root.dots-h - 19px
-                             - (root.kids - 1) * 14px - 2 * root.ring-bleed;
-    out property <length> dots-y:
-        (root.activities.length > 0 ? root.acts-h + 14px : 0px)
-        + root.avail + 2 * root.ring-bleed + 14px;
-    property <length> rows-h: max(90px,
-        min(Math.floor((root.avail + 11px) / root.row-pitch) * root.row-pitch - 11px,
-            root.avail));
-
-
-    in-out property <bool> anim-scroll: true;
-
-    /// Called before a page's content is swapped in: the row index means
-    /// something different either side of it, and the ring should land on the
-    /// new page rather than travel to it.
-    public function begin-swap() { fs.anim = false; }
-    /// Re-arms the animation once the new page is whole.
-    ///
-    /// Without this the flag stays off until the next ensure- call, and those
-    /// run *after* the focus they are reacting to has already moved - so the
-    /// first key press after changing area jumped instead of animating. Re-
-    /// arming here works because a duration is read when the property changes,
-    /// not when the frame is drawn: the swap's own moves have already happened
-    /// by this point, and the next one is the user's.
-    public function end-swap() { fs.anim = true; }
+    property <length> rooms-y: root.activities.length > 0
+        ? root.strip-h + 2 * root.ring-bleed + root.gap : 0px;
+    property <length> scenes-y: root.height - root.scenes-card-h - 2 * root.ring-bleed;
+    out property <length> dots-y: root.scenes-y - root.gap - root.label-h - root.gap - root.dots-h;
+    // The rows window, bleed excluded. Not snapped to whole rows: a list that
+    // overflows shows part of its last row, which is the cue that there is
+    // more, and one that fits is unchanged.
+    property <length> rows-h: root.dots-y - root.gap - 2 * root.ring-bleed - root.rooms-y;
 
     in-out property <length> scroll: 0px;
-    property <length> max-scroll: max(0px, root.rooms.length * root.row-pitch
-                                           - 11px - root.rows-h);
-    // The row list is a single vertical stop per room, so no column applies.
+    // Where scroll is heading. `scroll` itself reads mid-flight while it
+    // animates, and both the next scroll decision and the ring need the
+    // destination.
+    property <length> scroll-goal: 0px;
+    property <length> max-scroll: max(0px,
+        root.rooms.length * root.row-pitch - root.row-gap - root.rows-h);
+
+    // Read at the moment scroll or the ring is set - see place-ring() for why
+    // that matters - true for a focus move, false for a landing.
+    property <bool> anim: true;
+    animate scroll {
+        duration: root.anim ? 160ms : 0ms;
+        easing: ease-out;
+    }
+
+    /// Focus moved, by D-pad or tap: bring the row into the window if it is
+    /// not already there, and glide the ring onto it. Scroll and ring are set
+    /// in the same call with the same curve, so they travel together.
+    public function follow-focus() {
+        root.anim = true;
+        if (root.focus-row >= root.first-room-row && root.focus-row < root.scenes-row) {
+            root.row-into-view((root.focus-row - root.first-room-row) * root.row-pitch);
+        }
+        root.place-ring();
+    }
+    /// The page underneath changed: the old scroll position means nothing on
+    /// a new list, so it starts at the top, and the ring lands on the new page
+    /// rather than travelling to it. Nothing moved; the page did.
+    public function land() {
+        root.anim = false;
+        root.scroll-goal = 0px;
+        root.scroll = 0px;
+        root.place-ring();
+    }
 
     // Minimal scrolling: move only far enough to bring the focused row fully
     // into the window, and not at all while it is already there. Recomputing
     // from the index alone would scroll on moves that did not need it.
-    animate scroll {
-        duration: root.anim-scroll ? 160ms : 0ms;
-        easing: ease-out;
+    function row-into-view(row-y: length) {
+        if (row-y < root.scroll-goal) {
+            root.scroll-goal = row-y;
+        } else if (row-y + root.row-h > root.scroll-goal + root.rows-h) {
+            root.scroll-goal = min(root.max-scroll, row-y + root.row-h - root.rows-h);
+        } else {
+            return;
+        }
+        root.scroll = root.scroll-goal;
     }
 
-    public function ensure-visible() {
-        root.anim-scroll = true;
-        if (root.focus-row < root.first-room-row) { return; }
-        if (root.focus-row >= root.scenes-row) { return; }
-        self.row-into-view((root.focus-row - root.first-room-row) * root.row-pitch);
-    }
-    function row-into-view(row-y: length) {
-        if (row-y < root.scroll) {
-            root.scroll = row-y;
-        } else if (row-y + 90px > root.scroll + root.rows-h) {
-            root.scroll = min(root.max-scroll, row-y + 90px - root.rows-h);
+    // Where the ring goes, in pane space, set here and only here.
+    //
+    // Set imperatively rather than bound, for a Slint reason worth knowing
+    // (docs/slint-notes.md): a bound property's `animate` duration is read
+    // when the property is next evaluated - the next frame - not when its
+    // input changed. So a flag turned off and back on around a page swap, in
+    // one callback, was never seen off, and the ring toured from the old
+    // page's row to the new one's on every swap under a fade meant for
+    // something else. An imperative set reads the duration at the set, which
+    // is how `scroll` has always worked; the ring now works the same way, and
+    // `anim` is read here, now.
+    function place-ring() {
+        if (root.focus-row < root.first-room-row) {
+            fs.ring-y = root.ring-bleed;
+            fs.ring-h = root.strip-h;
+            fs.ring-r = Theme.r-card;
+        } else if (root.focus-row >= root.scenes-row) {
+            fs.ring-y = root.scenes-y + root.ring-bleed;
+            fs.ring-h = root.scenes-card-h;
+            fs.ring-r = Theme.r-card;
+        } else {
+            fs.ring-y = root.rooms-y + root.ring-bleed - root.scroll-goal
+                + (root.focus-row - root.first-room-row) * root.row-pitch;
+            fs.ring-h = root.row-h;
+            fs.ring-r = Theme.r-row;
         }
     }
-
-    // Stops are a single linear ring in reading order: activities, then areas,
-    // then scenes. Declared here so the shell can wrap without knowing layout.
 
     // The focus ring is ONE element for the whole pane, not one per section.
     //
@@ -181,45 +246,23 @@ component AreaPane inherits Rectangle {
     // front of every single move. Bisected by disabling readers one at a time -
     // with the rooms ring alone, that frame does not happen.
     //
-    // One ring, one reader, one band. The geometry lives on a zero-size element
-    // so that recomputing it cannot dirty the root, which is what paints the
-    // background.
-    //
-    // Section offsets are arithmetic over the same furniture heights the row
-    // window is computed from, rather than read back off laid-out elements -
-    // see the note on rows-h for why reading the layout back is a trap.
+    // One ring, one band, and now no reader at all: the geometry lives on a
+    // zero-size element so that recomputing it cannot dirty the root, which
+    // is what paints the background, and it is bound to nothing - focus-row,
+    // scroll and the models are read by place-ring() when it is called, so
+    // the ring repaints only when it is told to move.
     fs := Rectangle {
         width: 0px;
         height: 0px;
-
-        property <length> rooms-y: root.activities.length > 0 ? root.acts-h + 14px : 0px;
-        // rooms box, the pager slot, the label, and the spacing between each.
-        property <length> scenes-y: fs.rooms-y + root.avail + 2 * root.ring-bleed
-                                    + 14px + root.dots-h + 14px + 19px + 14px;
-        property <bool> on-strip: root.focus-row < root.first-room-row;
-        property <bool> on-scenes: root.focus-row == root.scenes-row;
-
-        property <length> ring-x: Theme.pad-side;
-        property <length> ring-y: fs.on-strip ? root.ring-bleed
-            : fs.on-scenes ? fs.scenes-y + root.ring-bleed
-            : fs.rooms-y + root.ring-bleed - root.scroll
-              + min(max(root.focus-row - root.first-room-row, 0),
-                    max(root.rooms.length - 1, 0)) * root.row-pitch;
-        property <length> ring-w: root.width - 2 * Theme.pad-side;
-        property <length> ring-h: fs.on-strip ? 66px : fs.on-scenes ? 74px : 90px;
-        property <length> ring-r: fs.on-strip || fs.on-scenes
-                                  ? Theme.r-card : Theme.r-row;
-
-        // Off across a page change, on for a focus move.
-        //
-        // Filling the new area sets its activities before its focus row, so for
-        // that instant the old row index is read against the new
-        // first-room-row - and an old row 0 in an area that has a strip means
-        // "the strip". The ring set off for it, then turned round when the
-        // focus row landed, which read as the highlight going up to the
-        // activities and back down. Landing is also what a page change should
-        // look like: nothing travelled, the page underneath changed.
-        property <bool> anim: true;
+        property <length> ring-y: 0px;
+        property <length> ring-h: 90px;
+        property <length> ring-r: Theme.r-row;
+        // The same curve at the same moment as `scroll`, so a move that also
+        // scrolls keeps the ring on its row the whole way.
+        animate ring-y, ring-h {
+            duration: root.anim ? 160ms : 0ms;
+            easing: ease-out;
+        }
     }
 
     background: Theme.bg;
@@ -227,7 +270,7 @@ component AreaPane inherits Rectangle {
     VerticalLayout {
         padding-left: Theme.pad-side - root.ring-bleed;
         padding-right: Theme.pad-side - root.ring-bleed;
-        spacing: 14px;
+        spacing: root.gap;
 
         // A summary, and one focus stop.
         //
@@ -238,17 +281,17 @@ component AreaPane inherits Rectangle {
         // and OK opens what is playing - directly if there is one thing, as a
         // list if there are several.
         if root.activities.length > 0: Rectangle {
-            height: 66px + 2 * root.ring-bleed;
+            height: root.strip-h + 2 * root.ring-bleed;
             Rectangle {
-                x: Theme.pad-side - (Theme.pad-side - root.ring-bleed);
+                x: root.ring-bleed;
                 y: root.ring-bleed;
                 width: root.width - 2 * Theme.pad-side;
-                height: 66px;
+                height: root.strip-h;
                 background: Theme.surface-raised;
                 border-width: 1px;
                 border-color: Theme.border-raised;
                 border-radius: Theme.r-card;
-                TouchArea { clicked => { root.pick(0); root.open(0); } }
+                TouchArea { clicked => { root.pick(0); root.open-strip(); } }
 
                 HorizontalLayout {
                     padding-left: 18px;
@@ -299,124 +342,137 @@ component AreaPane inherits Rectangle {
             }
         }
 
+        // The layout gives this box everything the fixed blocks leave; the
+        // window inside it is sized by the arithmetic above, which agrees.
         roomsbox := Rectangle {
-          Rectangle {
-            y: 0px;
-            height: root.rows-h + 2 * root.ring-bleed;
-            clip: true;
             Rectangle {
-                y: root.ring-bleed - root.scroll;
-                height: max(0px, root.rooms.length * root.row-pitch - 11px);
-                VerticalLayout {
-                    spacing: 11px;
-                    padding-left: root.ring-bleed;
-                    padding-right: root.ring-bleed;
-                    for area[i] in root.rooms: Rectangle {
-                height: 90px;
-                TouchArea { clicked => { root.pick(root.first-room-row + i); } }
-                background: area.idle ? Theme.surface-idle : Theme.surface;
-                border-width: 1px;
-                border-color: area.idle ? Theme.border-idle : Theme.border;
-                border-radius: Theme.r-row;
-
-                HorizontalLayout {
-                    padding: 18px;
-                    spacing: 16px;
-
-                    Rectangle {
-                        width: 52px;
-                        height: 52px;
-                        border-radius: Theme.r-disc;
-                        background: area.idle ? Theme.surface-icon-idle : Theme.surface-icon;
-                        border-width: 1px;
-                        border-color: area.idle ? Theme.border-icon-idle : Theme.border-icon;
-                        RoomIcon {
-                            shape: area.glyph;
-                            ink: area.idle ? Theme.text-quaternary : Theme.accent;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
+                y: 0px;
+                height: root.rows-h + 2 * root.ring-bleed;
+                clip: true;
+                Rectangle {
+                    y: root.ring-bleed - root.scroll;
+                    height: max(0px, root.rooms.length * root.row-pitch - root.row-gap);
                     VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-                        Text {
-                            text: area.name;
-                            font-size: 26px;
-                            font-weight: 600;
-                            color: area.idle ? Theme.text-secondary : Theme.text;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: area.detail == "" ? area.devices
-                                                    : area.devices + " · " + area.detail;
-                            font-size: 19px;
-                            color: area.idle ? Theme.text-quaternary : Theme.text-secondary;
-                            overflow: elide;
-                        }
-                    }
-
-                    // Status column. The design calls for a glow behind the dot;
-                    // on the software renderer that is a blur we cannot afford,
-                    // so the documented substitute is a 1px accent ring.
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 6px;
-                        horizontal-stretch: 0;
-                        if !area.idle && !area.offline: Rectangle {
-                            width: 19px; height: 19px;
-                            background: transparent;
-                            border-radius: 9.5px;
+                        spacing: root.row-gap;
+                        padding-left: root.ring-bleed;
+                        padding-right: root.ring-bleed;
+                        for area[i] in root.rooms: Rectangle {
+                            height: root.row-h;
+                            TouchArea { clicked => { root.pick(root.first-room-row + i); } }
+                            background: area.idle ? Theme.surface-idle : Theme.surface;
                             border-width: 1px;
-                            border-color: Theme.accent.with-alpha(0.4);
-                            Rectangle {
-                                width: 9px; height: 9px;
-                                border-radius: 4.5px;
-                                background: Theme.accent;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                            border-color: area.idle ? Theme.border-idle : Theme.border;
+                            border-radius: Theme.r-row;
+
+                            HorizontalLayout {
+                                padding: 18px;
+                                spacing: 16px;
+
+                                Rectangle {
+                                    width: 52px;
+                                    height: 52px;
+                                    border-radius: Theme.r-disc;
+                                    background: area.idle ? Theme.surface-icon-idle : Theme.surface-icon;
+                                    border-width: 1px;
+                                    border-color: area.idle ? Theme.border-icon-idle : Theme.border-icon;
+                                    RoomIcon {
+                                        shape: area.glyph;
+                                        ink: area.idle ? Theme.text-quaternary : Theme.accent;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: area.name;
+                                        font-size: 26px;
+                                        font-weight: 600;
+                                        color: area.idle ? Theme.text-secondary : Theme.text;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: area.detail == "" ? area.devices
+                                                                : area.devices + " · " + area.detail;
+                                        font-size: 19px;
+                                        color: area.idle ? Theme.text-quaternary : Theme.text-secondary;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // Status column. The design calls for a glow
+                                // behind the dot; on the software renderer that
+                                // is a blur we cannot afford, so the documented
+                                // substitute is a 1px accent ring.
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    horizontal-stretch: 0;
+                                    if !area.idle && !area.offline: Rectangle {
+                                        width: 19px; height: 19px;
+                                        background: transparent;
+                                        border-radius: 9.5px;
+                                        border-width: 1px;
+                                        border-color: Theme.accent.with-alpha(0.4);
+                                        Rectangle {
+                                            width: 9px; height: 9px;
+                                            border-radius: 4.5px;
+                                            background: Theme.accent;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                    }
+                                    Text {
+                                        text: area.offline ? "OFFLINE"
+                                            : area.idle ? "IDLE"
+                                            : (area.active-count + " ON");
+                                        font-size: 14px;
+                                        horizontal-alignment: right;
+                                        color: area.offline ? Theme.text-quaternary
+                                            : area.idle ? (area.dimmed ? Theme.text-disabled : Theme.text-quaternary)
+                                            : Theme.accent;
+                                    }
+                                }
                             }
-                        }
-                        Text {
-                            text: area.offline ? "OFFLINE"
-                                : area.idle ? "IDLE"
-                                : (area.active-count + " ON");
-                            font-size: 14px;
-                            horizontal-alignment: right;
-                            color: area.offline ? Theme.text-quaternary
-                                : area.idle ? (area.dimmed ? Theme.text-disabled : Theme.text-quaternary)
-                                : Theme.accent;
                         }
                     }
                 }
             }
-
-            }
-
-          }
-        }
         }
 
         // The pager's slot. Empty: the hub draws into it, so the dots stay put
         // while the page behind them slides.
         Rectangle { height: root.dots-h; }
 
-        SectionLabel { text: "SCENES"; height: 19px; x: root.ring-bleed; }
+        // Inset to the cards' edge. Not an `x:` on the label itself: a child
+        // of a VerticalLayout has its x replaced by the layout's padding, and
+        // the compiler says nothing - measured, the ink started at 14px where
+        // the cards start at 20px. Inside a plain Rectangle an x is honoured.
+        Rectangle {
+            height: root.label-h;
+            SectionLabel {
+                x: root.ring-bleed;
+                y: 0px;
+                height: root.label-h;
+                text: "SCENES";
+            }
+        }
 
         // One stop, for the same reason as the strip above.
         Rectangle {
-            height: 74px + 2 * root.ring-bleed;
+            height: root.scenes-card-h + 2 * root.ring-bleed;
             Rectangle {
                 x: root.ring-bleed;
                 y: root.ring-bleed;
                 width: root.width - 2 * Theme.pad-side;
-                height: 74px;
+                height: root.scenes-card-h;
                 background: Theme.surface;
                 border-width: 1px;
                 border-color: Theme.border;
                 border-radius: Theme.r-card;
-                TouchArea { clicked => { root.pick(root.scenes-row); root.open(root.scenes-row); } }
+                TouchArea { clicked => { root.pick(root.scenes-row); root.open-scenes(); } }
 
                 HorizontalLayout {
                     padding-left: 18px;
@@ -450,33 +506,27 @@ component AreaPane inherits Rectangle {
     }
 
     // Drawn last so it is never behind a card, and outside the scrolling
-    // viewports so a scroll and a focus move do not have to be reconciled -
-    // ring-y already carries the scroll offset.
-    Rectangle {
-        x: fs.ring-x;
+    // viewport so a scroll and a focus move do not have to be reconciled -
+    // ring-y is in pane space with the scroll already taken off.
+    if root.has-focus: Rectangle {
+        x: Theme.pad-side;
         y: fs.ring-y;
-        width: fs.ring-w;
+        width: root.width - 2 * Theme.pad-side;
         height: fs.ring-h;
         background: transparent;
+        // The page sliding in carries no ring, so the ring is the one thing
+        // that does not arrive with the page: it lands when the page has
+        // settled, and a landing straight after 180ms of motion reads as a
+        // stutter unless it fades in. Out fast, so it is gone before the old
+        // page has travelled far; in slower, so the arrival is the thing you
+        // notice.
         opacity: root.ring-hidden ? 0 : 1;
-        animate x, y, width, height {
-            duration: fs.anim ? 160ms : 0ms;
-            easing: ease-out;
-        }
-        // Out fast so it is gone before the page has travelled far, in slower
-        // so the arrival is the thing you notice.
         animate opacity {
             duration: root.ring-hidden ? 90ms : 200ms;
             easing: ease-out;
         }
         FocusRing {
-            // A negative row means this pane has no focus - the incoming page
-            // during a slide is passed -1. "On the strip" is row < first room,
-            // and -1 satisfies that, so the page sliding in drew a ring on its
-            // activity strip the whole way across and then handed over to the
-            // real ring on the first room. That is the "up to activities and
-            // back down" this looked like; it was never the animation.
-            focused: root.focus-row >= 0;
+            focused: true;
             radius-inner: fs.ring-r;
             box-width: parent.width;
             box-height: parent.height;
@@ -486,11 +536,11 @@ component AreaPane inherits Rectangle {
 
 export component HomeHub inherits Rectangle {
     callback pick(int);
-    callback open(int);
+    callback open-strip();
+    callback open-room(int);
+    callback open-scenes();
     in property <[LiveActivity]> activities;
-    in property <string> area-name;
     in property <int> area-index;
-    in property <int> area-count;
     // A model purely to count dots; Slint has no numeric range loop.
     in property <[bool]> area-dots;
 
@@ -503,11 +553,10 @@ export component HomeHub inherits Rectangle {
     in property <[SceneCell]> scenes-next;
 
     in property <int> focus-row;
-    in property <int> first-room-row;
-    in property <int> scenes-row;
-    // Whether left and right will change area from where focus currently is.
+    // The resident page's row arithmetic, for the shell to wrap around with.
+    out property <int> first-room-row: front.first-room-row;
+    out property <int> row-count: front.row-count;
 
-    property <length> ring-bleed: 6px;
     // Measured off our own height rather than the parent's, which a component
     // root cannot see. The strip is conditional, and so is the gap above it.
     property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom;
@@ -565,14 +614,14 @@ export component HomeHub inherits Rectangle {
         }
     }
 
-    public function ensure-visible() {
-        front.ensure-visible();
-    }
-    public function begin-swap() { front.begin-swap(); }
-    public function end-swap() { front.end-swap(); }
-    public function reset-scroll() {
-        front.anim-scroll = false;
-        front.scroll = 0px;
+    public function follow-focus() { front.follow-focus(); }
+    public function land() { front.land(); }
+    /// OK. Nothing while a page is crossing: the pager already names the next
+    /// page and the pane still holds the last, and acting on either would be
+    /// a surprise. Taps are held back for the same reason.
+    public function activate() {
+        if (root.sliding) { return; }
+        front.activate();
     }
 
     background: Theme.bg;
@@ -594,12 +643,13 @@ export component HomeHub inherits Rectangle {
                     activities: root.activities;
                     rooms: root.rooms;
                     scenes: root.scenes;
-                    ring-hidden: root.sliding;
-                    pick(r) => { root.pick(r); }
-                    open(r) => { root.open(r); }
                     focus-row: root.focus-row;
-                    first-room-row: root.first-room-row;
-                    scenes-row: root.scenes-row;
+                    has-focus: true;
+                    ring-hidden: root.sliding;
+                    pick(r) => { if (!root.sliding) { root.pick(r); } }
+                    open-strip => { if (!root.sliding) { root.open-strip(); } }
+                    open-room(i) => { if (!root.sliding) { root.open-room(i); } }
+                    open-scenes => { if (!root.sliding) { root.open-scenes(); } }
                 }
                 if root.sliding: AreaPane {
                     x: root.from-right ? root.width : -root.width;
@@ -608,9 +658,7 @@ export component HomeHub inherits Rectangle {
                     activities: root.activities-next;
                     rooms: root.rooms-next;
                     scenes: root.scenes-next;
-                    focus-row: -1;
-                    first-room-row: root.first-room-row;
-                    scenes-row: root.scenes-row;
+                    has-focus: false;
                 }
             }
 

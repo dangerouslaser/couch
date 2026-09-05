@@ -119,6 +119,49 @@ transparent does not). Replacing a per-row selected state with one moving
 highlight took the dirty region from 80% to 7-14% and the frame from 8.3ms to
 2.2ms.
 
+## An `animate` on a binding reads its duration a frame late
+
+A property with an `animate` block comes in two kinds, and the compiler
+generates different code for them (`i-slint-compiler/generator/rust.rs`):
+
+- a **binding** (`y: fs.ring-y;`) becomes `set_animated_property_binding`,
+  with the `duration:` expression wrapped in a closure;
+- an **imperative set** (`self.scroll = x;`) becomes `set_animated_value`,
+  with the `duration:` expression compiled inline - evaluated at the set.
+
+For the binding, a changed dependency only flips its state to `ShouldStart`
+(`AnimatedBindingCallable::mark_dirty` in `i-slint-core`
+`properties/properties_animations.rs`). The closure is not called until the
+property is next *evaluated* - the next frame, in the `ShouldStart` arm of
+`evaluate`, which calls `compute_animation_details` and reads the value
+afresh. So a flag turned off and back on around a change, in one callback, is
+never seen off: the duration read is the one after the flag came back.
+
+What it cost: `begin-swap`/`end-swap` bracketing a page swap were believed to
+make the ring land and did nothing, and a 90ms opacity fade was quietly hiding
+a 160ms tour of the ring from the old page's row to the new one's - visible
+whenever the two rows differed.
+
+The rule: **anything whose animation must be on for some changes and off for
+others is set imperatively, never bound.** `scroll` always worked that way;
+the ring now does too, and the two are set in the same call so they share a
+curve.
+
+## A layout overwrites a child's cross-axis position, silently
+
+A child of a `VerticalLayout` (or `HorizontalLayout`) with no cross-axis
+`alignment` has its `x` (respectively `y`) binding replaced by the layout's
+padding: `i-slint-compiler/passes/lower_layout.rs`, the `stretch_bindings`
+else-branch, `bindings.insert(pad...)`, with no diagnostic. `SectionLabel { x:
+6px; }` under a `VerticalLayout` with `padding-left: 14px` lands at 14px and
+nothing says so. Measured on the device: the label's ink at x=14 where the
+cards start at x=20, and the binding that asked for 20 sat there looking
+correct.
+
+The rule: inside a layout, inset on the cross axis with padding, or wrap the
+element in a plain `Rectangle` and position it inside that, where `x` is
+honoured.
+
 ## What things actually cost here
 
 Measured on the panel, 480x800:
@@ -186,3 +229,26 @@ hours of plausible theories had not.
 Section offsets for that single ring are arithmetic over the same furniture
 heights the row window uses, not read back off laid-out elements - reading the
 layout back is its own trap, see the note on the row window above.
+## Pacing: FBIOPAN_DISPLAY is the vsync wait on this panel
+
+`FBIO_WAITFORVSYNC` returns EINVAL on mtkfb. `FBIOPAN_DISPLAY` with the
+startup screeninfo and zero offsets blocks about 17ms - it changes nothing
+about what is shown, page 0 is already displayed - so `panel.rs` issues one
+after each frame's copy and the loop is held to the refresh. `COUCH_VSYNC=0`
+forces a timed 16.67ms sleep instead; `pan` and `wait` force one candidate.
+
+Measured under COUCH_NAV, seven ring moves per five seconds:
+
+| | frames / 5s | work per frame |
+|---|---|---|
+| unpaced (before) | ~600 | 2.0 ms |
+| paced, `interactive` governor | 70-77 | 6.3 ms |
+| paced, `performance` governor | 69 | 3.3 ms |
+
+The work per frame went up because the clock went down, not because the
+frame changed: the governor is `interactive` with a 604.5MHz floor, and once
+the loop sleeps between frames the clock sits there and bounces to 1.3GHz on
+load. A ring frame fits the 16.7ms budget at either clock. A page-slide frame
+does not - 10-25ms at full clock becomes up to 29ms - which is the argument
+for making the slide a copy of two rendered pages rather than a
+re-rasterisation of both every frame.

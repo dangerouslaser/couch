@@ -38,18 +38,32 @@ export component Setup inherits Rectangle {
 
         // A QR needs a light quiet zone to scan, so this one card stays white
         // in an otherwise very dark theme.
-        Rectangle {
-            height: 320px;
-            width: 320px;
-            background: #FFFFFF;
-            border-radius: Theme.r-row;
-            Image {
-                source: root.qr;
-                width: 288px;
-                height: 288px;
-                x: 16px;
-                y: 16px;
-                image-rendering: pixelated;
+        //
+        // The card is narrower than the column, and a child of a
+        // VerticalLayout is laid out at the padding rather than centred - its
+        // own x is overwritten - so it takes a row of its own to sit under the
+        // centred text above it.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                height: 320px;
+                width: 320px;
+                background: #FFFFFF;
+                border-radius: Theme.r-row;
+                // Sized from the source, not to a box. qr.rs scales by a whole
+                // number of pixels per module so the module edges land on pixel
+                // edges; drawing that into a fixed 288px box rescaled it by
+                // 288/259 and put the edges back where they were. The card has
+                // room to spare at every QR version this screen can produce, so
+                // the image keeps its own size and is centred in it.
+                Image {
+                    source: root.qr;
+                    width: self.source.width * 1px;
+                    height: self.source.height * 1px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    image-rendering: pixelated;
+                }
             }
         }
 
@@ -101,7 +115,11 @@ export component Setup inherits Rectangle {
             width: parent.width;
             y: (parent.height - self.height) / 2;
             horizontal-alignment: center;
-            font-size: 20px;
+            // 21px, which the card titles already embed at this weight, rather
+            // than the 20px this had: a size used once costs the whole charset
+            // in the binary, and that one was 30KB for a banner nobody sees
+            // twice.
+            font-size: 21px;
             font-weight: 600;
             color: Theme.bg;
             text: root.approval == 1 ? "Press any button\nto approve SSH access"

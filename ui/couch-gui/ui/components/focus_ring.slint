@@ -6,6 +6,10 @@ import { Theme } from "../theme.slint";
 // The box size is passed in rather than read from `parent`: a component's own
 // root cannot see a parent it does not yet have, so callers hand it the
 // dimensions of the element being ringed.
+//
+// Off is a transparent border, not a zero-width one. The width is geometry,
+// and a geometry change claims a larger dirty region than a colour change -
+// see docs/slint-notes.md on DirtyRegion.
 export component FocusRing inherits Rectangle {
     in property <bool> focused;
     in property <length> box-width;
@@ -19,7 +23,7 @@ export component FocusRing inherits Rectangle {
     width: root.box-width + 2 * self.spread;
     height: root.box-height + 2 * self.spread;
     border-radius: root.radius-inner + self.spread;
-    border-width: root.focused ? Theme.ring-width : 0px;
-    border-color: Theme.accent;
+    border-width: Theme.ring-width;
+    border-color: root.focused ? Theme.accent : transparent;
     background: transparent;
 }

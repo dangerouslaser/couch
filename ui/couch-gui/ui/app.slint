@@ -16,13 +16,13 @@ export component App inherits Window {
 
     // --- shell ----------------------------------------------------------------
     in-out property <string> clock: "--:--";
-    in-out property <string> context-title: "HOME";
     in-out property <int> battery: 0;
     in-out property <bool> charging: false;
 
     // --- hub data -------------------------------------------------------------
     in-out property <[LiveActivity]> activities;
     in-out property <[RoomRow]> rooms;
+    in-out property <[SceneCell]> scenes;
     // The incoming page during a transition; the host fills it, then asks for
     // the slide, then adopts it when the hub reports settled.
     in-out property <[RoomRow]> rooms-next;
@@ -32,10 +32,8 @@ export component App inherits Window {
     public function slide(dir: int) { hub.slide(dir); }
     in-out property <string> area-name: "HOME";
     in-out property <int> area-index: 0;
-    in-out property <int> area-count: 1;
     in-out property <[bool]> area-dots;
     callback area-step(int);
-    in-out property <[SceneCell]> scenes;
 
     // --- interaction ----------------------------------------------------------
     // A single top-level FocusScope driving an integer index, rather than Slint's
@@ -43,14 +41,38 @@ export component App inherits Window {
     // ring is explicitly authored in reading order rather than derived from
     // geometry. It also makes "restore focus per screen" a matter of keeping an
     // integer, which is what returning from a room view needs.
-    // Focus is a row plus a column, not one flat ring. The horizontal rows -
-    // activities and scenes - own the horizontal axis, so up and down step
-    // between rows and left and right move within them. In the room list, which
-    // has no horizontal extent, left and right change area instead.
+    //
+    // The ring is one flat list of stops - the activity strip, each room, the
+    // scenes row - so up and down are the only keys that move focus, and left
+    // and right mean the same thing everywhere: change area. What a row index
+    // means is the hub's business (see AreaPane); the host is told what was
+    // opened, never which row.
     in-out property <int> focus-row: 0;
-    callback activated(int);
+    callback open-strip();
+    callback open-room(int);
+    callback open-scenes();
     callback back();
     callback home();
+
+    /// OK on whatever has focus. Also what COUCH_OPEN presses.
+    public function activate() { hub.activate(); }
+    /// The host parked focus somewhere (COUCH_FOCUS, COUCH_NAV): scroll to
+    /// match and glide the ring there, as a key press would.
+    public function settle-focus() { hub.follow-focus(); }
+    /// The host has replaced the page's models: focus its first room and land
+    /// the ring there, nothing travelling.
+    public function page-swapped() {
+        root.focus-row = hub.first-room-row;
+        hub.land();
+    }
+    // The hub's row count, for COUCH_NAV to walk the ring with.
+    out property <int> row-count: hub.row-count;
+
+    function move(delta: int) {
+        if (hub.row-count <= 0) { return; }
+        root.focus-row = Math.mod(root.focus-row + delta + hub.row-count, hub.row-count);
+        hub.follow-focus();
+    }
 
     // --- first-run setup ------------------------------------------------------
     in-out property <bool> setup-mode: false;
@@ -59,66 +81,45 @@ export component App inherits Window {
     in-out property <image> qr;
     in-out property <int> approval: 0;
 
-    // --- volume overlay -------------------------------------------------------
-    // The chooser, opened by OK on the activity strip or the scenes row. While
-    // it is up it owns up, down, OK and back; nothing else on the hub moves.
+    // --- chooser --------------------------------------------------------------
+    // Opened by OK on the activity strip or the scenes row. While it is up it
+    // owns up, down, OK and back; nothing else on the hub moves.
     in-out property <bool> chooser-shown: false;
     in-out property <string> chooser-title;
     in-out property <[ChoiceItem]> chooser-items;
     in-out property <int> chooser-index: 0;
     callback chosen(int);
 
+    function chooser-move(delta: int) {
+        if (root.chooser-items.length <= 0) { return; }
+        root.chooser-index = Math.mod(root.chooser-index + delta + root.chooser-items.length,
+                                      root.chooser-items.length);
+    }
+
+    // --- microphone -----------------------------------------------------------
     // The microphone is open. Driven by whether the capture thread is alive,
     // never by a flag - see src/mic.rs.
     in-out property <bool> recording: false;
     in-out property <float> mic-level: 0;
     in-out property <bool> mic-latched: false;
 
+    // --- pairing --------------------------------------------------------------
     // A browser is asking to pair; the digits live only here and on that
     // browser's screen.
     in-out property <bool> pair-shown: false;
     in-out property <string> pair-pin: "";
     in-out property <int> pair-seconds: 0;
 
+    // --- volume overlay -------------------------------------------------------
     in-out property <bool> volume-shown: false;
     in-out property <int> volume: 0;
     in-out property <string> volume-target: "";
 
-    // Lets the host park focus somewhere and have the list scroll to match.
-    public function settle-focus() { hub.ensure-visible(); }
-    // Changing area replaces the whole list, so the old scroll position means
-    // nothing: start the new area at the top.
-    public function begin-swap() { hub.begin-swap(); }
-    public function end-swap() { hub.end-swap(); }
-    public function reset-scroll() { hub.reset-scroll(); }
-
-    property <int> act-count: root.activities.length;
-    property <int> first-room-row: root.act-count > 0 ? 1 : 0;
-    property <int> scenes-row: root.first-room-row + root.rooms.length;
-    property <int> row-count: root.scenes-row + 1;
-
-    function move(delta: int) {
-        if (root.row-count <= 0) { return; }
-        root.focus-row = Math.mod(root.focus-row + delta + root.row-count, root.row-count);
-        // A row remembers nothing: entering it always starts at its first cell,
-        // which is predictable in a way that "wherever you were last" is not.
-        hub.ensure-visible();
-    }
-
-
     fs := FocusScope {
         key-pressed(e) => {
             if (root.chooser-shown) {
-                if (e.text == Key.UpArrow) {
-                    root.chooser-index = Math.mod(root.chooser-index - 1
-                        + root.chooser-items.length, root.chooser-items.length);
-                    return accept;
-                }
-                if (e.text == Key.DownArrow) {
-                    root.chooser-index = Math.mod(root.chooser-index + 1,
-                        root.chooser-items.length);
-                    return accept;
-                }
+                if (e.text == Key.UpArrow)   { root.chooser-move(-1); return accept; }
+                if (e.text == Key.DownArrow) { root.chooser-move(1);  return accept; }
                 if (e.text == Key.Return) { root.chosen(root.chooser-index); return accept; }
                 if (e.text == Key.Escape) { root.chooser-shown = false; return accept; }
                 // Left and right change area everywhere else; inside a list
@@ -133,7 +134,7 @@ export component App inherits Window {
             if (e.text == Key.DownArrow)  { root.move(1);  return accept; }
             if (e.text == Key.LeftArrow)  { root.area-step(-1); return accept; }
             if (e.text == Key.RightArrow) { root.area-step(1);  return accept; }
-            if (e.text == Key.Return)  { root.activated(root.focus-row); return accept; }
+            if (e.text == Key.Return)  { root.activate(); return accept; }
             if (e.text == Key.Escape)  { root.back(); return accept; }
             if (e.text == Key.Home)    { root.home(); return accept; }
             return reject;
@@ -154,9 +155,7 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.setup-mode ? root.context-title
-             : root.chooser-shown ? root.chooser-title
-             : root.area-name;
+        title: root.chooser-shown ? root.chooser-title : root.area-name;
         battery: root.battery;
         charging: root.charging;
     }
@@ -187,28 +186,24 @@ export component App inherits Window {
                 y: 0px;
                 width: root.width;
                 height: parent.height;
-            pick(r) => {
-                root.focus-row = r;
-                hub.ensure-visible();
+                activities: root.activities;
+                activities-next: root.activities-next;
+                rooms: root.rooms;
+                rooms-next: root.rooms-next;
+                scenes: root.scenes;
+                scenes-next: root.scenes-next;
+                area-index: root.area-index;
+                area-dots: root.area-dots;
+                focus-row: root.focus-row;
+                pick(r) => {
+                    root.focus-row = r;
+                    hub.follow-focus();
+                }
+                open-strip => { root.open-strip(); }
+                open-room(i) => { root.open-room(i); }
+                open-scenes => { root.open-scenes(); }
+                settled() => { root.settled(); }
             }
-            // A tap on the strip or the scenes row opens it, because those two
-            // exist only to be opened; a tap on a room only selects it.
-            open(r) => { root.activated(r); }
-            activities: root.activities;
-            activities-next: root.activities-next;
-            rooms: root.rooms;
-            rooms-next: root.rooms-next;
-            scenes-next: root.scenes-next;
-            settled() => { root.settled(); }
-            area-name: root.area-name;
-            area-index: root.area-index;
-            area-count: root.area-count;
-            area-dots: root.area-dots;
-            scenes: root.scenes;
-            focus-row: root.focus-row;
-            first-room-row: root.first-room-row;
-            scenes-row: root.scenes-row;
-        }
 
             Chooser {
                 x: root.width;
@@ -219,6 +214,10 @@ export component App inherits Window {
                 title: root.chooser-title;
                 items: root.chooser-items;
                 index: root.chooser-index;
+                // A tap on a row selects it and acts on it, the rule the
+                // strip and the scenes card follow.
+                pick(i) => { root.chooser-index = i; }
+                choose(i) => { root.chosen(i); }
             }
         }
     }

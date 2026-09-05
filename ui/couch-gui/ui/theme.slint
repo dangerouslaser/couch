@@ -50,8 +50,11 @@ export global Theme {
     out property <length> ring-offset: 3px;
 
     // --- motion ---------------------------------------------------------------
-    // One property at a time: opacity cross-fades and colour changes only. No
-    // layout-animating transitions - the software renderer cannot afford them.
+    // One element moves at a time - the focus ring, the row window, the page
+    // strip - and everything else is an opacity or colour change. Never a
+    // layout: animating anything a layout depends on re-runs it every frame,
+    // and a layout re-run dirties the whole component. Positions that animate
+    // are set imperatively, not bound - see docs/slint-notes.md for why.
     out property <duration> fade: 160ms;
     out property <duration> volume-hold: 1600ms;
 }

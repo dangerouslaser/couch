@@ -722,10 +722,19 @@ dependencies = [
 name = "couch-gui"
 version = "0.1.0"
 dependencies = [
+ "couch-voice",
  "libc",
  "qrcodegen",
  "slint",
  "slint-build",
+]
+
+[[package]]
+name = "couch-voice"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

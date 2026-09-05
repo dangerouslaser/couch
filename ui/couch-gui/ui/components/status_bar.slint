@@ -35,8 +35,11 @@ export component StatusBar inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.title;
-        font-size: 16px;
-        letter-spacing: 0.12 * 16px;
+        // Tracked out, not scaled up: 15px is a size the section labels and the
+        // keyboard already embed, and the 16px this asked for was 21KB of
+        // charset for one line.
+        font-size: 15px;
+        letter-spacing: 0.12 * 15px;
         color: Theme.accent;
     }
 

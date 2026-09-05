@@ -155,32 +155,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         areas[0].rooms.truncate(n);
     }
 
-    app.set_area_count(areas.len() as i32);
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
     let areas = std::rc::Rc::new(areas);
     // A page change fills the incoming pane, slides to it, and adopts it when
-    // the hub says the animation is done. The pager updates immediately -
-    // it does not move, so it can lead rather than lag.
+    // the hub says the animation is done. Two indices, because the pager and
+    // the page disagree for 180ms: `pending` is what the pager shows - it does
+    // not move, so it can lead rather than lag - and `resident` is the page
+    // actually on screen, which changes only when the slide has settled.
+    // Anything that acts on the page uses `resident`.
     let pending = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let resident = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let sliding = std::rc::Rc::new(std::cell::Cell::new(false));
 
     let put_front = {
         let areas = areas.clone();
         move |app: &App, index: usize| {
             let a = &areas[index];
-            // Before anything else: the row indices are about to mean something
-            // different, and the ring must not animate through the difference.
-            app.invoke_begin_swap();
             app.set_area_name(a.name.into());
             app.set_area_index(index as i32);
             app.set_activities(ModelRc::new(VecModel::from(a.activities.clone())));
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
             app.set_scenes(ModelRc::new(VecModel::from(a.scenes.clone())));
-            app.set_focus_row(if a.activities.is_empty() { 0 } else { 1 });
-            app.invoke_reset_scroll();
-            // The page is whole; the ring may animate again.
-            app.invoke_end_swap();
+            // With the models in place the hub knows where its first room is;
+            // it parks focus there and lands the ring, nothing animating.
+            app.invoke_page_swapped();
         }
     };
 
@@ -193,10 +192,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0);
     put_front(&app, first);
     pending.set(first);
+    resident.set(first);
 
     // COUCH_FOCUS parks focus on a row - 0 is the activity strip, then one per
     // room, then the scenes row - so any focus position can be photographed
-    // without driving the keypad.
+    // without driving the keypad. The one place the host names a row, and it
+    // is a test hook: the hub interprets it.
     if let Ok(n) = std::env::var("COUCH_FOCUS").unwrap_or_default().parse::<i32>() {
         app.set_focus_row(n);
         app.invoke_settle_focus();
@@ -214,9 +215,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if sliding.get() {
                 return;
             }
-            let cur = app.get_area_index();
-            let next = (cur + delta).rem_euclid(areas.len() as i32) as usize;
-            if next == cur as usize {
+            let cur = pending.get();
+            let next = (cur as i32 + delta).rem_euclid(areas.len() as i32) as usize;
+            if next == cur {
                 return;
             }
             let a = &areas[next];
@@ -234,72 +235,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = app.as_weak();
         let pending = pending.clone();
+        let resident = resident.clone();
         let sliding = sliding.clone();
         let put_front = put_front.clone();
         app.on_settled(move || {
             if let Some(app) = weak.upgrade() {
                 put_front(&app, pending.get());
+                resident.set(pending.get());
                 sliding.set(false);
             }
         });
     }
 
     // OK on the strip or the scenes row opens what is there: straight through
-    // when there is one of it, as a list when there are several. Anywhere else
-    // it is a room, which has no screen behind it yet.
+    // when there is one of it, as a list when there are several. A room has
+    // no screen behind it yet. The hub says which of the three it was and, for
+    // a room, which one; it never hands over a row index, and it says nothing
+    // at all while a page is crossing.
     {
         let weak = app.as_weak();
         let areas = areas.clone();
-        let pending = pending.clone();
-        app.on_activated(move |row| {
+        let resident = resident.clone();
+        app.on_open_strip(move || {
             let Some(app) = weak.upgrade() else { return };
-            let a = &areas[pending.get()];
-            let first_room = if a.activities.is_empty() { 0 } else { 1 };
-            let scenes_row = first_room + a.rooms.len() as i32;
-
-            if row < first_room {
-                if a.activities.len() == 1 {
+            let a = &areas[resident.get()];
+            match a.activities.len() {
+                0 => return,
+                1 => {
                     println!("couch-gui: open activity '{}'", a.activities[0].title);
                     return;
                 }
-                let items: Vec<ChoiceItem> = a
-                    .activities
-                    .iter()
-                    .map(|x| ChoiceItem {
-                        title: x.title.clone(),
-                        detail: SharedString::from(format!("{} · {}", x.source, x.place)),
-                        // Everything in this list is playing, so a dot marking
-                        // that would be on every row and mean nothing.
-                        active: false,
-                    })
-                    .collect();
-                app.set_chooser_title("NOW PLAYING".into());
-                app.set_chooser_items(ModelRc::new(VecModel::from(items)));
-                app.set_chooser_index(0);
-                app.set_chooser_shown(true);
-            } else if row == scenes_row {
-                if a.scenes.len() == 1 {
+                _ => {}
+            }
+            let items: Vec<ChoiceItem> = a
+                .activities
+                .iter()
+                .map(|x| ChoiceItem {
+                    title: x.title.clone(),
+                    detail: SharedString::from(format!("{} · {}", x.source, x.place)),
+                    // Everything in this list is playing, so a dot marking
+                    // that would be on every row and mean nothing.
+                    active: false,
+                })
+                .collect();
+            app.set_chooser_title("NOW PLAYING".into());
+            app.set_chooser_items(ModelRc::new(VecModel::from(items)));
+            app.set_chooser_index(0);
+            app.set_chooser_shown(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let areas = areas.clone();
+        let resident = resident.clone();
+        app.on_open_scenes(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let a = &areas[resident.get()];
+            match a.scenes.len() {
+                0 => return,
+                1 => {
                     println!("couch-gui: run scene '{}'", a.scenes[0].name);
                     return;
                 }
-                let items: Vec<ChoiceItem> = a
-                    .scenes
-                    .iter()
-                    .map(|x| ChoiceItem {
-                        title: x.name.clone(),
-                        detail: SharedString::new(),
-                        active: x.active,
-                    })
-                    .collect();
-                app.set_chooser_title("SCENES".into());
-                app.set_chooser_items(ModelRc::new(VecModel::from(items)));
-                app.set_chooser_index(0);
-                app.set_chooser_shown(true);
-            } else {
-                let room = (row - first_room) as usize;
-                if let Some(r) = a.rooms.get(room) {
-                    println!("couch-gui: open room '{}'", r.name);
-                }
+                _ => {}
+            }
+            let items: Vec<ChoiceItem> = a
+                .scenes
+                .iter()
+                .map(|x| ChoiceItem {
+                    title: x.name.clone(),
+                    detail: SharedString::new(),
+                    active: x.active,
+                })
+                .collect();
+            app.set_chooser_title("SCENES".into());
+            app.set_chooser_items(ModelRc::new(VecModel::from(items)));
+            app.set_chooser_index(0);
+            app.set_chooser_shown(true);
+        });
+    }
+    {
+        let areas = areas.clone();
+        let resident = resident.clone();
+        app.on_open_room(move |index| {
+            if let Some(r) = areas[resident.get()].rooms.get(index as usize) {
+                println!("couch-gui: open room '{}'", r.name);
             }
         });
     }
@@ -367,7 +387,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut slide_at = now_monotonic_us() + 1_500_000;
     let mut nav_at = now_monotonic_us() + 700_000;
 
-    let (mut frames, mut render_us, mut frame_max) = (0u64, 0u64, 0u64);
+    // Frame cost is the draw and the copy; the wait for the panel after them
+    // is counted apart, because it is slack rather than work.
+    let (mut frames, mut render_us, mut frame_max, mut wait_us) = (0u64, 0u64, 0u64, 0u64);
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
     let mut last_stat = now_monotonic_us();
 
@@ -447,7 +469,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(at) = open_at {
             if !opened && now >= at {
                 opened = true;
-                app.invoke_activated(app.get_focus_row());
+                app.invoke_activate();
             }
         }
 
@@ -482,11 +504,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if last_setup != Some(setup) {
                 last_setup = Some(setup);
                 app.set_setup_mode(setup);
-                app.set_context_title(SharedString::from(if setup { "SETUP" } else { "HOME" }));
                 if setup {
                     let ssid = system::setup_ssid();
                     app.set_ssid(SharedString::from(ssid.clone()));
-                    if let Some(img) = qr::render(&qr::wifi_join_record(&ssid), 288) {
+                    if let Some(img) = qr::render(&qr::wifi_join_record(&ssid), 296) {
                         app.set_qr(img);
                     }
                 }
@@ -500,12 +521,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if nav && now >= nav_at {
-            let rows = app.get_rooms().row_count() as i32
-                + if app.get_activities().row_count() > 0 { 1 } else { 0 }
-                + 1;
+            // The hub owns the row arithmetic; this only wraps.
+            let rows = app.get_row_count();
             if rows > 0 {
                 app.set_focus_row((app.get_focus_row() + 1) % rows);
-                    app.invoke_settle_focus();
+                app.invoke_settle_focus();
             }
             nav_at = now + 700_000;
         }
@@ -517,26 +537,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         slint::platform::update_timers_and_animations();
 
-        let t0 = now_monotonic_us();
-        if screen.render(&window) {
-            let d = now_monotonic_us() - t0;
-            render_us += d;
-            frames += 1;
-            frame_max = frame_max.max(d);
-        } else {
-            std::thread::sleep(Duration::from_millis(5));
+        // A drawn frame comes back paced to the panel's refresh, so an
+        // animation costs one rasterisation per refresh rather than as many
+        // as the CPU can manage. Nothing to draw: a short sleep, and back to
+        // polling input.
+        match screen.render(&window) {
+            Some(cost) => {
+                render_us += cost.work_us;
+                wait_us += cost.wait_us;
+                frames += 1;
+                frame_max = frame_max.max(cost.work_us);
+            }
+            None => std::thread::sleep(Duration::from_millis(5)),
         }
 
         if now_monotonic_us() - last_stat > 5_000_000 && frames > 0 {
             println!(
-                "couch-gui: {frames} frames, {} us/frame, {frame_max} us worst | input {} us avg, {in_max} us max (n={in_n})",
+                "couch-gui: {frames} frames, {} us/frame, {frame_max} us worst, {} us paced | input {} us avg, {in_max} us max (n={in_n})",
                 render_us / frames,
+                wait_us / frames,
                 if in_n > 0 { in_sum / in_n } else { 0 }
             );
             last_stat = now_monotonic_us();
             frames = 0;
             render_us = 0;
             frame_max = 0;
+            wait_us = 0;
             in_n = 0;
             in_sum = 0;
             in_max = 0;

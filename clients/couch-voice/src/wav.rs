@@ -32,11 +32,22 @@ pub struct Writer {
 const HEADER_BYTES: u32 = 44;
 
 impl Writer {
+    /// A new file at `path`, with whatever mode the umask gives it. Anything
+    /// that wants a narrower one - a recording of somebody's living room is
+    /// the case in hand - opens the file itself and uses [`Writer::from_file`].
     pub fn create(path: &str, rate: u32, channels: u16) -> Result<Writer> {
         let file = File::create(path).map_err(|e| Error::Wav {
             path: path.to_string(),
             detail: format!("cannot create: {e}"),
         })?;
+        Writer::from_file(file, path, rate, channels)
+    }
+
+    /// Write into a file the caller has already opened, so that the flags and
+    /// the mode are the caller's to choose. `path` is only the name errors are
+    /// reported against. The file must be empty and positioned at its start:
+    /// `finish` rewinds to zero to patch the header it writes here.
+    pub fn from_file(file: File, path: &str, rate: u32, channels: u16) -> Result<Writer> {
         let mut w = Writer {
             out: BufWriter::new(file),
             path: path.to_string(),
@@ -296,6 +307,35 @@ mod tests {
         assert_eq!(r.rate, 16000);
         assert_eq!(r.samples, samples);
         assert!((r.seconds() - 0.25).abs() < 0.001);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// The point of `from_file`: the caller picks the mode, and what comes
+    /// back is the same file `create` would have written.
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_over_a_private_file_keeps_the_mode_it_was_opened_with() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let dir = std::env::temp_dir().join("couch-voice-wav-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("private.wav");
+        let path = path.to_str().unwrap();
+        let _ = std::fs::remove_file(path);
+
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        let mut w = Writer::from_file(file, path, 16000, 1).unwrap();
+        w.write(&[1i16, -2, 3]).unwrap();
+        w.finish().unwrap();
+
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode {mode:o}");
+        assert_eq!(Reader::open(path).unwrap().samples, vec![1, -2, 3]);
         std::fs::remove_file(path).unwrap();
     }
 

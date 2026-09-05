@@ -22,9 +22,28 @@ pub fn wifi_join_record(ssid: &str) -> String {
     format!("WIFI:S:{escaped};T:nopass;;")
 }
 
-/// Render `text` as a QR at roughly `target_px`, scaled by a whole number of
-/// pixels per module so the edges stay hard - a fractionally scaled QR is
-/// measurably harder for a phone to read.
+/// Render `text` as a QR, scaled by a whole number of pixels per module so the
+/// edges stay hard - a fractionally scaled QR is measurably harder for a phone
+/// to read.
+///
+/// `target_px` is an upper bound, not a size: the result is `(modules + 8) *
+/// (target_px / (modules + 8))` rounded down, so it lands on or below the
+/// target and only rarely on it. At the 288 the setup screen asks for, with the
+/// record this module builds:
+///
+/// | SSID | version | modules + quiet | px/module | image |
+/// |---|---|---|---|---|
+/// | 1-8 chars | 2 | 33 | 8 | 264px |
+/// | 9-24 chars | 3 | 37 | 7 | **259px** |
+/// | 25-32 chars | 4 | 41 | 7 | 287px |
+///
+/// The default `Couch-Setup` is 11 characters, so 259px, and no SSID can be
+/// longer than 32 bytes. Nothing here reaches 288, and nothing can be made to:
+/// the next whole step for a 37 would be 296. Asking for 288 and drawing 259
+/// into a 288 box was the bug this note exists for - the caller must size the
+/// `Image` from the image, or the fractional rescale that whole-number scaling
+/// exists to avoid simply happens one layer further down. The setup screen
+/// centres it in a card sized for the largest of the three.
 pub fn render(text: &str, target_px: u32) -> Option<Image> {
     let qr = qrcodegen::QrCode::encode_text(text, qrcodegen::QrCodeEcc::Medium).ok()?;
     let modules = qr.size() as u32;

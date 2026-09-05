@@ -22,7 +22,7 @@ export component PairOverlay inherits Rectangle {
 
         Text {
             text: "PAIR THIS DEVICE";
-            font-size: 16px;
+            font-size: 15px;
             letter-spacing: 2px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
@@ -41,6 +41,11 @@ export component PairOverlay inherits Rectangle {
                 // charset rather than the ten characters this needs, so the
                 // jump to 72px cost 327KB against 162KB here - and the remote
                 // is in your hand while you type, not across the room.
+                //
+                // The two labels around it are at 15px for the same reason
+                // read the other way: the section labels and the keyboard
+                // already pay for that size, and 16px, which is what they
+                // were, was a size of their own for 21KB.
                 font-size: 48px;
                 font-weight: 700;
                 letter-spacing: 8px;
@@ -58,7 +63,7 @@ export component PairOverlay inherits Rectangle {
             text: root.seconds-left > 0
                 ? "Expires in " + root.seconds-left + "s"
                 : "Expired";
-            font-size: 16px;
+            font-size: 15px;
             color: Theme.text-quaternary;
             horizontal-alignment: center;
         }

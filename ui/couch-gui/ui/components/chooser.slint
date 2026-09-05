@@ -18,16 +18,96 @@ export struct ChoiceItem {
 // A vertical list is also what a D-pad is good at, which the two-wide scroller
 // this replaces very much was not.
 export component Chooser inherits Rectangle {
+    /// True while this page is the one on screen. Nothing here is drawn
+    /// conditionally on it - the page is always instantiated, off to the right
+    /// of the hub, and slides in - but it is the one edge that says "a new list
+    /// just opened", which is where the scroll and the ring go back to the top.
     in property <bool> shown: false;
+    /// The list's name. Drawn by the status bar rather than here, because the
+    /// shell owns that strip; it is a property of the page so a caller can hand
+    /// over everything about a list in one place.
     in property <string> title;
     in property <[ChoiceItem]> items;
     in property <int> index: 0;
 
+    /// A tap picks a row and then opens it, which is the rule the hub uses for
+    /// the strip and the scenes card: a thing that exists only to be opened is
+    /// opened by touching it. Both are optional - unconnected, this is exactly
+    /// what it was, a list driven by the D-pad.
+    callback pick(int);
+    callback choose(int);
+
     property <length> row-h: 72px;
     property <length> gap: 10px;
+    property <length> pitch: root.row-h + root.gap;
     /// The ring is drawn outside its row, so the viewport needs room for it or
     /// the first row's ring is cut off against the top edge.
     property <length> bleed: 6px;
+
+    // The window the rows travel under, and how much list there is to travel.
+    // Measured off this page's own height and the padding around it rather than
+    // read back off the laid-out viewport: reading a layout back from inside it
+    // makes any invalidation in that subtree re-run the layout, and a layout
+    // re-run dirties the whole component - see the note on rows-h in
+    // home_hub.slint.
+    property <length> win-h: max(0px, root.height - Theme.pad-top - Theme.pad-bottom
+                                      - 2 * root.bleed);
+    property <length> content-h: max(0px, root.items.length * root.pitch - root.gap);
+    property <length> max-scroll: max(0px, root.content-h - root.win-h);
+
+    // Both are set imperatively and never bound, so the duration below is read
+    // at the set. A binding's animation reads it when the value is next
+    // evaluated instead, which is a frame too late to turn the animation off
+    // for a move that should not be seen.
+    property <length> scroll: 0px;
+    property <length> ring-y: 0px;
+    // Off for the jump a freshly opened list makes, on for a move within one.
+    property <bool> anim: true;
+    // The ring rides inside the scrolled box, so on a move that scrolls, ring-y
+    // gains a pitch while the box loses one - same duration, same easing, set
+    // in the same handler and so from the same tick, which cancels exactly: the
+    // ring holds still against the panel and the list travels under it. On a
+    // move that does not scroll, the ring is the only thing that moves.
+    animate scroll { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
+    animate ring-y { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
+
+    // Minimal scrolling: move only far enough to bring the focused row fully
+    // into the window, and not at all while it is already there. This used to
+    // pin the focused row to the bottom edge once past the fold, which scrolls
+    // on moves that did not need it - and it was a binding, so the list jumped
+    // the whole distance while the ring glided.
+    function row-into-view(row-y: length) {
+        if (row-y < root.scroll) {
+            root.scroll = row-y;
+        } else if (row-y + root.row-h > root.scroll + root.win-h) {
+            root.scroll = min(root.max-scroll, row-y + root.row-h - root.win-h);
+        }
+    }
+
+    // A change handler rather than the public function the hub exposes: the
+    // index moves from two places here, the shell's key handler and a tap on a
+    // row, and a public function has to be called from every one of them. That
+    // it runs deferred costs nothing - it sets two properties and reads no
+    // geometry that the frame has yet to settle.
+    changed index => {
+        root.anim = true;
+        root.ring-y = root.index * root.pitch;
+        root.row-into-view(root.index * root.pitch);
+    }
+
+    // A fresh list opens at the top. The host sets the index to 0 before it
+    // shows the page, so by the time either handler runs the index is already
+    // the new one - which is what makes it safe that the two of them can run in
+    // either order. Landing is what an opening page should look like; the ring
+    // sailing up the list behind the slide is not.
+    changed shown => {
+        if (root.shown) {
+            root.anim = false;
+            root.scroll = 0px;
+            root.ring-y = root.index * root.pitch;
+            root.anim = true;
+        }
+    }
 
     background: Theme.bg;
 
@@ -36,21 +116,35 @@ export component Chooser inherits Rectangle {
         padding-right: Theme.pad-side;
         padding-top: Theme.pad-top;
         padding-bottom: Theme.pad-bottom;
-        spacing: 14px;
 
         Rectangle {
             clip: true;
             // Only the focused row travels; the list itself scrolls under it,
-            // the same arrangement the room list uses.
+            // the same arrangement the room list uses. The x and y bindings
+            // also keep this subtree out of the viewport's layout info - a
+            // child with an x or y binding is not measured by its parent - so a
+            // list taller than the window cannot push the window open.
             Rectangle {
                 x: root.bleed;
-                y: root.bleed - max(0px, (root.index + 1) * (root.row-h + root.gap)
-                                         - root.gap - parent.height + 2 * root.bleed);
+                y: root.bleed - root.scroll;
                 width: parent.width - 2 * root.bleed;
+                // Sized to its content rather than left to fill the viewport,
+                // so the rows pack at exactly one pitch each with no leftover
+                // space for the layout to distribute between them - the ring is
+                // positioned by that arithmetic and has to agree with it.
+                height: root.content-h;
                 VerticalLayout {
                     spacing: root.gap;
                     for it[i] in root.items: Rectangle {
                         height: root.row-h;
+                        // Pick, then open. Behind the row's content, which
+                        // takes no input of its own.
+                        TouchArea {
+                            clicked => {
+                                root.pick(i);
+                                root.choose(i);
+                            }
+                        }
                         background: Theme.surface;
                         border-width: 1px;
                         border-color: it.active ? Theme.accent : Theme.border;
@@ -94,11 +188,10 @@ export component Chooser inherits Rectangle {
 
                 Rectangle {
                     x: 0px;
-                    y: root.index * (root.row-h + root.gap);
+                    y: root.ring-y;
                     width: parent.width;
                     height: root.row-h;
                     background: transparent;
-                    animate y { duration: 140ms; easing: ease-out; }
                     FocusRing {
                         focused: true;
                         radius-inner: Theme.r-card;
