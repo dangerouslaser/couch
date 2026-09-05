@@ -154,49 +154,72 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.setup-mode ? root.context-title : root.area-name;
+        title: root.setup-mode ? root.context-title
+             : root.chooser-shown ? root.chooser-title
+             : root.area-name;
         battery: root.battery;
         charging: root.charging;
     }
 
-    hub := HomeHub {
+    // The hub and whatever it opens, side by side on a strip that slides. The
+    // chooser was an overlay first; a sheet over a dimmed hub looked out of
+    // place in a UI where everything else is a page, and a translucent scrim
+    // costs a composite of the whole panel every frame where an opaque page is
+    // a fill. Same motion as changing area, same duration, same layout.
+    Rectangle {
         visible: !root.setup-mode;
         y: 56px;
         width: parent.width;
         height: parent.height - 56px;
-        pick(r) => {
-            root.focus-row = r;
-            hub.ensure-visible();
+        clip: true;
+
+        Rectangle {
+            x: root.chooser-shown ? -root.width : 0px;
+            width: root.width * 2;
+            height: parent.height;
+            animate x { duration: 190ms; easing: ease-out; }
+
+        hub := HomeHub {
+                    y: 0px;
+            x: 0px;
+            width: parent.width;
+            height: parent.height - 56px;
+            pick(r) => {
+                root.focus-row = r;
+                hub.ensure-visible();
+            }
+            // A tap on the strip or the scenes row opens it, because those two
+            // exist only to be opened; a tap on a room only selects it.
+            open(r) => { root.activated(r); }
+            activities: root.activities;
+            activities-next: root.activities-next;
+            rooms: root.rooms;
+            rooms-next: root.rooms-next;
+            scenes-next: root.scenes-next;
+            settled() => { root.settled(); }
+            area-name: root.area-name;
+            area-index: root.area-index;
+            area-count: root.area-count;
+            area-dots: root.area-dots;
+            scenes: root.scenes;
+            focus-row: root.focus-row;
+            first-room-row: root.first-room-row;
+            scenes-row: root.scenes-row;
         }
-        // A tap on the strip or the scenes row opens it, because those two
-        // exist only to be opened; a tap on a room only selects it.
-        open(r) => { root.activated(r); }
-        activities: root.activities;
-        activities-next: root.activities-next;
-        rooms: root.rooms;
-        rooms-next: root.rooms-next;
-        scenes-next: root.scenes-next;
-        settled() => { root.settled(); }
-        area-name: root.area-name;
-        area-index: root.area-index;
-        area-count: root.area-count;
-        area-dots: root.area-dots;
-        scenes: root.scenes;
-        focus-row: root.focus-row;
-        first-room-row: root.first-room-row;
-        scenes-row: root.scenes-row;
+
+            Chooser {
+                x: root.width;
+                y: 0px;
+                width: root.width;
+                height: parent.height;
+                shown: root.chooser-shown;
+                title: root.chooser-title;
+                items: root.chooser-items;
+                index: root.chooser-index;
+            }
+        }
     }
 
-    Chooser {
-        // Below the status bar, not over it: the clock and the battery are
-        // true whatever is on screen, and dimming them to 7% says otherwise.
-        x: 0px; y: 56px;
-        width: root.width; height: root.height - 56px;
-        shown: root.chooser-shown;
-        title: root.chooser-title;
-        items: root.chooser-items;
-        index: root.chooser-index;
-    }
 
     MicOverlay {
         x: 0px; y: 0px;

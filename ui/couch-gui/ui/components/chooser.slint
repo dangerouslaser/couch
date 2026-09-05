@@ -7,11 +7,15 @@ export struct ChoiceItem {
     active: bool,
 }
 
-// A list, over the hub, for the things that used to be a horizontal scroller.
+// A page, for the things that used to be a horizontal scroller.
 //
-// An overlay rather than a page: it does not disturb the pane underneath, so
-// none of the swap machinery applies to it, and Back simply closes it. A
-// vertical list is also what a D-pad is good at - which the two-wide scroller
+// It was an overlay first: a sheet sliding up over a dimmed hub. That looked
+// out of place next to a UI where everything else is a page, and it cost more
+// than it looked - a translucent scrim means compositing the whole panel every
+// frame, where an opaque page is a fill. So it is a page, and it arrives the
+// way areas do: sideways, at the same speed, into the same layout.
+//
+// A vertical list is also what a D-pad is good at, which the two-wide scroller
 // this replaces very much was not.
 export component Chooser inherits Rectangle {
     in property <bool> shown: false;
@@ -25,43 +29,14 @@ export component Chooser inherits Rectangle {
     /// the first row's ring is cut off against the top edge.
     property <length> bleed: 6px;
 
-    // Slides up from the bottom edge, and back down to it.
-    //
-    // Slide rather than fade, because this renderer is bound by how many pixels
-    // it touches: fading a full-screen scrim composites the whole panel every
-    // frame at about 11ms a go, while a slide only dirties the band the panel
-    // moves through. The scrim itself appears and goes in one step for the same
-    // reason - it is one full-screen frame each way instead of fifteen.
-    //
-    // `visible` is derived from the offset rather than from `shown` so the
-    // closing slide is actually seen; keyed off `shown` the panel would vanish
-    // on the first frame and animate to nowhere.
-    property <length> offset: root.shown ? 0px : root.height;
-    animate offset { duration: 190ms; easing: ease-out; }
-
-    visible: root.offset < root.height - 1px;
-    background: #000000EE;
+    background: Theme.bg;
 
     VerticalLayout {
-        // Explicit x/width/height for the same reason as the pager: a layout
-        // handed a y inside a plain Rectangle does not size itself.
-        x: 0px;
-        y: root.offset;
-        width: root.width;
-        height: root.height;
         padding-left: Theme.pad-side;
         padding-right: Theme.pad-side;
-        padding-top: 26px;
-        padding-bottom: 26px;
-        spacing: 16px;
-
-        Text {
-            text: root.title;
-            font-size: 16px;
-            letter-spacing: 0.12 * 16px;
-            color: Theme.text-secondary;
-            horizontal-alignment: center;
-        }
+        padding-top: Theme.pad-top;
+        padding-bottom: Theme.pad-bottom;
+        spacing: 14px;
 
         Rectangle {
             clip: true;
