@@ -316,7 +316,9 @@ Two things the mechanism depends on:
   calling it, so clearing `ring-hidden` straight after would start the fade
   180ms in - the ring pops. The call is made once more before the flag is
   cleared. Anything that blocks the loop and then starts an animation needs
-  the same.
+  the same - and it bit again in standby: a backlight write blocks 110ms in
+  the display driver, and a key dispatched after one ran its ring move in two
+  frames instead of ten until `wake()` refreshed the tick first.
 
 The ring's hide is a bound `opacity` with `duration: ring-hidden ? 0ms :
 200ms`. That works despite the animate-on-binding note above because B is

@@ -43,6 +43,51 @@ enum Intent {
     CloseChooser,
 }
 
+/// How much of the panel is on.
+///
+/// Three levels, two timers. Dimmed, the screen is still readable and the
+/// first key acts as it always would; off, the panel is powered down (LCM,
+/// backlight PWM and the touch controller all suspended by the driver) and
+/// the first key only wakes it - a dark remote should not change the house
+/// because someone found the wrong button in the dark. The microphone key is
+/// the exception: holding it in the dark means "talk", so it wakes and records.
+///
+/// A pairing PIN on screen, a recording in progress, or first-run setup hold
+/// the panel awake: each is something a person is looking at or waiting on.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum Standby {
+    Active,
+    Dim,
+    Off,
+}
+
+const DIM_LEVEL: u8 = 40;
+/// Seconds of no input before dimming, and before powering the panel down.
+/// COUCH_DIM_S and COUCH_OFF_S override them, so the tiers can be watched in
+/// seconds rather than minutes.
+const DIM_AFTER_S: u64 = 30;
+const OFF_AFTER_S: u64 = 120;
+
+/// Bring the panel back, then bring Slint's clock up to date.
+///
+/// Both the unblank (~430ms of panel re-init) and a backlight write (it goes
+/// through the display's command queue and can block for a frame or more)
+/// happen inside this call, and an animation started afterwards takes its
+/// start time from the tick `update_timers_and_animations` last set - before
+/// the block. A key dispatched straight after a wake then started its ring
+/// animation already most of the way through: two frames instead of ten,
+/// measured. Refreshing the tick here is what makes the first press after a
+/// wake glide like any other.
+fn wake(screen: &mut Panel) {
+    screen.blank(false);
+    Panel::set_backlight(255);
+    slint::platform::update_timers_and_animations();
+}
+
+fn env_secs(name: &str, default: u64) -> u64 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The UI is left on the default affinity deliberately, not pinned off
     // CPU 0. The input EINT interrupts fire only on CPU 0 and freeze it for
@@ -491,6 +536,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Frame cost is the draw and the copy; the wait for the panel after them
     // is counted apart, because it is slack rather than work.
     let (mut frames, mut render_us, mut frame_max, mut wait_us) = (0u64, 0u64, 0u64, 0u64);
+
+    let dim_after_us = env_secs("COUCH_DIM_S", DIM_AFTER_S) * 1_000_000;
+    let off_after_us = env_secs("COUCH_OFF_S", OFF_AFTER_S) * 1_000_000;
+    let mut standby = Standby::Active;
+    let mut last_input = now_monotonic_us();
+    println!(
+        "couch-gui: standby: dim after {}s, off after {}s",
+        dim_after_us / 1_000_000,
+        off_after_us / 1_000_000
+    );
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
     let mut last_stat = now_monotonic_us();
 
@@ -500,6 +555,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 in_n += 1;
                 in_sum += press.latency_us;
                 in_max = in_max.max(press.latency_us);
+            }
+            last_input = now_monotonic_us();
+            // A key on a dark panel wakes it and does nothing else - except
+            // the microphone key, whose press is the whole intent.
+            let swallow = standby == Standby::Off && press.mic != Some(true);
+            if standby != Standby::Active {
+                println!("couch-gui: standby: wake on key ({:?})", standby);
+                wake(&mut screen);
+                standby = Standby::Active;
+            }
+            if swallow {
+                continue;
             }
             // Hold to talk. The key is not routed into the UI: it opens the
             // microphone and nothing else, so there is no screen on which it
@@ -535,6 +602,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Slint's own hit testing decides what a tap lands on, so nothing here
         // needs to know what is on screen.
         while let Some(event) = pointer.poll() {
+            last_input = now_monotonic_us();
+            if standby != Standby::Active {
+                println!("couch-gui: standby: wake on touch ({:?})", standby);
+                wake(&mut screen);
+                let was_off = standby == Standby::Off;
+                standby = Standby::Active;
+                if was_off {
+                    continue;
+                }
+            }
             let (position, ev) = match event {
                 touch::Event::Pressed { x, y } => (
                     LogicalPosition::new(x, y),
@@ -619,6 +696,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Approval::Granted => 2,
                 Approval::TimedOut => 3,
             });
+
+            // Standby. Anything a person is looking at or waiting on holds
+            // the panel awake and restarts the clock; otherwise it dims, then
+            // powers down, on the two idle timers.
+            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode();
+            let idle = now.saturating_sub(last_input);
+            if hold {
+                last_input = now;
+                if standby != Standby::Active {
+                    println!("couch-gui: standby: wake to show something ({:?})", standby);
+                    wake(&mut screen);
+                    standby = Standby::Active;
+                }
+            } else if standby == Standby::Active && idle >= dim_after_us {
+                println!("couch-gui: standby: dim after {}s idle", idle / 1_000_000);
+                Panel::set_backlight(DIM_LEVEL);
+                standby = Standby::Dim;
+            } else if standby == Standby::Dim && idle >= off_after_us {
+                println!("couch-gui: standby: off after {}s idle", idle / 1_000_000);
+                Panel::set_backlight(0);
+                screen.blank(true);
+                standby = Standby::Off;
+            }
         }
 
         if nav && now >= nav_at {
@@ -656,6 +756,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // animation costs one rasterisation per refresh rather than as many
         // as the CPU can manage. Nothing to draw: a short sleep, and back to
         // polling input.
+        // A powered-down panel shows nothing, so nothing is drawn for it:
+        // Slint's state keeps advancing (the clock, a PIN arriving) and the
+        // first frame after waking catches up. Input is still polled, at a
+        // rate a hand cannot notice and the battery can.
+        if standby == Standby::Off {
+            std::thread::sleep(Duration::from_millis(40));
+            continue;
+        }
+
         match screen.render(&window) {
             Some(cost) => {
                 render_us += cost.work_us;

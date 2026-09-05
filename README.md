@@ -372,6 +372,35 @@ daemon can take the pinned core away and the UI then freezes for as long as it
 is gone, 4.8s in one frame. Keep a core available; never force the UI onto one.
 The cost is two cores' idle power, one line in `stage2.sh` to dial back.
 
+## Standby
+
+Nothing dimmed the panel before: init rewrote 255 to both backlights every
+five seconds (a bring-up habit from when the panel seemed to switch itself off;
+it does not - an unattended level holds for as long as it is left). `stage2.sh`
+now stops that loop, and `couch-gui` owns brightness with two idle timers:
+
+| after | panel | keys | first key press |
+|---|---|---|---|
+| 30s idle | backlight 40 | off | acts as normal |
+| 120s idle | powered down: LCM, backlight PWM and touch suspended (`FBIOBLANK`) | off | wakes only, not acted on |
+
+The mic key is the exception on a dark panel: holding it means "talk", so it
+wakes and records. A pairing PIN on screen, a recording, or first-run setup
+hold the panel awake. While off, nothing is rasterised or copied; Slint's
+state keeps advancing and the first frame after waking catches up, with the
+whole picture pushed from RAM because the panel was re-initialised. Input is
+polled every 40ms while off. `COUCH_DIM_S` and `COUCH_OFF_S` shorten the
+timers for testing; every transition is logged as `couch-gui: standby: ...`.
+
+Measured: powering down takes ~570ms, waking ~430ms of panel re-init. A
+backlight write takes 110ms - it goes through the display's command queue -
+and that matters: an animation started right after one took its start time
+from before the block and ran two frames instead of ten. `wake()` refreshes
+Slint's clock after the blocking calls and before the key is dispatched. The
+rule generalises: anything that blocks the loop and then starts an animation
+must call `update_timers_and_animations` in between (the page slide learned
+this first).
+
 Two more facts from the same investigation, for whoever profiles this next:
 `FBIOPAN_DISPLAY` busy-waits in the kernel for as long as any key is held
 (the keypad rescans every 8ms while a key is down), so the GUI paces with a

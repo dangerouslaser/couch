@@ -221,6 +221,16 @@ touch /tmp/stay
 # still leaks through. Three keeps the UI reliably clear of the frozen core.
 # The cost is two cores' idle power; drop this to 2, or remove it, to trade
 # smoothness back for battery. Load-based hotplug still brings the fourth.
+# init keeps a loop that rewrites 255 to both backlights every five seconds -
+# a bring-up habit from when the panel seemed to switch itself off (it does
+# not; measured, an unattended level holds). The GUI owns brightness now, so
+# the loop is stopped: it is the child of init whose own child is a `sleep 5`.
+# One pass over /proc rather than one per pair: this core is slow.
+for p in /proc/[0-9]*; do
+    echo "$(basename $p) $(awk '{print $4}' $p/stat 2>/dev/null) $(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-40)"
+done > /tmp/ptab
+KEEPER=$(awk 'NR==FNR{pp[$1]=$2; next} /sleep 5/{if (pp[pp[$1]]==1) print pp[$1]}' /tmp/ptab /tmp/ptab | head -1)
+[ -n "$KEEPER" ] && kill "$KEEPER" 2>/dev/null && echo "= stopped init's backlight keeper (pid $KEEPER)"
 [ -w /proc/hps/num_base_perf_serv ] && echo 3 > /proc/hps/num_base_perf_serv
 for c in 1 2; do [ -w /sys/devices/system/cpu/cpu$c/online ] && echo 1 > /sys/devices/system/cpu/cpu$c/online; done
 if [ -x "$GUI" ]; then

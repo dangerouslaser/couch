@@ -47,6 +47,12 @@ impl TargetPixel for Abgr {
 // xoffset, yoffset, ... The driver wants the whole struct back for a pan.
 const FBIOGET_VSCREENINFO: libc::c_int = 0x4600;
 const FBIOPAN_DISPLAY: libc::c_int = 0x4606;
+/// FBIOBLANK: 0 unblanks, 4 is FB_BLANK_POWERDOWN. On mtkfb that suspends the
+/// LCM, cuts the backlight PWM and suspends the touch controller (~570ms),
+/// and unblanking re-initialises the panel (~430ms) - measured in dmesg.
+const FBIOBLANK: libc::c_int = 0x4611;
+const FB_BLANK_UNBLANK: libc::c_int = 0;
+const FB_BLANK_POWERDOWN: libc::c_int = 4;
 // _IOW('F', 0x20, __u32) on 32-bit ARM.
 const FBIO_WAITFORVSYNC: libc::c_int = 0x4004_4620;
 
@@ -119,6 +125,10 @@ pub struct Panel {
     /// The screeninfo the driver reported, offsets zeroed, for FBIOPAN_DISPLAY.
     var: Option<[u32; 40]>,
     pacing: Pacing,
+    /// The panel is powered down (standby). Frames still rasterise into RAM
+    /// so the picture is current the moment it comes back; nothing is copied
+    /// to a panel that is not showing it.
+    blanked: bool,
 }
 
 impl Panel {
@@ -159,6 +169,7 @@ impl Panel {
             // Page 0 is what is displayed; the pan must say so.
             var: var.map(|mut v| { v[4] = 0; v[5] = 0; v }),
             pacing: Pacing::Sleep,
+            blanked: false,
         };
         panel.pacing = panel.probe_pacing();
         Ok(panel)
@@ -245,10 +256,44 @@ impl Panel {
         }
     }
 
-    /// The panel switches its own backlight off when idle.
+    /// Panel and key backlights. init used to rewrite 255 to both every five
+    /// seconds; stage2 stops that loop so the levels set here stick. The key
+    /// LEDs are all or nothing: lit only at full brightness.
+    pub fn set_backlight(level: u8) {
+        let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", format!("{level}\n"));
+        let keys = if level == 255 { "255\n" } else { "0\n" };
+        let _ = std::fs::write("/sys/class/leds/button-backlight/brightness", keys);
+    }
+
     pub fn backlight_on() {
-        let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", b"255\n");
-        let _ = std::fs::write("/sys/class/leds/button-backlight/brightness", b"255\n");
+        Panel::set_backlight(255);
+    }
+
+    /// Power the panel down or back up. Coming back, the whole picture is
+    /// pushed from RAM: the panel was re-initialised and RAM is the truth.
+    pub fn blank(&mut self, off: bool) {
+        if off == self.blanked {
+            return;
+        }
+        let arg = if off { FB_BLANK_POWERDOWN } else { FB_BLANK_UNBLANK };
+        let rc = unsafe { libc::ioctl(self.fb.as_raw_fd(), FBIOBLANK, arg as libc::c_ulong) };
+        if rc != 0 {
+            println!("couch-gui: FBIOBLANK({arg}) failed: {}", std::io::Error::last_os_error());
+            return;
+        }
+        self.blanked = off;
+        if !off {
+            self.refresh_all();
+        }
+    }
+
+    /// Copy every row of RAM to the panel.
+    pub fn refresh_all(&mut self) {
+        let (w, h, stride) = (self.width as usize, self.height as usize, self.stride_px as usize);
+        let src = pixels(&self.ram);
+        for y in 0..h {
+            self.map[y * stride..y * stride + w].copy_from_slice(&src[y * w..(y + 1) * w]);
+        }
     }
 
     /// Render one frame if anything changed, then hold until the panel has
@@ -300,6 +345,7 @@ impl Panel {
     fn draw(&mut self, window: &MinimalSoftwareWindow, to_panel: bool) -> bool {
         let report = std::env::var_os("COUCH_REGION").is_some();
         let (w, h, stride_px) = (self.width, self.height, self.stride_px);
+        let blanked = self.blanked;
         let (ram, map) = (&mut self.ram, &mut *self.map);
         window.draw_if_needed(|renderer| {
             let region = renderer.render(ram, w as usize);
@@ -319,7 +365,7 @@ impl Panel {
                 println!("couch-gui: region {n} rect(s), {px} px = {}% of screen{where_}",
                          px * 100 / (w as u64 * h as u64));
             }
-            if !to_panel {
+            if !to_panel || blanked {
                 return;
             }
             // The region's own rectangles, not its bounding box: a change at
