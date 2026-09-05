@@ -252,3 +252,77 @@ load. A ring frame fits the 16.7ms budget at either clock. A page-slide frame
 does not - 10-25ms at full clock becomes up to 29ms - which is the argument
 for making the slide a copy of two rendered pages rather than a
 re-rasterisation of both every frame.
+
+## A page slide is a copy of two frames, not a render of two pages
+
+A page transition here does not animate anything in Slint. The host (see
+`transition` in `main.rs` and `Panel::slide` in `panel.rs`):
+
+1. keeps the frame on the panel - the RAM buffer, which equals the panel
+   between draws - as page A;
+2. applies the change to the UI in one go, as an instant state change: new
+   models and `page-swapped()` for an area, `chooser-shown` flipped for the
+   chooser, with `ring-hidden` true;
+3. renders that once into RAM, with no copy to the panel and no pacing -
+   page B. The renderer's partial redraw is fine with this: RAM still holds
+   the last frame it drew, and the dirty region is what the change touched;
+4. for ~180ms, composes the framebuffer directly from A and B, shifted along
+   the same `ease-out` curve everything else uses, one or two `memcpy`s per
+   row, pacing each frame with the same FBIOPAN_DISPLAY wait a drawn frame
+   gets. Rows that must not move - the status bar, and the pager on an area
+   change - are taken from B throughout;
+5. clears `ring-hidden`, so the next normal frame starts the ring's 200ms
+   fade in. RAM already equals B, and so does the panel.
+
+Why: the rasterised slide - two `AreaPane`s on a strip whose `x` animated -
+redrew both pages every frame, 88% of the panel, 10-25ms at full clock and up
+to 29ms at the `interactive` governor's floor, against a 16.7ms budget. A copy
+of the whole panel is ~1.3ms at any clock. It also removed a prep timer (so
+the incoming page was instantiated before the first moving frame), a settle
+timer, `*-next` models and a `sliding` flag, none of which the copy needs.
+
+Two things the mechanism depends on:
+
+- **The callbacks only record what they want.** `draw_if_needed` cannot be
+  re-entered from inside a Slint callback, and the transition draws, so
+  `area-step`, the chooser openers and every way the chooser closes - Escape,
+  Left, Right, `chosen` - set an intent that the loop performs after
+  `dispatch_event`. The closes that used to write `chooser-shown` from inside
+  the FocusScope became a `close-chooser()` callback for this reason. Keys
+  pressed during the slide queue in the keypad and are taken one per frame
+  afterwards; a second Left simply slides again.
+- **Change handlers run from `update_timers_and_animations`**, after the
+  animations and timers (`platform.rs`). The chooser's `changed shown` is
+  what puts its list back to the top, so that call goes between the state
+  change and the B render, or B shows the list where it was last left.
+- **The animation clock only advances in that same call.** An animation's
+  start time is `current_tick()` at the moment its property is marked dirty
+  (`AnimatedBindingCallable::mark_dirty` -> `reset()`), and the tick is the
+  one `update_animations` last set. The slide blocks for 180ms without
+  calling it, so clearing `ring-hidden` straight after would start the fade
+  180ms in - the ring pops. The call is made once more before the flag is
+  cleared. Anything that blocks the loop and then starts an animation needs
+  the same.
+
+The ring's hide is a bound `opacity` with `duration: ring-hidden ? 0ms :
+200ms`. That works despite the animate-on-binding note above because B is
+always rendered - the binding evaluated - with the flag true before it comes
+back false, so each duration is read under the flag it is for. The old page's
+ring simply leaves with it on the snapshot; nothing fades out.
+
+Measured on the device, COUCH_SLIDE with COUCH_REGION, `interactive`
+governor at its 604MHz floor:
+
+| | cost |
+|---|---|
+| page B render, area change | 14-19 ms, once per slide |
+| page B render, chooser | 22 ms, once |
+| transition frame (compose + copy) | 1.4-3.7 ms |
+| frames per slide | 11 at 180 ms, each paced 14-17 ms |
+| stat line under COUCH_SLIDE, before | 132 frames / 5s, 8.2 ms avg, 28.9 ms worst |
+| stat line under COUCH_SLIDE, after | 79 frames / 5s, 4.6-5.6 ms avg, 19-26 ms worst |
+
+The worst frame is now the one B render; every moving frame is under a
+quarter of the budget. A burst of 120 framebuffer captures across the slides
+saw 20 distinct states of a card row and 3 of the pager band - the band
+changed only when the pager's state did.

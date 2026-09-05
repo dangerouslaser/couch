@@ -79,6 +79,29 @@ pub struct FrameCost {
     pub wait_us: u64,
 }
 
+/// Where the page arriving in a transition comes from. What is on screen
+/// leaves the other way: a page from the right pushes the old one off to the
+/// left. The next area is to the right, so is the chooser; going back is from
+/// the left.
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum Arrive {
+    FromRight,
+    FromLeft,
+}
+
+/// What a transition cost, summed over its frames, in the same terms as
+/// `FrameCost` so the loop can fold it into the same statistics.
+#[derive(Default)]
+pub struct SlideCost {
+    pub frames: u64,
+    pub work_us: u64,
+    pub wait_us: u64,
+    pub max_us: u64,
+}
+
+/// How long a page takes to cross.
+pub const SLIDE: Duration = Duration::from_millis(180);
+
 pub struct Panel {
     fb: File,
     map: &'static mut [u32],
@@ -86,6 +109,9 @@ pub struct Panel {
     pub height: u32,
     stride_px: u32,
     ram: Vec<Abgr>,
+    /// The frame the panel showed when a transition began: page A. RAM is
+    /// page B by then, so the two pages of a slide are this and `ram`.
+    spare: Vec<Abgr>,
     /// The screeninfo the driver reported, offsets zeroed, for FBIOPAN_DISPLAY.
     var: Option<[u32; 40]>,
     pacing: Pacing,
@@ -125,6 +151,7 @@ impl Panel {
             height,
             stride_px: stride / 4,
             ram: vec![Abgr::default(); (width * height) as usize],
+            spare: vec![Abgr::default(); (width * height) as usize],
             // Page 0 is what is displayed; the pan must say so.
             var: var.map(|mut v| { v[4] = 0; v[5] = 0; v }),
             pacing: Pacing::Sleep,
@@ -215,16 +242,50 @@ impl Panel {
     /// not synchronised to blanking - a rectangle can straddle the scan-out.
     /// Copying into the blanking interval instead would need the wait before
     /// the copy, and the region kept across it; acceptable as is for now.
+    pub fn render(&mut self, window: &MinimalSoftwareWindow) -> Option<FrameCost> {
+        let started = Instant::now();
+        if !self.draw(window, true) {
+            return None;
+        }
+        let work = started.elapsed();
+        self.pace(started);
+        Some(FrameCost {
+            work_us: work.as_micros() as u64,
+            wait_us: started.elapsed().saturating_sub(work).as_micros() as u64,
+        })
+    }
+
+    /// Render one frame into RAM and stop there: nothing reaches the panel and
+    /// nothing waits for it. Page B of a transition. Returns the cost in
+    /// microseconds, or None if nothing needed drawing.
+    ///
+    /// The renderer's partial redraw is still fine here: RAM holds the last
+    /// frame it drew, and the region it marks dirty is what the state change
+    /// touched. Until the transition that follows has finished, RAM and the
+    /// panel disagree - that is the only time they do.
+    pub fn render_offscreen(&mut self, window: &MinimalSoftwareWindow) -> Option<u64> {
+        let started = Instant::now();
+        self.draw(window, false).then(|| started.elapsed().as_micros() as u64)
+    }
+
+    /// Keep the frame the panel is showing: page A of a transition. Taken
+    /// before any state changes, because RAM only equals the panel while
+    /// nothing has been drawn since the last copy.
+    pub fn snapshot(&mut self) {
+        self.spare.copy_from_slice(&self.ram);
+    }
+
+    /// Rasterise into RAM if anything changed and, if asked, copy the dirty
+    /// rectangles to the panel. True if something was drawn.
     ///
     /// COUCH_REGION reports what the renderer marked dirty. A frame that costs
     /// far more than its content suggests is almost always claiming a much
     /// larger region than it needs, and that is invisible without this.
-    pub fn render(&mut self, window: &MinimalSoftwareWindow) -> Option<FrameCost> {
-        let started = Instant::now();
+    fn draw(&mut self, window: &MinimalSoftwareWindow, to_panel: bool) -> bool {
         let report = std::env::var_os("COUCH_REGION").is_some();
         let (w, h, stride_px) = (self.width, self.height, self.stride_px);
         let (ram, map) = (&mut self.ram, &mut *self.map);
-        let drew = window.draw_if_needed(|renderer| {
+        window.draw_if_needed(|renderer| {
             let region = renderer.render(ram, w as usize);
             if report {
                 let (mut n, mut px) = (0u32, 0u64);
@@ -242,9 +303,13 @@ impl Panel {
                 println!("couch-gui: region {n} rect(s), {px} px = {}% of screen{where_}",
                          px * 100 / (w as u64 * h as u64));
             }
+            if !to_panel {
+                return;
+            }
             // The region's own rectangles, not its bounding box: a change at
             // opposite ends of the screen has a bounding box of nearly the
             // whole panel.
+            let src_px = pixels(ram);
             for (pos, size) in region.iter() {
                 let (rx, ry) = (pos.x.max(0) as u32, pos.y.max(0) as u32);
                 let n = size.width.min(w.saturating_sub(rx)) as usize;
@@ -254,22 +319,90 @@ impl Panel {
                 for y in ry..(ry + size.height).min(h) {
                     let src = (y * w + rx) as usize;
                     let dst = (y * stride_px + rx) as usize;
-                    let s = unsafe {
-                        std::slice::from_raw_parts(ram.as_ptr().add(src) as *const u32, n)
-                    };
-                    map[dst..dst + n].copy_from_slice(s);
+                    map[dst..dst + n].copy_from_slice(&src_px[src..src + n]);
                 }
             }
-        });
-        if !drew {
-            return None;
-        }
-        let work = started.elapsed();
-        self.pace(started);
-        Some(FrameCost {
-            work_us: work.as_micros() as u64,
-            wait_us: started.elapsed().saturating_sub(work).as_micros() as u64,
         })
+    }
+
+    /// Slide page B in over page A, on the panel, without rendering anything.
+    ///
+    /// Call `snapshot` with the old page showing, change the state, and
+    /// `render_offscreen` the new one; then this composes each frame from
+    /// those two buffers - one or two copies per row - and paces it to the
+    /// refresh the way a drawn frame is. A rasterised slide cost 10-29ms a
+    /// frame, both pages redrawn every time; a copy of the panel is about a
+    /// millisecond, at any clock.
+    ///
+    /// `keep` is row bands (y, height) that do not travel and are taken from
+    /// B throughout: the status bar, and for an area change the pager, which
+    /// is the control and should not move with the thing it controls. The
+    /// last frame is all of B, so when this returns the panel and RAM agree
+    /// again and the normal path carries on from B.
+    pub fn slide(&mut self, from: Arrive, keep: &[(u32, u32)], duration: Duration) -> SlideCost {
+        let report = std::env::var_os("COUCH_REGION").is_some();
+        let duration = duration.max(FRAME).as_secs_f32();
+        let began = Instant::now();
+        let mut cost = SlideCost::default();
+        loop {
+            let started = Instant::now();
+            // A frame composed now reaches the glass at the next refresh, so
+            // it shows where the page will be one period from now rather than
+            // where it is - the first frame moves instead of repeating what
+            // is already on the panel.
+            let t = ((started.duration_since(began) + FRAME).as_secs_f32() / duration).min(1.0);
+            let dx = if t >= 1.0 {
+                self.width as usize
+            } else {
+                (ease_out(t) * self.width as f32).round() as usize
+            };
+            self.compose(from, dx, keep);
+            let work = started.elapsed();
+            self.pace(started);
+            let wait = started.elapsed().saturating_sub(work);
+            let (work_us, wait_us) = (work.as_micros() as u64, wait.as_micros() as u64);
+            cost.frames += 1;
+            cost.work_us += work_us;
+            cost.wait_us += wait_us;
+            cost.max_us = cost.max_us.max(work_us);
+            if report {
+                println!("couch-gui: slide frame {}: dx {dx}, {work_us} us, {wait_us} us paced",
+                         cost.frames);
+            }
+            if t >= 1.0 {
+                return cost;
+            }
+        }
+    }
+
+    /// One transition frame straight into the framebuffer: A shifted `dx`
+    /// pixels out of the way and B filling what it uncovered, except the
+    /// `keep` bands, which are B as they stand.
+    fn compose(&mut self, from: Arrive, dx: usize, keep: &[(u32, u32)]) {
+        let (w, h, stride) = (self.width as usize, self.height as usize, self.stride_px as usize);
+        let dx = dx.min(w);
+        let (a, b) = (pixels(&self.spare), pixels(&self.ram));
+        for y in 0..h {
+            let dst = &mut self.map[y * stride..y * stride + w];
+            let (ra, rb) = (&a[y * w..(y + 1) * w], &b[y * w..(y + 1) * w]);
+            let held = keep.iter().any(|&(top, height)| {
+                y >= top as usize && y < (top + height) as usize
+            });
+            if held {
+                dst.copy_from_slice(rb);
+                continue;
+            }
+            match from {
+                Arrive::FromRight => {
+                    dst[..w - dx].copy_from_slice(&ra[dx..]);
+                    dst[w - dx..].copy_from_slice(&rb[..dx]);
+                }
+                Arrive::FromLeft => {
+                    dst[dx..].copy_from_slice(&ra[..w - dx]);
+                    dst[..dx].copy_from_slice(&rb[w - dx..]);
+                }
+            }
+        }
     }
 
     /// Block until the panel has refreshed. An ioctl that worked at startup
@@ -294,6 +427,32 @@ impl Panel {
             }
         }
     }
+}
+
+/// The buffer as the framebuffer sees it. Abgr is `repr(transparent)` over
+/// the u32 the panel takes, so this is a view, not a conversion.
+fn pixels(buf: &[Abgr]) -> &[u32] {
+    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u32, buf.len()) }
+}
+
+/// Slint's `ease-out`, cubic-bezier(0, 0, 0.58, 1), so a copied slide moves
+/// the way the rasterised one did and the way everything else here still
+/// does. The curve is x(s), y(s) over a parameter; x is solved for by
+/// bisection, which it can be because x is monotonic in s.
+fn ease_out(t: f32) -> f32 {
+    const X2: f32 = 0.58;
+    let x = |s: f32| 3.0 * (1.0 - s) * s * s * X2 + s * s * s;
+    let y = |s: f32| 3.0 * (1.0 - s) * s * s + s * s * s;
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..16 {
+        let mid = 0.5 * (lo + hi);
+        if x(mid) < t {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    y(0.5 * (lo + hi))
 }
 
 /// Some(period) if the ioctl works and blocks; otherwise the reason it does

@@ -10,19 +10,38 @@ mod qr;
 mod system;
 mod touch;
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
+use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::LogicalPosition;
 use slint::{Model, ModelRc, PhysicalSize, SharedString, VecModel};
 
 use keypad::{now_monotonic_us, Keypad};
-use panel::{CouchPlatform, Panel};
+use panel::{Arrive, CouchPlatform, Panel, SlideCost, SLIDE};
 use system::Approval;
 
 slint::include_modules!();
 
 const BACKGROUND: u32 = 0x09090b;
+
+/// A page change the UI asked for. The callback that asked records it and
+/// nothing else; the loop performs it once the event that caused it has been
+/// dispatched. A transition renders a frame and draws to the panel, and the
+/// window's `draw_if_needed` cannot be re-entered from inside a Slint
+/// callback - so a callback only ever says what it wants, and the ways the
+/// chooser closes from inside app.slint are callbacks too, for the same
+/// reason.
+#[derive(Copy, Clone, Debug)]
+enum Intent {
+    /// Step the area by this many, wrapping; the sign is the direction.
+    Area(i32),
+    /// Show the chooser. Its content is already set by the time this is asked.
+    OpenChooser,
+    CloseChooser,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut screen = Panel::open()?;
@@ -157,16 +176,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
-    let areas = std::rc::Rc::new(areas);
-    // A page change fills the incoming pane, slides to it, and adopts it when
-    // the hub says the animation is done. Two indices, because the pager and
-    // the page disagree for 180ms: `pending` is what the pager shows - it does
-    // not move, so it can lead rather than lag - and `resident` is the page
-    // actually on screen, which changes only when the slide has settled.
-    // Anything that acts on the page uses `resident`.
-    let pending = std::rc::Rc::new(std::cell::Cell::new(0usize));
-    let resident = std::rc::Rc::new(std::cell::Cell::new(0usize));
-    let sliding = std::rc::Rc::new(std::cell::Cell::new(false));
+    let areas = Rc::new(areas);
+    // The area on screen. One index: a page change is applied in one go and
+    // the slide is composed from the frame before it and the frame after, so
+    // there is no 180ms during which the pager and the page disagree.
+    let current = Rc::new(Cell::new(0usize));
+    // What the last dispatched event asked for, performed by the loop. One
+    // slot: two asks in one iteration - a key and COUCH_SLIDE's timer, say -
+    // keep the first, as a second press mid-slide used to be ignored.
+    let intent = Rc::new(Cell::new(None::<Intent>));
+    let ask = {
+        let intent = intent.clone();
+        move |what: Intent| {
+            if intent.get().is_none() {
+                intent.set(Some(what));
+            }
+        }
+    };
 
     let put_front = {
         let areas = areas.clone();
@@ -191,8 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|i| *i < areas.len())
         .unwrap_or(0);
     put_front(&app, first);
-    pending.set(first);
-    resident.set(first);
+    current.set(first);
 
     // COUCH_FOCUS parks focus on a row - 0 is the activity strip, then one per
     // room, then the scenes row - so any focus position can be photographed
@@ -204,61 +229,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        let weak = app.as_weak();
-        let areas = areas.clone();
-        let pending = pending.clone();
-        let sliding = sliding.clone();
-        app.on_area_step(move |delta| {
-            let Some(app) = weak.upgrade() else { return };
-            // Ignore a second press mid-transition: restarting the timer would
-            // strand the first page half way across.
-            if sliding.get() {
-                return;
-            }
-            let cur = pending.get();
-            let next = (cur as i32 + delta).rem_euclid(areas.len() as i32) as usize;
-            if next == cur {
-                return;
-            }
-            let a = &areas[next];
-            app.set_activities_next(ModelRc::new(VecModel::from(a.activities.clone())));
-            app.set_rooms_next(ModelRc::new(VecModel::from(a.rooms.clone())));
-            app.set_scenes_next(ModelRc::new(VecModel::from(a.scenes.clone())));
-            app.set_area_name(a.name.into());
-            app.set_area_index(next as i32);
-            pending.set(next);
-            sliding.set(true);
-            app.invoke_slide(delta);
-        });
-    }
-
-    {
-        let weak = app.as_weak();
-        let pending = pending.clone();
-        let resident = resident.clone();
-        let sliding = sliding.clone();
-        let put_front = put_front.clone();
-        app.on_settled(move || {
-            if let Some(app) = weak.upgrade() {
-                put_front(&app, pending.get());
-                resident.set(pending.get());
-                sliding.set(false);
-            }
-        });
+        let ask = ask.clone();
+        app.on_area_step(move |delta| ask(Intent::Area(delta)));
     }
 
     // OK on the strip or the scenes row opens what is there: straight through
     // when there is one of it, as a list when there are several. A room has
     // no screen behind it yet. The hub says which of the three it was and, for
-    // a room, which one; it never hands over a row index, and it says nothing
-    // at all while a page is crossing.
+    // a room, which one; it never hands over a row index. The chooser's
+    // content is set here, where the list is known; showing it is the
+    // transition, which the loop performs.
     {
         let weak = app.as_weak();
         let areas = areas.clone();
-        let resident = resident.clone();
+        let current = current.clone();
+        let ask = ask.clone();
         app.on_open_strip(move || {
             let Some(app) = weak.upgrade() else { return };
-            let a = &areas[resident.get()];
+            let a = &areas[current.get()];
             match a.activities.len() {
                 0 => return,
                 1 => {
@@ -281,16 +269,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_chooser_title("NOW PLAYING".into());
             app.set_chooser_items(ModelRc::new(VecModel::from(items)));
             app.set_chooser_index(0);
-            app.set_chooser_shown(true);
+            ask(Intent::OpenChooser);
         });
     }
     {
         let weak = app.as_weak();
         let areas = areas.clone();
-        let resident = resident.clone();
+        let current = current.clone();
+        let ask = ask.clone();
         app.on_open_scenes(move || {
             let Some(app) = weak.upgrade() else { return };
-            let a = &areas[resident.get()];
+            let a = &areas[current.get()];
             match a.scenes.len() {
                 0 => return,
                 1 => {
@@ -311,14 +300,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_chooser_title("SCENES".into());
             app.set_chooser_items(ModelRc::new(VecModel::from(items)));
             app.set_chooser_index(0);
-            app.set_chooser_shown(true);
+            ask(Intent::OpenChooser);
         });
     }
     {
         let areas = areas.clone();
-        let resident = resident.clone();
+        let current = current.clone();
         app.on_open_room(move |index| {
-            if let Some(r) = areas[resident.get()].rooms.get(index as usize) {
+            if let Some(r) = areas[current.get()].rooms.get(index as usize) {
                 println!("couch-gui: open room '{}'", r.name);
             }
         });
@@ -326,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let weak = app.as_weak();
+        let ask = ask.clone();
         app.on_chosen(move |index| {
             let Some(app) = weak.upgrade() else { return };
             let title = app
@@ -334,11 +324,113 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|i| i.title.to_string())
                 .unwrap_or_default();
             println!("couch-gui: chose '{title}'");
-            app.set_chooser_shown(false);
+            ask(Intent::CloseChooser);
         });
+    }
+    {
+        let ask = ask.clone();
+        app.on_close_chooser(move || ask(Intent::CloseChooser));
     }
     app.on_back(|| println!("couch-gui: back"));
     app.on_home(|| println!("couch-gui: home"));
+
+    // A page change, performed. The slide is a copy, not a render: the frame
+    // on the panel is kept (page A), the change is applied to the UI in one
+    // go with the ring hidden and rendered once into RAM (page B), and the
+    // panel then shows A pushed out by B a little further each refresh, by
+    // memcpy, while the rows that must not move - the status bar, and the
+    // pager on an area change - are B throughout. The ring is hidden across
+    // the change so B has none; letting it go again afterwards is what starts
+    // its 200ms fade in on the next normal frame.
+    //
+    // Order matters twice over. The snapshot comes before anything changes,
+    // because RAM equals the panel only until something is drawn. And the
+    // chooser's `changed shown` handler, which puts its list back to the top,
+    // runs from update_timers_and_animations - so that runs before B is
+    // rendered, or B would show the list where it was last left.
+    //
+    // Reports what it cost as frames: B's rasterisation and then one per
+    // transition frame, so the five-second line counts them with the rest.
+    let transition = {
+        let areas = areas.clone();
+        let current = current.clone();
+        let put_front = put_front.clone();
+        let report = std::env::var_os("COUCH_REGION").is_some();
+        move |screen: &mut Panel, window: &MinimalSoftwareWindow, app: &App, what: Intent|
+              -> Option<SlideCost> {
+            let chooser = app.get_chooser_shown();
+            let status = (0u32, app.get_status_h().round() as u32);
+            let dots = (app.get_dots_y().round() as u32, app.get_dots_h().round() as u32);
+            let (above, above_and_pager) = ([status], [status, dots]);
+            let from;
+            let keep: &[(u32, u32)];
+            match what {
+                Intent::Area(delta) => {
+                    let cur = current.get();
+                    let next = (cur as i32 + delta).rem_euclid(areas.len() as i32) as usize;
+                    if next == cur {
+                        return None;
+                    }
+                    current.set(next);
+                    if chooser {
+                        // The hub is off screen behind the chooser (COUCH_SLIDE
+                        // under COUCH_OPEN): change the page where it is. There
+                        // is nothing to see, so nothing to slide.
+                        put_front(app, next);
+                        return None;
+                    }
+                    screen.snapshot();
+                    app.set_ring_hidden(true);
+                    put_front(app, next);
+                    from = if delta > 0 { Arrive::FromRight } else { Arrive::FromLeft };
+                    keep = &above_and_pager[..];
+                }
+                Intent::OpenChooser => {
+                    if chooser {
+                        return None;
+                    }
+                    screen.snapshot();
+                    app.set_ring_hidden(true);
+                    app.set_chooser_shown(true);
+                    from = Arrive::FromRight;
+                    keep = &above[..];
+                }
+                Intent::CloseChooser => {
+                    if !chooser {
+                        return None;
+                    }
+                    screen.snapshot();
+                    app.set_ring_hidden(true);
+                    app.set_chooser_shown(false);
+                    from = Arrive::FromLeft;
+                    keep = &above[..];
+                }
+            }
+            slint::platform::update_timers_and_animations();
+            let mut cost = SlideCost::default();
+            if let Some(us) = screen.render_offscreen(window) {
+                if report {
+                    println!("couch-gui: slide: page B rendered in {us} us");
+                }
+                cost.frames += 1;
+                cost.work_us += us;
+                cost.max_us = us;
+                let slid = screen.slide(from, keep, SLIDE);
+                cost.frames += slid.frames;
+                cost.work_us += slid.work_us;
+                cost.wait_us += slid.wait_us;
+                cost.max_us = cost.max_us.max(slid.max_us);
+            }
+            // The ring's fade takes its start time from the animation tick
+            // at the moment the flag changes, and that tick only advances in
+            // update_timers_and_animations - last called before B, a slide
+            // ago. Advance it first, or the fade begins 180ms in and the ring
+            // pops rather than fades.
+            slint::platform::update_timers_and_animations();
+            app.set_ring_hidden(false);
+            Some(cost)
+        }
+    };
 
     app.show().map_err(|e| format!("show: {e:?}"))?;
 
@@ -533,6 +625,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if auto_slide && now >= slide_at {
             app.invoke_area_step(1);
             slide_at = now + 1_500_000;
+        }
+
+        // Everything above only asked; this is where a page change happens,
+        // with no event being dispatched and the draw free to run. It blocks
+        // for the slide's duration: keys pressed meanwhile queue in the
+        // keypad and are taken one per frame afterwards, so a second Left or
+        // Right simply slides again.
+        if let Some(what) = intent.take() {
+            if let Some(cost) = transition(&mut screen, &window, &app, what) {
+                frames += cost.frames;
+                render_us += cost.work_us;
+                wait_us += cost.wait_us;
+                frame_max = frame_max.max(cost.max_us);
+            }
         }
 
         slint::platform::update_timers_and_animations();

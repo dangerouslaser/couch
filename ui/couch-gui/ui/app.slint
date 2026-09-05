@@ -23,17 +23,23 @@ export component App inherits Window {
     in-out property <[LiveActivity]> activities;
     in-out property <[RoomRow]> rooms;
     in-out property <[SceneCell]> scenes;
-    // The incoming page during a transition; the host fills it, then asks for
-    // the slide, then adopts it when the hub reports settled.
-    in-out property <[RoomRow]> rooms-next;
-    in-out property <[LiveActivity]> activities-next;
-    in-out property <[SceneCell]> scenes-next;
-    callback settled();
-    public function slide(dir: int) { hub.slide(dir); }
     in-out property <string> area-name: "HOME";
     in-out property <int> area-index: 0;
     in-out property <[bool]> area-dots;
     callback area-step(int);
+
+    // A page change is not animated here. The host keeps the frame on the
+    // panel, applies the change as an instant state change with this set,
+    // renders that once, and slides the old frame out and the new one in by
+    // copying - a memcpy a frame where re-rasterising two pages was up to
+    // 29ms (src/panel.rs). Then it clears this and the ring fades in.
+    in-out property <bool> ring-hidden: false;
+    /// The rows above the page, which a transition holds still.
+    out property <length> status-h: 56px;
+    /// The pager's band in window space, held still through an area change:
+    /// it is the control, and should not travel with the thing it controls.
+    out property <length> dots-y: root.status-h + hub.dots-y;
+    out property <length> dots-h: hub.dots-h;
 
     // --- interaction ----------------------------------------------------------
     // A single top-level FocusScope driving an integer index, rather than Slint's
@@ -89,6 +95,10 @@ export component App inherits Window {
     in-out property <[ChoiceItem]> chooser-items;
     in-out property <int> chooser-index: 0;
     callback chosen(int);
+    /// Escape, or Left and Right, inside the list. A callback rather than a
+    /// write to chooser-shown: closing is a page transition, and that is the
+    /// host's to perform once this key's dispatch has returned.
+    callback close-chooser();
 
     function chooser-move(delta: int) {
         if (root.chooser-items.length <= 0) { return; }
@@ -121,11 +131,11 @@ export component App inherits Window {
                 if (e.text == Key.UpArrow)   { root.chooser-move(-1); return accept; }
                 if (e.text == Key.DownArrow) { root.chooser-move(1);  return accept; }
                 if (e.text == Key.Return) { root.chosen(root.chooser-index); return accept; }
-                if (e.text == Key.Escape) { root.chooser-shown = false; return accept; }
+                if (e.text == Key.Escape) { root.close-chooser(); return accept; }
                 // Left and right change area everywhere else; inside a list
                 // they would have nothing to do, so they close it.
                 if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
-                    root.chooser-shown = false;
+                    root.close-chooser();
                     return accept;
                 }
                 return accept;
@@ -160,23 +170,26 @@ export component App inherits Window {
         charging: root.charging;
     }
 
-    // The hub and whatever it opens, side by side on a strip that slides. The
-    // chooser was an overlay first; a sheet over a dimmed hub looked out of
-    // place in a UI where everything else is a page, and a translucent scrim
-    // costs a composite of the whole panel every frame where an opaque page is
-    // a fill. Same motion as changing area, same duration, same layout.
+    // The hub and whatever it opens, side by side on a strip. The chooser was
+    // an overlay first; a sheet over a dimmed hub looked out of place in a UI
+    // where everything else is a page, and a translucent scrim costs a
+    // composite of the whole panel every frame where an opaque page is a
+    // fill. Same motion as changing area, same duration, same layout.
+    //
+    // The strip jumps rather than animates: the slide between the frame
+    // before the jump and the frame after it is composed by the host, see
+    // ring-hidden above.
     Rectangle {
         visible: !root.setup-mode;
-        y: 56px;
+        y: root.status-h;
         width: parent.width;
-        height: parent.height - 56px;
+        height: parent.height - root.status-h;
         clip: true;
 
         Rectangle {
             x: root.chooser-shown ? -root.width : 0px;
             width: root.width * 2;
             height: parent.height;
-            animate x { duration: 190ms; easing: ease-out; }
 
             hub := HomeHub {
                 // Sized from the window, not from the parent: the parent is
@@ -187,14 +200,12 @@ export component App inherits Window {
                 width: root.width;
                 height: parent.height;
                 activities: root.activities;
-                activities-next: root.activities-next;
                 rooms: root.rooms;
-                rooms-next: root.rooms-next;
                 scenes: root.scenes;
-                scenes-next: root.scenes-next;
                 area-index: root.area-index;
                 area-dots: root.area-dots;
                 focus-row: root.focus-row;
+                ring-hidden: root.ring-hidden;
                 pick(r) => {
                     root.focus-row = r;
                     hub.follow-focus();
@@ -202,7 +213,6 @@ export component App inherits Window {
                 open-strip => { root.open-strip(); }
                 open-room(i) => { root.open-room(i); }
                 open-scenes => { root.open-scenes(); }
-                settled() => { root.settled(); }
             }
 
             Chooser {

@@ -107,13 +107,9 @@ component AreaPane inherits Rectangle {
         }
     }
 
-    // Whether this pane has a ring at all. The page sliding in has none: its
-    // focus is the resident page's the moment it is adopted, and a ring of
-    // its own drew on its strip the whole way across and then handed over to
-    // the real ring on the first room - the "up to the activities and back
-    // down" that was once blamed on the animation.
-    in property <bool> has-focus: true;
-    // Faded out while a page is crossing, back in once it has settled.
+    // Gone while the host composes a page transition, so the frame it renders
+    // of the new page has no ring on it; back, with a fade, once the page has
+    // arrived. Instant one way and slow the other, see the ring below.
     in property <bool> ring-hidden: false;
 
     // The area list scrolls rather than paginating. Everything else on the hub
@@ -134,7 +130,7 @@ component AreaPane inherits Rectangle {
     /// into by the shell. The pager belongs to the hub, not to a page - it must
     /// not slide with one - but it belongs *here* on the screen, so the pane
     /// reserves the space and publishes where it ended up.
-    property <length> dots-h: 6px;
+    out property <length> dots-h: 6px;
 
     // Everything under the rooms is anchored to the bottom: its place is the
     // pane's height less fixed furniture, the same with or without a strip,
@@ -508,21 +504,27 @@ component AreaPane inherits Rectangle {
     // Drawn last so it is never behind a card, and outside the scrolling
     // viewport so a scroll and a focus move do not have to be reconciled -
     // ring-y is in pane space with the scroll already taken off.
-    if root.has-focus: Rectangle {
+    Rectangle {
         x: Theme.pad-side;
         y: fs.ring-y;
         width: root.width - 2 * Theme.pad-side;
         height: fs.ring-h;
         background: transparent;
-        // The page sliding in carries no ring, so the ring is the one thing
-        // that does not arrive with the page: it lands when the page has
-        // settled, and a landing straight after 180ms of motion reads as a
-        // stutter unless it fades in. Out fast, so it is gone before the old
-        // page has travelled far; in slower, so the arrival is the thing you
-        // notice.
+        // The page arriving carries no ring: the old page takes its ring away
+        // with it, and the new one's lands when the page has arrived, and a
+        // landing straight after 180ms of motion reads as a stutter unless it
+        // fades in. So: gone at once when hidden - the host renders the new
+        // page exactly once with this true, and that frame must have no ring
+        // on it - and 200ms back.
+        //
+        // A binding's animation reads its duration when the property is next
+        // evaluated, not when the input changed (docs/slint-notes.md), which
+        // is what makes this safe: the hidden frame is always rendered before
+        // the flag comes back, so each duration is read under the flag it is
+        // for.
         opacity: root.ring-hidden ? 0 : 1;
         animate opacity {
-            duration: root.ring-hidden ? 90ms : 200ms;
+            duration: root.ring-hidden ? 0ms : 200ms;
             easing: ease-out;
         }
         FocusRing {
@@ -540,89 +542,40 @@ export component HomeHub inherits Rectangle {
     callback open-room(int);
     callback open-scenes();
     in property <[LiveActivity]> activities;
+    in property <[RoomRow]> rooms;
+    in property <[SceneCell]> scenes;
     in property <int> area-index;
     // A model purely to count dots; Slint has no numeric range loop.
     in property <[bool]> area-dots;
 
-    // Two panes: the one on screen, and the one sliding in. The host fills the
-    // back pane before asking for the slide, and adopts it when settled().
-    in property <[RoomRow]> rooms;
-    in property <[SceneCell]> scenes;
-    in property <[LiveActivity]> activities-next;
-    in property <[RoomRow]> rooms-next;
-    in property <[SceneCell]> scenes-next;
-
     in property <int> focus-row;
-    // The resident page's row arithmetic, for the shell to wrap around with.
+    // The host has the page's ring hidden while it composes a transition.
+    in property <bool> ring-hidden: false;
+    // The page's row arithmetic, for the shell to wrap around with.
     out property <int> first-room-row: front.first-room-row;
     out property <int> row-count: front.row-count;
+    // Where the pager is, in the hub's own space, for the host to hold those
+    // rows still while it slides the page under them. Arithmetic over the
+    // layout's padding and the pane's own figure, not read back off the
+    // laid-out dots.
+    out property <length> dots-y: Theme.pad-top + front.dots-y;
+    out property <length> dots-h: front.dots-h;
 
     // Measured off our own height rather than the parent's, which a component
     // root cannot see. The strip is conditional, and so is the gap above it.
     property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom;
 
-    // A slide rather than a cross-fade, and only over the part that changes.
-    // Blending two layers costs roughly twice writing each pixel once, which on
-    // this CPU is the difference between comfortable and not; and the pager is
-    // the control, so it should not travel with the thing it controls.
-    property <bool> jumping: false;
-    out property <bool> sliding: false;
-    property <bool> from-right: true;
-    property <length> strip-x: 0px;
-    animate strip-x {
-        duration: root.jumping ? 0ms : 180ms;
-        easing: ease-out;
-    }
-    callback settled();
-
-    // The transition is split in two so the incoming page is built before
-    // anything moves. Creating the pane and starting the animation in the same
-    // frame put the whole cost of instantiating a page - repeater items, text
-    // layout, the lot - inside the first animated frame, which is exactly where
-    // it is most visible as a stutter.
-    public function slide(dir: int) {
-        root.from-right = dir > 0;
-        root.sliding = true;
-        prep-timer.running = true;
-    }
-
-    prep-timer := Timer {
-        interval: 16ms;
-        running: false;
-        triggered() => {
-            self.running = false;
-            root.jumping = true;
-            root.strip-x = 0px;
-            root.jumping = false;
-            root.strip-x = root.from-right ? -root.width : root.width;
-            settle-timer.running = true;
-        }
-    }
-
-    settle-timer := Timer {
-        interval: 180ms;
-        running: false;
-        triggered() => {
-            self.running = false;
-            // Adopt the incoming pane as the resident one and jump back, which
-            // is invisible because the host has just swapped the content.
-            root.settled();
-            root.jumping = true;
-            root.strip-x = 0px;
-            root.jumping = false;
-            root.sliding = false;
-        }
-    }
-
+    // One pane. A page change replaces its models in one go and the host
+    // slides between the frame before and the frame after - a copy per frame.
+    // There was a second pane for the incoming page, on a strip that
+    // animated, with a timer to build the page before the first moving frame
+    // and another to adopt it after the last: every frame rasterised both
+    // pages, 10-29ms, over a 16.7ms budget. The pager stays here because it
+    // is the control, and it belongs to the hub, not to a page.
     public function follow-focus() { front.follow-focus(); }
     public function land() { front.land(); }
-    /// OK. Nothing while a page is crossing: the pager already names the next
-    /// page and the pane still holds the last, and acting on either would be
-    /// a surprise. Taps are held back for the same reason.
-    public function activate() {
-        if (root.sliding) { return; }
-        front.activate();
-    }
+    /// OK.
+    public function activate() { front.activate(); }
 
     background: Theme.bg;
 
@@ -630,44 +583,30 @@ export component HomeHub inherits Rectangle {
         padding-top: Theme.pad-top;
         padding-bottom: Theme.pad-bottom;
 
-        // Left and right move between areas, up and down between rooms. Only
-        // this window moves; the pager over it does not.
         Rectangle {
-            clip: true;
-            Rectangle {
-                x: root.strip-x;
-                front := AreaPane {
-                    x: 0px;
-                    width: root.width;
-                    height: root.pane-h;
-                    activities: root.activities;
-                    rooms: root.rooms;
-                    scenes: root.scenes;
-                    focus-row: root.focus-row;
-                    has-focus: true;
-                    ring-hidden: root.sliding;
-                    pick(r) => { if (!root.sliding) { root.pick(r); } }
-                    open-strip => { if (!root.sliding) { root.open-strip(); } }
-                    open-room(i) => { if (!root.sliding) { root.open-room(i); } }
-                    open-scenes => { if (!root.sliding) { root.open-scenes(); } }
-                }
-                if root.sliding: AreaPane {
-                    x: root.from-right ? root.width : -root.width;
-                    width: root.width;
-                    height: root.pane-h;
-                    activities: root.activities-next;
-                    rooms: root.rooms-next;
-                    scenes: root.scenes-next;
-                    has-focus: false;
-                }
+            front := AreaPane {
+                x: 0px;
+                y: 0px;
+                width: root.width;
+                height: root.pane-h;
+                activities: root.activities;
+                rooms: root.rooms;
+                scenes: root.scenes;
+                focus-row: root.focus-row;
+                ring-hidden: root.ring-hidden;
+                pick(r) => { root.pick(r); }
+                open-strip => { root.open-strip(); }
+                open-room(i) => { root.open-room(i); }
+                open-scenes => { root.open-scenes(); }
             }
 
             // The pager, over the slot the pane reserves between the rooms and
             // the scenes label. It belongs to the hub rather than to a page, so
             // it must not travel with one - hence positioned here rather than
-            // laid out inside the pane.
+            // laid out inside the pane, and held still by the host during a
+            // transition, which asks where it is through dots-y.
             //
-            // After the strip, because the pane paints an opaque background and
+            // After the pane, because the pane paints an opaque background and
             // anything declared before it is painted out. With an explicit x
             // and width, because a HorizontalLayout given a y inside a plain
             // Rectangle does not size itself and lays out into nothing. Each of
@@ -676,7 +615,7 @@ export component HomeHub inherits Rectangle {
                 x: 0px;
                 y: front.dots-y;
                 width: parent.width;
-                height: 6px;
+                height: front.dots-h;
                 spacing: 6px;
                 alignment: center;
                 for dot[i] in root.area-dots: Rectangle {
