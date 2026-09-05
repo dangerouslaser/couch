@@ -259,10 +259,41 @@ impl Panel {
     /// Panel and key backlights. init used to rewrite 255 to both every five
     /// seconds; stage2 stops that loop so the levels set here stick. The key
     /// LEDs are all or nothing: lit only at full brightness.
+    ///
+    /// A write that matches the value the LED node already holds is dropped
+    /// by the LED layer before it reaches the display driver (measured: 10ms
+    /// and no driver call, against 110ms and a PWM change otherwise). That is
+    /// harmless until the driver below it silently loses a write - seen once
+    /// on a wake from dim: the node said 255, the PWM stayed at the dim level,
+    /// and every later 255 was deduplicated away. So the panel was stuck dim
+    /// until something wrote a different value. Writing a neighbour first
+    /// when the node already holds the target defeats that, at the cost of a
+    /// second driver call only in the case that would otherwise be stuck.
     pub fn set_backlight(level: u8) {
-        let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", format!("{level}\n"));
+        const LCD: &str = "/sys/class/leds/lcd-backlight/brightness";
+        let held: Option<u8> = std::fs::read_to_string(LCD)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        if held == Some(level) {
+            let nudge = if level == 255 { 254 } else { level + 1 };
+            let _ = std::fs::write(LCD, format!("{nudge}\n"));
+        }
+        if let Err(e) = std::fs::write(LCD, format!("{level}\n")) {
+            println!("couch-gui: backlight {level}: {e}");
+        }
         let keys = if level == 255 { "255\n" } else { "0\n" };
         let _ = std::fs::write("/sys/class/leds/button-backlight/brightness", keys);
+    }
+
+    /// The backlight, delivered for certain: a neighbouring value first, then
+    /// the level, so both reach the driver whatever the LED node holds. Two
+    /// driver calls, ~220ms of the display's command queue; used once, a
+    /// second after a wake, to catch a write the driver dropped.
+    pub fn force_backlight(level: u8) {
+        const LCD: &str = "/sys/class/leds/lcd-backlight/brightness";
+        let nudge = if level == 255 { 254 } else { level + 1 };
+        let _ = std::fs::write(LCD, format!("{nudge}\n"));
+        let _ = std::fs::write(LCD, format!("{level}\n"));
     }
 
     pub fn backlight_on() {

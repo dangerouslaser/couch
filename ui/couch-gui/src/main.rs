@@ -51,9 +51,15 @@ enum Intent {
 /// the first key only wakes it - a dark remote should not change the house
 /// because someone found the wrong button in the dark. The microphone key is
 /// the exception: holding it in the dark means "talk", so it wakes and records.
+/// Only a key wakes; a touch on a dimmed or dark panel is ignored, and the
+/// touch controller is suspended anyway while the panel is off.
 ///
 /// A pairing PIN on screen, a recording in progress, or first-run setup hold
 /// the panel awake: each is something a person is looking at or waiting on.
+///
+/// A second after every wake the backlight is written once more, forced past
+/// the LED layer's deduplication - see `Panel::set_backlight` for the dropped
+/// write that left the panel stuck dim while the LED node said 255.
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum Standby {
     Active,
@@ -541,6 +547,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let off_after_us = env_secs("COUCH_OFF_S", OFF_AFTER_S) * 1_000_000;
     let mut standby = Standby::Active;
     let mut last_input = now_monotonic_us();
+    // When to re-assert the backlight after a wake, forced past the LED
+    // layer; None when nothing is owed.
+    let mut verify_at: Option<u64> = None;
     println!(
         "couch-gui: standby: dim after {}s, off after {}s",
         dim_after_us / 1_000_000,
@@ -564,6 +573,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("couch-gui: standby: wake on key ({:?})", standby);
                 wake(&mut screen);
                 standby = Standby::Active;
+                verify_at = Some(now_monotonic_us() + 1_000_000);
             }
             if swallow {
                 continue;
@@ -602,16 +612,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Slint's own hit testing decides what a tap lands on, so nothing here
         // needs to know what is on screen.
         while let Some(event) = pointer.poll() {
-            last_input = now_monotonic_us();
+            // A touch neither wakes the panel nor counts as input while it is
+            // dimmed or dark: a button does. The events are still drained so
+            // the first tap after a wake starts from a clean state.
             if standby != Standby::Active {
-                println!("couch-gui: standby: wake on touch ({:?})", standby);
-                wake(&mut screen);
-                let was_off = standby == Standby::Off;
-                standby = Standby::Active;
-                if was_off {
-                    continue;
-                }
+                continue;
             }
+            last_input = now_monotonic_us();
             let (position, ev) = match event {
                 touch::Event::Pressed { x, y } => (
                     LogicalPosition::new(x, y),
@@ -708,6 +715,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("couch-gui: standby: wake to show something ({:?})", standby);
                     wake(&mut screen);
                     standby = Standby::Active;
+                    verify_at = Some(now + 1_000_000);
                 }
             } else if standby == Standby::Active && idle >= dim_after_us {
                 println!("couch-gui: standby: dim after {}s idle", idle / 1_000_000);
@@ -772,7 +780,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frames += 1;
                 frame_max = frame_max.max(cost.work_us);
             }
-            None => std::thread::sleep(Duration::from_millis(5)),
+            None => {
+                // Idle, so the ~220ms this costs hitches nothing on screen.
+                if verify_at.is_some_and(|t| now_monotonic_us() >= t) && standby == Standby::Active {
+                    verify_at = None;
+                    Panel::force_backlight(255);
+                    slint::platform::update_timers_and_animations();
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }
 
         if now_monotonic_us() - last_stat > 5_000_000 && frames > 0 {

@@ -384,9 +384,24 @@ now stops that loop, and `couch-gui` owns brightness with two idle timers:
 | 30s idle | backlight 40 | off | acts as normal |
 | 120s idle | powered down: LCM, backlight PWM and touch suspended (`FBIOBLANK`) | off | wakes only, not acted on |
 
-The mic key is the exception on a dark panel: holding it means "talk", so it
-wakes and records. A pairing PIN on screen, a recording, or first-run setup
-hold the panel awake. While off, nothing is rasterised or copied; Slint's
+Only a key wakes the panel; a touch on a dimmed or dark panel is ignored (and
+the controller is suspended while it is off). The mic key is the exception on
+a dark panel: holding it means "talk", so it wakes and records. A pairing PIN
+on screen, a recording, or first-run setup hold the panel awake.
+
+**The backlight write can be lost, and then it sticks.** The LED layer drops a
+write that matches the value the node already holds (10ms, no driver call,
+against 110ms and a PWM change otherwise). Once, on a real wake from dim, the
+display driver silently lost the write of 255 - the node said 255, the PWM
+log showed the dim level still applied - and from then on every 255 was
+deduplicated away: a dark remote that answered keys. `Panel::set_backlight`
+writes a neighbouring value first when the node already holds the target, and
+a second after every wake the GUI re-asserts full brightness the same forced
+way while the screen is idle. Verified by forcing the PWM to the dim level
+behind the LED node (`echo backlight:40 > /sys/kernel/debug/dispsys`) and
+probing the applied level with a later write's `old =`: recovered. The
+driver's log line is rate-limited (`dmesg` reports suppressed messages), so a
+missing line is not a missing write - probe with `old =` instead. While off, nothing is rasterised or copied; Slint's
 state keeps advancing and the first frame after waking catches up, with the
 whole picture pushed from RAM because the panel was re-initialised. Input is
 polled every 40ms while off. `COUCH_DIM_S` and `COUCH_OFF_S` shorten the
