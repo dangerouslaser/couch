@@ -25,10 +25,30 @@ export component Chooser inherits Rectangle {
     /// the first row's ring is cut off against the top edge.
     property <length> bleed: 6px;
 
-    visible: root.shown;
+    // Slides up from the bottom edge, and back down to it.
+    //
+    // Slide rather than fade, because this renderer is bound by how many pixels
+    // it touches: fading a full-screen scrim composites the whole panel every
+    // frame at about 11ms a go, while a slide only dirties the band the panel
+    // moves through. The scrim itself appears and goes in one step for the same
+    // reason - it is one full-screen frame each way instead of fifteen.
+    //
+    // `visible` is derived from the offset rather than from `shown` so the
+    // closing slide is actually seen; keyed off `shown` the panel would vanish
+    // on the first frame and animate to nowhere.
+    property <length> offset: root.shown ? 0px : root.height;
+    animate offset { duration: 190ms; easing: ease-out; }
+
+    visible: root.offset < root.height - 1px;
     background: #000000EE;
 
     VerticalLayout {
+        // Explicit x/width/height for the same reason as the pager: a layout
+        // handed a y inside a plain Rectangle does not size itself.
+        x: 0px;
+        y: root.offset;
+        width: root.width;
+        height: root.height;
         padding-left: Theme.pad-side;
         padding-right: Theme.pad-side;
         padding-top: 26px;

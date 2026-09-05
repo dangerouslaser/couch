@@ -347,11 +347,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tz_offset = system::utc_offset_seconds();
     let mut tz_checked = now_monotonic_us();
     // COUCH_OPEN presses OK on whatever COUCH_FOCUS selected, so the chooser
-    // can be photographed without driving the keypad. It has to come after the
-    // handlers are registered; invoking a callback nobody has set does nothing.
-    if std::env::var("COUCH_OPEN").is_ok() {
-        app.invoke_activated(app.get_focus_row());
-    }
+    // can be photographed without driving the keypad. Fired from the loop a
+    // moment in rather than here: a property set before the first frame has
+    // nothing to animate from, so opening it at startup would never show the
+    // transition it exists to demonstrate.
+    let open_at = std::env::var("COUCH_OPEN")
+        .is_ok()
+        .then(|| now_monotonic_us() + 2_000_000);
+    let mut opened = false;
 
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
@@ -441,6 +444,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let now = now_monotonic_us();
+        if let Some(at) = open_at {
+            if !opened && now >= at {
+                opened = true;
+                app.invoke_activated(app.get_focus_row());
+            }
+        }
 
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {
