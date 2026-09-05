@@ -179,11 +179,14 @@ export component App inherits Window {
             height: parent.height;
             animate x { duration: 190ms; easing: ease-out; }
 
-        hub := HomeHub {
-                    y: 0px;
-            x: 0px;
-            width: parent.width;
-            height: parent.height - 56px;
+            hub := HomeHub {
+                // Sized from the window, not from the parent: the parent is
+                // the two-page strip and is twice as wide, and the viewport
+                // above has already taken the status bar off the height.
+                x: 0px;
+                y: 0px;
+                width: root.width;
+                height: parent.height;
             pick(r) => {
                 root.focus-row = r;
                 hub.ensure-visible();
