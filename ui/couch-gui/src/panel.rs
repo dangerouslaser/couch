@@ -315,7 +315,51 @@ impl Panel {
         self.blanked = off;
         if !off {
             self.refresh_all();
+            self.present();
         }
+    }
+
+    /// Make the display engine show the framebuffer again.
+    ///
+    /// After a resume the LCM is lit and scanning, but the overlay it scans
+    /// was configured by the last FBIOPAN_DISPLAY - Android re-presents after
+    /// every resume, and nothing here did. Measured: framebuffer full of UI,
+    /// driver reporting Alive, backlight up, panel black. A pan with zero
+    /// offsets re-applies the layer with this buffer. It blocks until the
+    /// next refresh (~17ms), longer while a key is held, which a wake is
+    /// prepared to pay once.
+    pub fn present(&mut self) {
+        let fd = self.fb.as_raw_fd();
+        if let Some(var) = self.var.as_mut() {
+            if let Err(e) = pan_display(fd, var) {
+                println!("couch-gui: present: FBIOPAN_DISPLAY failed with {}", errno_name(e));
+            }
+        }
+    }
+
+    /// Whether the display driver has the panel asleep, whoever put it there.
+    ///
+    /// The GUI's own `blanked` flag only knows what the GUI asked for. Once,
+    /// with the GUI merely dimmed, the driver reported `State=Sleep` and
+    /// refused every backlight write - the wake wrote 255 and the panel stayed
+    /// black. Nothing in this process had blanked it. The driver's debugfs
+    /// status is the only place the truth is readable, so a wake asks it and
+    /// unblanks if it must. Unreadable debugfs reads as "not asleep".
+    pub fn display_asleep() -> bool {
+        std::fs::read_to_string("/sys/kernel/debug/mtkfb")
+            .map(|s| s.contains("State=Sleep"))
+            .unwrap_or(false)
+    }
+
+    /// Unblank whether or not this process blanked, when the driver says the
+    /// panel is asleep. The GUI's flag is reconciled to what the driver did.
+    pub fn unblank_if_asleep(&mut self) -> bool {
+        if !self.blanked && !Panel::display_asleep() {
+            return false;
+        }
+        self.blanked = true;
+        self.blank(false);
+        true
     }
 
     /// Copy every row of RAM to the panel.

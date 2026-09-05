@@ -389,6 +389,32 @@ the controller is suspended while it is off). The mic key is the exception on
 a dark panel: holding it means "talk", so it wakes and records. A pairing PIN
 on screen, a recording, or first-run setup hold the panel awake.
 
+**A resumed panel shows nothing until it is re-presented.** After the
+display driver suspends and resumes the LCM (`FBIOBLANK`), the backlight
+comes up and the panel scans - but the overlay it scans was configured by the
+last `FBIOPAN_DISPLAY`, and Android re-presents after every resume where
+nothing here did. Measured on a real wake: framebuffer full of the UI, driver
+reporting `State=Alive`, backlight at 255, panel black; running the GUI with
+`COUCH_VSYNC=pan` for five seconds brought the picture up and it stayed.
+`Panel::present` issues one zero-offset pan after every unblank and once at
+startup (whoever resumed the panel before the GUI started did not re-present
+it either). It blocks ~17ms, longer while a key is held, which a wake pays
+once.
+
+**The panel can be asleep without the GUI having asked.** A second real
+failure: the GUI had only dimmed, then a key woke it, wrote 255, and the
+screen stayed black. The display driver's status (`/sys/kernel/debug/mtkfb`)
+read `State=Sleep` - the LCM suspended - and the PWM still held the dim level.
+Nothing in the GUI had blanked it and a two-minute watch of a dimmed idle
+panel never reproduced it, so a watcher now logs every `Alive`/`Sleep`
+transition with the driver's own line naming the caller (`lcm_suspend` is
+logged with the calling pid and comm). Whatever the cause, the GUI no longer
+trusts its own `blanked` flag: every wake asks the driver and unblanks if the
+panel is asleep for any reason before setting the backlight, and the
+one-second tick does the same in every state but Off, re-asserting the
+backlight level forced past the LED layer. A panel that goes dark on its own
+comes back within a second. The unblank on a live panel is a 10-20ms no-op.
+
 **The backlight write can be lost, and then it sticks.** The LED layer drops a
 write that matches the value the node already holds (10ms, no driver call,
 against 110ms and a PWM change otherwise). Once, on a real wake from dim, the

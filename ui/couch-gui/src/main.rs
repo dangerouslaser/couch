@@ -85,7 +85,9 @@ const OFF_AFTER_S: u64 = 120;
 /// measured. Refreshing the tick here is what makes the first press after a
 /// wake glide like any other.
 fn wake(screen: &mut Panel) {
-    screen.blank(false);
+    if screen.unblank_if_asleep() {
+        println!("couch-gui: standby: panel was asleep, unblanked");
+    }
     Panel::set_backlight(255);
     slint::platform::update_timers_and_animations();
 }
@@ -112,6 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Panel::backlight_on();
     screen.claim(BACKGROUND);
+    // Whoever resumed the panel before this process started did not
+    // re-present it; do it once, so the first frame is seen.
+    screen.present();
 
     let app = App::new().map_err(|e| format!("App::new: {e:?}"))?;
 
@@ -709,6 +714,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // powers down, on the two idle timers.
             let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode();
             let idle = now.saturating_sub(last_input);
+            // The panel is meant to be showing something in every state but
+            // Off. If the driver says it is asleep anyway - it has happened,
+            // with nothing in this process asking - bring it back now rather
+            // than at the next wake, and re-assert the level the LED node
+            // thinks it already has.
+            if standby != Standby::Off && screen.unblank_if_asleep() {
+                println!("couch-gui: standby: panel found asleep while {:?}, unblanked", standby);
+                Panel::force_backlight(if standby == Standby::Dim { DIM_LEVEL } else { 255 });
+                slint::platform::update_timers_and_animations();
+            }
             if hold {
                 last_input = now;
                 if standby != Standby::Active {
@@ -784,6 +799,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Idle, so the ~220ms this costs hitches nothing on screen.
                 if verify_at.is_some_and(|t| now_monotonic_us() >= t) && standby == Standby::Active {
                     verify_at = None;
+                    if screen.unblank_if_asleep() {
+                        println!("couch-gui: standby: panel asleep after wake, unblanked");
+                    }
                     Panel::force_backlight(255);
                     slint::platform::update_timers_and_animations();
                 }
