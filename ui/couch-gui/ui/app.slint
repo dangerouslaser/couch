@@ -168,6 +168,9 @@ export component App inherits Window {
             root.focus-row = r;
             hub.ensure-visible();
         }
+        // A tap on the strip or the scenes row opens it, because those two
+        // exist only to be opened; a tap on a room only selects it.
+        open(r) => { root.activated(r); }
         activities: root.activities;
         activities-next: root.activities-next;
         rooms: root.rooms;

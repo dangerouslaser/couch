@@ -81,6 +81,7 @@ component AreaPane inherits Rectangle {
     // is not. The keyboard, where a key has no meaningful selected state, is
     // where direct activation belongs instead.
     callback pick(int);
+    callback open(int);
 
     in property <bool> ring-hidden: false;
     in property <int> focus-row;
@@ -101,16 +102,22 @@ component AreaPane inherits Rectangle {
     // re-run dirties the whole component - a 452x654 rect, ~23ms, on the first
     // frame of every focus move. The animation after it was always smooth; the
     // stutter was this frame, at the front of it.
-    property <length> acts-h: root.activities.length == 0 ? 0px
-        : 66px + 2 * root.ring-bleed
-          + (root.activities.length > 2 ? 12px : 0px);
-    property <length> scenes-h: 74px + 2 * root.ring-bleed
-                                + (root.scenes.length > 2 ? 12px : 0px);
-    // Children of the pane's VerticalLayout: rooms, the label, scenes, and the
-    // activity block when there is one. Spacing sits between them.
-    property <int> kids: 3 + (root.activities.length > 0 ? 1 : 0);
-    property <length> avail: root.height - root.acts-h - root.scenes-h - 19px
+    property <length> acts-h: root.activities.length == 0
+        ? 0px : 66px + 2 * root.ring-bleed;
+    property <length> scenes-h: 74px + 2 * root.ring-bleed;
+    /// A slot between the rooms and the scenes label, left empty here and drawn
+    /// into by the shell. The pager belongs to the hub, not to a page - it must
+    /// not slide with one - but it belongs *here* on the screen, so the pane
+    /// reserves the space and publishes where it ended up.
+    property <length> dots-h: 6px;
+    // Children of the pane's VerticalLayout: rooms, the pager slot, the label,
+    // scenes, and the activity block when there is one.
+    property <int> kids: 4 + (root.activities.length > 0 ? 1 : 0);
+    property <length> avail: root.height - root.acts-h - root.scenes-h - root.dots-h - 19px
                              - (root.kids - 1) * 14px - 2 * root.ring-bleed;
+    out property <length> dots-y:
+        (root.activities.length > 0 ? root.acts-h + 14px : 0px)
+        + root.avail + 2 * root.ring-bleed + 14px;
     property <length> rows-h: max(90px,
         min(Math.floor((root.avail + 11px) / root.row-pitch) * root.row-pitch - 11px,
             root.avail));
@@ -240,7 +247,7 @@ component AreaPane inherits Rectangle {
                 border-width: 1px;
                 border-color: Theme.border-raised;
                 border-radius: Theme.r-card;
-                TouchArea { clicked => { root.pick(0); } }
+                TouchArea { clicked => { root.pick(0); root.open(0); } }
 
                 HorizontalLayout {
                     padding-left: 18px;
@@ -390,6 +397,10 @@ component AreaPane inherits Rectangle {
         }
         }
 
+        // The pager's slot. Empty: the hub draws into it, so the dots stay put
+        // while the page behind them slides.
+        Rectangle { height: root.dots-h; }
+
         SectionLabel { text: "SCENES"; height: 19px; x: root.ring-bleed; }
 
         // One stop, for the same reason as the strip above.
@@ -404,7 +415,7 @@ component AreaPane inherits Rectangle {
                 border-width: 1px;
                 border-color: Theme.border;
                 border-radius: Theme.r-card;
-                TouchArea { clicked => { root.pick(root.scenes-row); } }
+                TouchArea { clicked => { root.pick(root.scenes-row); root.open(root.scenes-row); } }
 
                 HorizontalLayout {
                     padding-left: 18px;
@@ -474,6 +485,7 @@ component AreaPane inherits Rectangle {
 
 export component HomeHub inherits Rectangle {
     callback pick(int);
+    callback open(int);
     in property <[LiveActivity]> activities;
     in property <string> area-name;
     in property <int> area-index;
@@ -497,8 +509,7 @@ export component HomeHub inherits Rectangle {
     property <length> ring-bleed: 6px;
     // Measured off our own height rather than the parent's, which a component
     // root cannot see. The strip is conditional, and so is the gap above it.
-    property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom
-                              - 6px - 14px;
+    property <length> pane-h: root.height - Theme.pad-top - Theme.pad-bottom;
 
     // A slide rather than a cross-fade, and only over the part that changes.
     // Blending two layers costs roughly twice writing each pixel once, which on
@@ -568,23 +579,9 @@ export component HomeHub inherits Rectangle {
     VerticalLayout {
         padding-top: Theme.pad-top;
         padding-bottom: Theme.pad-bottom;
-        spacing: 14px;
 
-        // Left and right move between areas, up and down between rooms. The
-        // Only the dots now: the name and the chevrons live in the status bar,
-        // which is the line that is always on screen anyway.
-        HorizontalLayout {
-            height: 6px;
-            spacing: 6px;
-            alignment: center;
-            for dot[i] in root.area-dots: Rectangle {
-                width: 6px; height: 6px;
-                border-radius: 3px;
-                background: i == root.area-index ? Theme.accent : Theme.border-raised;
-            }
-        }
-
-        // The sliding window. Only this part moves.
+        // Left and right move between areas, up and down between rooms. Only
+        // this window moves; the pager over it does not.
         Rectangle {
             clip: true;
             Rectangle {
@@ -598,6 +595,7 @@ export component HomeHub inherits Rectangle {
                     scenes: root.scenes;
                     ring-hidden: root.sliding;
                     pick(r) => { root.pick(r); }
+                    open(r) => { root.open(r); }
                     focus-row: root.focus-row;
                     first-room-row: root.first-room-row;
                     scenes-row: root.scenes-row;
@@ -612,6 +610,30 @@ export component HomeHub inherits Rectangle {
                     focus-row: -1;
                     first-room-row: root.first-room-row;
                     scenes-row: root.scenes-row;
+                }
+            }
+
+            // The pager, over the slot the pane reserves between the rooms and
+            // the scenes label. It belongs to the hub rather than to a page, so
+            // it must not travel with one - hence positioned here rather than
+            // laid out inside the pane.
+            //
+            // After the strip, because the pane paints an opaque background and
+            // anything declared before it is painted out. With an explicit x
+            // and width, because a HorizontalLayout given a y inside a plain
+            // Rectangle does not size itself and lays out into nothing. Each of
+            // those cost a deploy to find.
+            HorizontalLayout {
+                x: 0px;
+                y: front.dots-y;
+                width: parent.width;
+                height: 6px;
+                spacing: 6px;
+                alignment: center;
+                for dot[i] in root.area-dots: Rectangle {
+                    width: 6px; height: 6px;
+                    border-radius: 3px;
+                    background: i == root.area-index ? Theme.accent : Theme.border-raised;
                 }
             }
         }
