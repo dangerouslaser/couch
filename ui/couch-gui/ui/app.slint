@@ -128,6 +128,8 @@ export component App inherits Window {
     in-out property <string> wifi-ssid: "";
     in-out property <bool> ssh-on: false;
     in-out property <bool> ssh-available: false;
+    // A brief message, e.g. Wi-Fi progress. Non-empty shows it; the host clears it.
+    in-out property <string> toast: "";
     callback setting-brightness-changed(int);
     callback setting-dim-changed(int);
     callback setting-off-changed(int);
@@ -321,6 +323,29 @@ export component App inherits Window {
         shown: root.pair-shown;
         pin: root.pair-pin;
         seconds-left: root.pair-seconds;
+    }
+
+    // A transient message near the bottom, above everything. The host sets the
+    // text and clears it on a timer.
+    if root.toast != "": Rectangle {
+        x: 24px;
+        width: parent.width - 48px;
+        height: 56px;
+        y: parent.height - self.height - 40px;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.border-raised;
+        border-radius: Theme.r-overlay;
+        Text {
+            width: parent.width - 32px;
+            x: 16px;
+            y: (parent.height - self.height) / 2;
+            text: root.toast;
+            font-size: 19px;
+            color: Theme.text;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
     }
 
     VolumeOverlay {

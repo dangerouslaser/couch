@@ -22,12 +22,24 @@ its own FocusScope, focus on show, focus back to the shell on close.
 - Screen off after: 30s / 1m / 2m / 5m / 10m / Never (Never only dims).
 
 **Wi-Fi** — shows the connected SSID and signal, and a "Change network" row.
-The change flow (scan, pick, enter the passphrase on the keyboard, reassociate)
-is stage B; the row announces the request for now.
+Change network takes the SSID on the keyboard, then the passphrase (masked,
+blank for an open network), then hands both to wpa_supplicant via wpa_cli
+(add/set/enable/select/save), persists them to /opt/couch/networks.conf for the
+next boot, and runs udhcpc. Association is asynchronous, so a toast shows
+"Connecting to X" and then "Connected to X" or "Could not connect" once the
+tick sees wpa_state. The passphrase keyboard is opened a frame after the SSID
+keyboard closes, not from inside its accept callback - reopening it there
+leaves focus on the shell and the field takes no input. COUCH_WIFI_DRYRUN
+prints the plan and changes nothing, so the flow can be driven over the very
+link a real switch would drop.
 
-**SSH** — a single toggle showing ON/OFF, or "unset" when no key or password
-is enrolled (enrolment stays gated on the setup portal's physical-press step;
-the toggle only starts and stops sshd). Wiring is stage B.
+**SSH** — a single toggle. OK starts or stops sshd (host keys generated on
+first use), and the choice persists as `ssh=` in settings.conf, which the boot
+`sshd.sh` reads so a device that was turned off stays off across a reboot.
+Enrolment - a key or a root password - stays gated on the setup portal's
+physical-press step; the toggle only runs the daemon for someone already
+enrolled, and shows "unset" otherwise. Turning SSH off from here stops the
+listener but not an existing session.
 
 ## Persistence
 

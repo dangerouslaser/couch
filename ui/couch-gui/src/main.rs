@@ -34,6 +34,16 @@ const BACKGROUND: u32 = 0x09090b;
 /// callback - so a callback only ever says what it wants, and the ways the
 /// chooser closes from inside app.slint are callbacks too, for the same
 /// reason.
+/// Where the keyboard's next result goes during Wi-Fi setup: nowhere (the
+/// keyboard is doing something else, or nothing), the SSID step, or the
+/// passphrase step for the SSID it carries.
+#[derive(Clone, PartialEq)]
+enum WifiFlow {
+    Idle,
+    Ssid,
+    Pass(String),
+}
+
 #[derive(Copy, Clone, Debug)]
 enum Intent {
     /// Step the area by this many, wrapping; the sign is the direction.
@@ -543,8 +553,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .is_ok()
         .then(|| now_monotonic_us() + 1_500_000);
     let mut settings_opened = false;
-    app.on_keyboard_accepted(|t| println!("couch-gui: keyboard accepted '{t}'"));
-    app.on_keyboard_cancelled(|| println!("couch-gui: keyboard cancelled"));
+    // The Wi-Fi setup flow drives the keyboard twice (SSID, then passphrase);
+    // the keyboard's one accepted/cancelled pair is routed by this state. A
+    // deadline the tick watches turns "fired the connect" into "connected" or
+    // "could not", since association is asynchronous.
+    let wifi_flow = Rc::new(std::cell::RefCell::new(WifiFlow::Idle));
+    // The passphrase keyboard is opened a frame after the SSID one closes, not
+    // from inside its accept callback: reopening the keyboard from within its
+    // own accepted handler leaves focus on the shell, not the new keyboard, so
+    // the passphrase field takes no input. Deferring one iteration lets the
+    // first keyboard fully close first.
+    let open_pass_kb: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    let wifi_check: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
+    let wifi_target = Rc::new(std::cell::RefCell::new(String::new()));
+    let toast_until: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
+    let toast = {
+        let (weak, until) = (app.as_weak(), toast_until.clone());
+        move |msg: String, secs: u64| {
+            if let Some(app) = weak.upgrade() {
+                app.set_toast(msg.into());
+                until.set(Some(now_monotonic_us() + secs * 1_000_000));
+            }
+        }
+    };
+    {
+        let weak = app.as_weak();
+        let (flow, check, target, toast, open_pass_kb) = (
+            wifi_flow.clone(),
+            wifi_check.clone(),
+            wifi_target.clone(),
+            toast.clone(),
+            open_pass_kb.clone(),
+        );
+        app.on_keyboard_accepted(move |t| {
+            if weak.upgrade().is_none() {
+                return;
+            }
+            let cur = flow.borrow().clone();
+            match cur {
+                WifiFlow::Ssid => {
+                    let ssid = t.to_string();
+                    if ssid.is_empty() {
+                        *flow.borrow_mut() = WifiFlow::Idle;
+                        return;
+                    }
+                    *flow.borrow_mut() = WifiFlow::Pass(ssid);
+                    // Opened next iteration, once this keyboard has closed.
+                    open_pass_kb.set(true);
+                }
+                WifiFlow::Pass(ssid) => {
+                    *flow.borrow_mut() = WifiFlow::Idle;
+                    if system::wifi_connect(&ssid, &t.to_string()) {
+                        *target.borrow_mut() = ssid.clone();
+                        check.set(Some(now_monotonic_us() + 20_000_000));
+                        toast(format!("Connecting to {ssid}"), 25);
+                    } else {
+                        toast("Could not start Wi-Fi setup".into(), 4);
+                    }
+                }
+                WifiFlow::Idle => println!("couch-gui: keyboard accepted '{t}'"),
+            }
+        });
+    }
+    {
+        let flow = wifi_flow.clone();
+        app.on_keyboard_cancelled(move || {
+            *flow.borrow_mut() = WifiFlow::Idle;
+            println!("couch-gui: keyboard cancelled");
+        });
+    }
 
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
@@ -627,9 +704,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             system::save_settings(&sett.borrow());
         });
     }
-    // Wired in stage B; announce for now so the paths are testable.
-    app.on_setting_change_wifi(|| println!("couch-gui: settings: change wifi requested"));
-    app.on_setting_toggle_ssh(|| println!("couch-gui: settings: toggle ssh requested"));
+    {
+        let (weak, flow) = (app.as_weak(), wifi_flow.clone());
+        app.on_setting_change_wifi(move || {
+            let Some(app) = weak.upgrade() else { return };
+            // Close settings and take the SSID on the keyboard; the accepted
+            // handler carries it on to the passphrase and the connect.
+            *flow.borrow_mut() = WifiFlow::Ssid;
+            app.set_settings_shown(false);
+            app.set_keyboard_title("WI-FI NETWORK".into());
+            app.set_keyboard_placeholder("Network name".into());
+            app.set_keyboard_password(false);
+            app.invoke_open_keyboard();
+        });
+    }
+    {
+        let (weak, sett, toast) = (app.as_weak(), settings.clone(), toast.clone());
+        app.on_setting_toggle_ssh(move || {
+            let Some(app) = weak.upgrade() else { return };
+            if !system::ssh_available() {
+                toast("SSH needs a key from the setup page first".into(), 4);
+                return;
+            }
+            let on = if system::ssh_running() {
+                system::ssh_stop();
+                false
+            } else {
+                system::ssh_start()
+            };
+            app.set_ssh_on(on);
+            sett.borrow_mut().ssh = on;
+            system::save_settings(&sett.borrow());
+            toast(if on { "SSH on".into() } else { "SSH off".into() }, 3);
+        });
+    }
 
     let mut standby = Standby::Active;
     let mut last_input = now_monotonic_us();
@@ -789,6 +897,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // Clear a toast when its time is up (cheap, every loop).
+        if toast_until.get().is_some_and(|t| now_monotonic_us() >= t) {
+            toast_until.set(None);
+            app.set_toast("".into());
+        }
+
+        // Open the passphrase keyboard the frame after the SSID one closed.
+        if open_pass_kb.get() {
+            open_pass_kb.set(false);
+            app.set_keyboard_title("PASSWORD".into());
+            app.set_keyboard_placeholder("Leave blank for an open network".into());
+            app.set_keyboard_password(true);
+            app.invoke_open_keyboard();
+        }
+
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {
             last_tick = now;
@@ -816,6 +939,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => app.set_battery(0),
             }
             app.set_wifi_level(system::wifi_level());
+
+            // A Wi-Fi connection is pending: report it once associated, or give
+            // up at the deadline. Inside this once-a-second block, because
+            // reading the state spawns wpa_cli.
+            if let Some(deadline) = wifi_check.get() {
+                let target = wifi_target.borrow().clone();
+                if system::wifi_state() == "COMPLETED" && system::wifi_ssid() == target {
+                    wifi_check.set(None);
+                    toast(format!("Connected to {target}"), 4);
+                } else if now >= deadline {
+                    wifi_check.set(None);
+                    toast("Could not connect - check the password".into(), 6);
+                }
+            }
 
             let setup = system::in_setup_mode();
             if last_setup != Some(setup) {

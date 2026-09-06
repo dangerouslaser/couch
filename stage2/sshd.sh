@@ -24,6 +24,13 @@ if [ "$PW" = no ] && [ "$KEYS" = no ]; then
     exit 0
 fi
 
+# The settings menu can turn SSH off; honour that across reboots. The GUI writes
+# ssh=0 into settings.conf, which lives on the same partition the chroot sees.
+if $BB grep -q "^ssh=0" /opt/couch/settings.conf 2>/dev/null; then
+    echo "sshd not started: turned off in the settings menu"
+    exit 0
+fi
+
 # Host keys are generated on first use rather than baked into the image: baked
 # keys would be identical on every device that ever flashed it.
 [ -f /etc/ssh/ssh_host_ed25519_key ] || /usr/bin/ssh-keygen -A >/dev/null 2>&1
