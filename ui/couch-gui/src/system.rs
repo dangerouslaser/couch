@@ -22,6 +22,37 @@ pub fn battery() -> Option<Battery> {
     })
 }
 
+/// Wi-Fi signal, as bars: 0 is disconnected, 1 through 4 climb with the RSSI.
+///
+/// `operstate` is the association signal - it reads "up" only once the link
+/// layer is associated and the carrier is on, and drops to "down"/"dormant"
+/// the moment the radio loses the AP - so it, not the mere presence of the
+/// interface, decides connected from not. The strength comes from the driver's
+/// own line in /proc/net/wireless, whose fourth field is the level in dBm
+/// (e.g. "-63."). Read from files, not `iw` or `wpa_cli`: those are process
+/// spawns, and this runs every second.
+pub fn wifi_level() -> i32 {
+    if read_trimmed("/sys/class/net/wlan0/operstate").as_deref() != Some("up") {
+        return 0;
+    }
+    let dbm = std::fs::read_to_string("/proc/net/wireless").ok().and_then(|s| {
+        s.lines()
+            .find(|l| l.trim_start().starts_with("wlan0:"))
+            .and_then(|l| l.split_whitespace().nth(3))
+            .map(|t| t.trim_end_matches('.').to_string())
+            .and_then(|t| t.parse::<f32>().ok())
+    });
+    match dbm {
+        Some(d) if d >= -55.0 => 4,
+        Some(d) if d >= -67.0 => 3,
+        Some(d) if d >= -78.0 => 2,
+        // Associated but weak, or associated with no readable level: still
+        // connected, so never 0 here - 0 means down, and down is the one
+        // state a person needs to see at a glance.
+        Some(_) | None => 1,
+    }
+}
+
 /// Local time as "H:MM AM/PM".
 ///
 /// The offset comes from `date`, which is a process spawn - so it is cached by

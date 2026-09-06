@@ -19,6 +19,7 @@ export component App inherits Window {
     in-out property <string> clock: "--:--";
     in-out property <int> battery: 0;
     in-out property <bool> charging: false;
+    in-out property <int> wifi-level: 0;
 
     // --- hub data -------------------------------------------------------------
     in-out property <[LiveActivity]> activities;
@@ -183,6 +184,7 @@ export component App inherits Window {
              : root.chooser-shown ? root.chooser-title : root.area-name;
         battery: root.battery;
         charging: root.charging;
+        wifi-level: root.wifi-level;
     }
 
     // The hub and whatever it opens, side by side on a strip. The chooser was

@@ -12,6 +12,7 @@ export component StatusBar inherits Rectangle {
     in property <string> title;
     in property <int> battery;      // 0-100
     in property <bool> charging;
+    in property <int> wifi-level;   // 0 disconnected, 1-4 signal bars
 
     height: 56px;
     background: Theme.bg;
@@ -68,11 +69,32 @@ export component StatusBar inherits Rectangle {
         }
     }
 
-    Text {
+    mode-text := Text {
         text: root.charging ? "CHG" : "HUB";
         font-size: 15px;
         color: Theme.text-secondary;
         x: battery-shell.x - self.width - 8px;
         y: (parent.height - self.height) / 2;
+    }
+
+    // Four signal bars, a right-climbing staircase, bottom-aligned. Lit up to
+    // wifi-level in the secondary ink, the rest recessed; at level 0 - the
+    // radio down - all four are recessed, which reads as "no signal" without a
+    // second colour. Drawn from rectangles rather than a glyph: four filled
+    // rects are cheaper than an anti-aliased icon and the design has no wifi
+    // glyph embedded.
+    wifi := Rectangle {
+        width: 18px;
+        height: 14px;
+        x: mode-text.x - self.width - 10px;
+        y: (parent.height - self.height) / 2;
+        for bar[i] in [5px, 8px, 11px, 14px]: Rectangle {
+            width: 3px;
+            height: bar;
+            x: i * 5px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: i + 1 <= root.wifi-level ? Theme.text-secondary : Theme.border-raised;
+        }
     }
 }

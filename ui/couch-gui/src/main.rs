@@ -705,6 +705,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 None => app.set_battery(0),
             }
+            app.set_wifi_level(system::wifi_level());
 
             let setup = system::in_setup_mode();
             if last_setup != Some(setup) {
