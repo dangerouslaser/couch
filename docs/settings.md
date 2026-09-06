@@ -12,6 +12,14 @@ its own FocusScope, focus on show, focus back to the shell on close.
 - Left/right step a value where a row has one (the Display rows).
 - BACK climbs one tier, and closes from the root.
 
+Opening, entering a section and going back all slide, the same memcpy page
+slide the hub and chooser use (`Panel::slide`): the host owns the `panel`
+index and performs each change as a snapshot, an instant state change, a B
+render and a compose, so the menu is never rendered twice a frame. Because the
+menu carries its own FocusScope, closing it - by the slide, or when Change
+network hands off to the keyboard - refocuses the shell, or the hub would stop
+answering the D-pad.
+
 ## Sections
 
 **Display** — three stepper rows, all applied live and saved at once:

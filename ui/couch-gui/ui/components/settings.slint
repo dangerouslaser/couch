@@ -82,14 +82,19 @@ export component Settings inherits Rectangle {
     callback off-changed(int);
     callback change-wifi();
     callback toggle-ssh();
-    callback closed();
+    // Enter panel N, or leave the current tier - the host performs these as
+    // slides (like the hub's page changes), so it owns the panel and this only
+    // asks. leave() climbs to the root, or closes settings from the root.
+    callback enter(int);
+    callback leave();
 
     public function take-focus() { fs.focus(); }
-    public function reset() { root.panel = 0; root.sel = 0; }
 
-    // 0 root, 1 display, 2 wifi, 3 ssh.
-    property <int> panel: 0;
+    // 0 root, 1 display, 2 wifi, 3 ssh. Set by the host so the change can be
+    // slid to; the cursor resets whenever it moves.
+    in property <int> panel: 0;
     property <int> sel: 0;
+    changed panel => { root.sel = 0; }
     property <length> row-h: 72px;
     property <length> gap: 10px;
     property <length> pitch: root.row-h + root.gap;
@@ -125,17 +130,14 @@ export component Settings inherits Rectangle {
     }
 
     function activate() {
-        if (root.panel == 0) { root.panel = root.sel + 1; root.sel = 0; return; }
+        if (root.panel == 0) { root.enter(root.sel + 1); return; }
         if (root.panel == 2) { root.change-wifi(); return; }
         if (root.panel == 3) { root.toggle-ssh(); return; }
         // Display rows have no OK action; left/right do the work.
     }
 
-    function back() {
-        if (root.panel == 0) { root.closed(); return; }
-        root.panel = 0;
-        root.sel = 0;
-    }
+    // Climb one tier, or close from the root: the host decides which and slides.
+    function back() { root.leave(); }
 
     fs := FocusScope {
         enabled: root.shown;

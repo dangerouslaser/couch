@@ -135,8 +135,11 @@ export component App inherits Window {
     callback setting-off-changed(int);
     callback setting-change-wifi();
     callback setting-toggle-ssh();
-    callback settings-closed();
-    public function open-settings() { root.settings-shown = true; }
+    // Which tier the settings menu shows (0 root, 1 display, 2 wifi, 3 ssh),
+    // owned here so the host can slide between them. Enter and leave are asks.
+    in-out property <int> settings-panel: 0;
+    callback settings-enter(int);
+    callback settings-leave();
 
     function chooser-move(delta: int) {
         if (root.chooser-items.length <= 0) { return; }
@@ -189,6 +192,10 @@ export component App inherits Window {
         }
     }
     init => { fs.focus(); }
+    // The settings menu carries its own focus; when it closes - by the host's
+    // slide, or because change-wifi handed off to the keyboard - the shell has
+    // to take the D-pad back, or the hub stops responding.
+    changed settings-shown => { if (!root.settings-shown && !root.keyboard-shown) { fs.focus(); } }
 
     if root.setup-mode: Setup {
         width: parent.width;
@@ -292,6 +299,7 @@ export component App inherits Window {
         width: root.width;
         height: root.height - root.status-h;
         shown: root.settings-shown;
+        panel: root.settings-panel;
         brightness: root.setting-brightness;
         dim-choices: root.dim-choices;
         dim-index: root.dim-index;
@@ -306,7 +314,8 @@ export component App inherits Window {
         off-changed(i) => { root.off-index = i; root.setting-off-changed(i); }
         change-wifi => { root.setting-change-wifi(); }
         toggle-ssh => { root.setting-toggle-ssh(); }
-        closed => { root.settings-shown = false; fs.focus(); root.settings-closed(); }
+        enter(n) => { root.settings-enter(n); }
+        leave => { root.settings-leave(); }
     }
 
     MicOverlay {

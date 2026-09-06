@@ -51,6 +51,12 @@ enum Intent {
     /// Show the chooser. Its content is already set by the time this is asked.
     OpenChooser,
     CloseChooser,
+    /// The settings menu, and its tiers - all slid the way the chooser is.
+    OpenSettings,
+    /// Enter a settings panel (1 display, 2 wifi, 3 ssh); slides from the right.
+    SettingsEnter(i32),
+    /// Climb a settings tier, or close from the root; slides from the left.
+    SettingsBack,
 }
 
 /// How much of the panel is on.
@@ -474,6 +480,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     from = Arrive::FromLeft;
                     keep = &above[..];
                 }
+                Intent::OpenSettings => {
+                    if app.get_settings_shown() {
+                        return None;
+                    }
+                    // The state it shows is read once, at open time.
+                    app.set_wifi_ssid(system::wifi_ssid().into());
+                    app.set_ssh_available(system::ssh_available());
+                    app.set_ssh_on(system::ssh_running());
+                    screen.snapshot();
+                    app.set_settings_panel(0);
+                    app.set_settings_shown(true);
+                    from = Arrive::FromRight;
+                    keep = &above[..];
+                }
+                Intent::SettingsEnter(panel) => {
+                    if !app.get_settings_shown() {
+                        return None;
+                    }
+                    screen.snapshot();
+                    app.set_settings_panel(panel);
+                    from = Arrive::FromRight;
+                    keep = &above[..];
+                }
+                Intent::SettingsBack => {
+                    if !app.get_settings_shown() {
+                        return None;
+                    }
+                    screen.snapshot();
+                    // From a panel, back to the root; from the root, out to the
+                    // hub. Both slide the same way, back the way we came.
+                    if app.get_settings_panel() > 0 {
+                        app.set_settings_panel(0);
+                    } else {
+                        app.set_settings_shown(false);
+                    }
+                    from = Arrive::FromLeft;
+                    keep = &above[..];
+                }
             }
             slint::platform::update_timers_and_animations();
             let mut cost = SlideCost::default();
@@ -738,6 +782,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             toast(if on { "SSH on".into() } else { "SSH off".into() }, 3);
         });
     }
+    {
+        let ask = ask.clone();
+        app.on_settings_enter(move |n| ask(Intent::SettingsEnter(n)));
+    }
+    {
+        let ask = ask.clone();
+        app.on_settings_leave(move || ask(Intent::SettingsBack));
+    }
 
     let mut standby = Standby::Active;
     let mut last_input = now_monotonic_us();
@@ -864,10 +916,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(at) = settings_at {
             if !settings_opened && now >= at {
                 settings_opened = true;
-                app.set_wifi_ssid(system::wifi_ssid().into());
-                app.set_ssh_available(system::ssh_available());
-                app.set_ssh_on(system::ssh_running());
-                app.invoke_open_settings();
+                ask(Intent::OpenSettings);
             }
         }
         if let Some(at) = open_at {
@@ -890,10 +939,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && !app.get_recording();
             if on_home && now - t >= MENU_HOLD_US {
                 menu_down_at = None;
-                app.set_wifi_ssid(system::wifi_ssid().into());
-                app.set_ssh_available(system::ssh_available());
-                app.set_ssh_on(system::ssh_running());
-                app.invoke_open_settings();
+                ask(Intent::OpenSettings);
             }
         }
 
