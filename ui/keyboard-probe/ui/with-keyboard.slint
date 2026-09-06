@@ -1,0 +1,31 @@
+import { Theme } from "../../couch-gui/ui/theme.slint";
+import { Keyboard } from "../../couch-gui/ui/components/keyboard.slint";
+
+// The baseline with the keyboard on it. Everything above the keyboard is
+// character for character what baseline.slint draws, so the difference between
+// the two binaries is the component and nothing else.
+export component Probe inherits Window {
+    width: 480px;
+    height: 800px;
+    background: Theme.bg;
+    in-out property <string> text: "text";
+
+    VerticalLayout {
+        padding: Theme.pad-side;
+        spacing: 12px;
+        Text {
+            text: "SECTION LABEL";
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+        }
+        Text { text: root.text; font-size: 26px; color: Theme.text; }
+        Text { text: root.text; font-size: 26px; font-weight: 600; color: Theme.text; }
+        Keyboard {
+            title: "WI-FI PASSWORD";
+            placeholder: "Passphrase";
+            password: true;
+            text <=> root.text;
+        }
+    }
+}

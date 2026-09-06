@@ -1,0 +1,24 @@
+# Its own workspace, deliberately: this is a host-side harness with a windowing
+# backend and a PNG encoder behind it, and none of that belongs in the lockfile
+# of the binary that ships to the device.
+[workspace]
+
+[package]
+name = "keyboard-demo"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Desktop harness for the Couch on-screen keyboard"
+
+# The software renderer, on the desktop too. The point of the harness is to see
+# what the panel will see, and femtovg would anti-alias differently, lay text
+# out differently and hide exactly the costs this component was designed
+# around. Winit only supplies a window and a pointer.
+[dependencies]
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "std", "backend-winit", "renderer-software",
+] }
+png = "0.17"
+
+[build-dependencies]
+slint-build = "1.17"

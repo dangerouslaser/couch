@@ -24,12 +24,13 @@ import { FocusRing } from "focus_ring.slint";
 //   font has one is that it is written out below. Generate these faces in Rust
 //   instead of listing them and that key goes blank.
 //
-// - The alphabet is arranged in reading order rather than QWERTY. QWERTY pays
-//   for itself when ten fingers know where the keys are; with a D-pad you hunt,
-//   and hunting is faster when position is predictable from the alphabet. The
-//   same argument says left at the left edge should wrap to the end of the row
-//   above rather than to the end of the same row: the grid is one sequence, so
-//   the keys either side of `a` are `@` and `b`, and no cell is a dead end.
+// - QWERTY. It began alphabetical, on the argument that a D-pad hunts and
+//   hunting is faster when position follows the alphabet; tried on the panel,
+//   familiarity won - people look for keys where every other keyboard puts
+//   them. Ten columns, so the grid is 10x5: digits, the three QWERTY rows with
+//   ' , . ? filling the short ones, and a row of the punctuation an address or
+//   a passphrase needs. Left at the left edge still wraps to the end of the
+//   row above: the grid is one sequence, and no cell is a dead end.
 export component Keyboard inherits Rectangle {
     // --- what a consumer sets and reads ---------------------------------------
     in property <string> title: "ENTER TEXT";
@@ -49,7 +50,8 @@ export component Keyboard inherits Rectangle {
 
     public function reset() {
         root.text = "";
-        root.caps = false;
+        root.shift = false;
+        root.caps-lock = false;
         root.symbols = false;
         root.revealed = false;
         root.region = 0;
@@ -61,70 +63,75 @@ export component Keyboard inherits Rectangle {
 
     // --- the faces ------------------------------------------------------------
     //
-    // Every page is the same 7x6 rectangle, and the first two rows are the same
-    // on all of them. That buys three things: the digits and the four
-    // characters an address needs are never behind a page switch; the focus
-    // index still means something after a switch, so SHIFT lands you on the
-    // capital of the letter you were on; and a switch redraws four rows instead
-    // of six.
+    // Every page is the same 10x5 rectangle, and the digit row is the same on
+    // all of them. That buys three things: the digits are never behind a page
+    // switch; the focus index still means something after a switch, so SHIFT
+    // lands you on the capital of the letter you were on; and a switch redraws
+    // four rows instead of five.
     //
-    // Rows three to six carry the alphabet, or - on the symbol page - the 28
-    // punctuation marks that are not already on row two. Together with the four
-    // there and the space key, that is every printable ASCII character, which
-    // is exactly what a WPA passphrase is allowed to contain.
+    // Rows two to five carry QWERTY plus the punctuation an address or a
+    // passphrase needs, or - on the symbol page - all 32 printable ASCII
+    // punctuation marks in ASCII order, with the eight commonest repeated to
+    // fill the row. Together with the space key that is every printable ASCII
+    // character, which is exactly what a WPA passphrase is allowed to contain.
     //
-    // The two fixed rows are a separate array from the three that swap, so that
-    // a key on them reads from a constant and never becomes dirty. Sharing one
-    // array would leave the values identical and the bindings invalidated
-    // anyway, and the renderer redraws what was invalidated: it is the
-    // difference between half the panel on a page switch and a third of it.
+    // The fixed row is a separate array from the four that swap, so that a key
+    // on it reads from a constant and never becomes dirty. Sharing one array
+    // would leave the values identical and the bindings invalidated anyway,
+    // and the renderer redraws what was invalidated.
     property <[string]> head: [
-        "1", "2", "3", "4", "5", "6", "7",
-        "8", "9", "0", "-", "_", ".", "@",
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
     ];
     property <[string]> tail-lower: [
-        "a", "b", "c", "d", "e", "f", "g",
-        "h", "i", "j", "k", "l", "m", "n",
-        "o", "p", "q", "r", "s", "t", "u",
-        "v", "w", "x", "y", "z", "'", "?",
+        "q", "w", "e", "r", "t", "y", "u", "i", "o", "p",
+        "a", "s", "d", "f", "g", "h", "j", "k", "l", "'",
+        "z", "x", "c", "v", "b", "n", "m", ",", ".", "?",
+        "-", "_", "@", "/", ":", ";", "(", ")", "!", "&",
     ];
     property <[string]> tail-upper: [
-        "A", "B", "C", "D", "E", "F", "G",
-        "H", "I", "J", "K", "L", "M", "N",
-        "O", "P", "Q", "R", "S", "T", "U",
-        "V", "W", "X", "Y", "Z", "'", "?",
+        "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
+        "A", "S", "D", "F", "G", "H", "J", "K", "L", "'",
+        "Z", "X", "C", "V", "B", "N", "M", ",", ".", "?",
+        "-", "_", "@", "/", ":", ";", "(", ")", "!", "&",
     ];
     // ASCII order, which is arbitrary but is the one order somebody might
-    // predict, and it keeps the bracket pairs near each other.
+    // predict, and it keeps the bracket pairs near each other. The backtick
+    // is the one printable character Slint does not embed by default; it is
+    // embedded because it is written here.
     property <[string]> tail-symbol: [
-        "!", "\"", "#", "$", "%", "&", "'",
-        "(", ")", "*", "+", ",", "/", ":",
-        ";", "<", "=", ">", "?", "[", "\\",
-        "]", "^", "`", "{", "|", "}", "~",
+        "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*",
+        "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
+        "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|",
+        "}", "~", ".", ",", "-", "_", "@", "'", "?", "!",
     ];
 
-    property <bool> caps: false;
+    // SHIFT is a one-shot: the next character is a capital and the page drops
+    // back to lower case. Pressed again before anything is typed it latches
+    // caps lock, and a press after that releases everything. The key says
+    // which state it is in.
+    property <bool> shift: false;
+    property <bool> caps-lock: false;
+    property <bool> caps: root.shift || root.caps-lock;
     property <bool> symbols: false;
     property <bool> revealed: false;
     property <[string]> tail: root.symbols ? root.tail-symbol
                             : root.caps ? root.tail-upper : root.tail-lower;
-    property <int> head-count: 14;
+    property <int> head-count: 10;
 
     function face(i: int) -> string {
         return i < root.head-count ? root.head[i] : root.tail[i - root.head-count];
     }
 
     // The repeater iterates a fixed model of cells rather than the characters
-    // themselves, so switching page rewrites the faces of 28 keys instead of
-    // tearing down and rebuilding 42 elements. The redraw is the same either
+    // themselves, so switching page rewrites the faces of 40 keys instead of
+    // tearing down and rebuilding 50 elements. The redraw is the same either
     // way; the instantiation is not.
     property <[int]> slots: [
-         0,  1,  2,  3,  4,  5,  6,
-         7,  8,  9, 10, 11, 12, 13,
-        14, 15, 16, 17, 18, 19, 20,
-        21, 22, 23, 24, 25, 26, 27,
-        28, 29, 30, 31, 32, 33, 34,
-        35, 36, 37, 38, 39, 40, 41,
+         0,  1,  2,  3,  4,  5,  6,  7,  8,  9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     ];
 
     // The bars are counted the same way, as with the hub's page dots - Slint
@@ -138,16 +145,18 @@ export component Keyboard inherits Rectangle {
     // --- geometry -------------------------------------------------------------
     //
     // At the panel's 480x744 - the full screen less the status bar - this lands
-    // on whole pixels everywhere: 56px keys, 8px gutters, 20px margins. Whole
-    // pixels matter here because a rounded rectangle on a fractional boundary
-    // is anti-aliased along every edge, and anti-aliased rounded rectangles are
-    // what this renderer spends its frame on.
-    property <int> cols: 7;
-    property <int> rows: 6;
-    property <int> count: 42;
-    property <int> home-cell: 14;       // 'a', the first letter
+    // on whole pixels everywhere: 38px keys, 6px gutters, a 3px inset inside
+    // the 20px margins. Whole pixels matter here because a rounded rectangle
+    // on a fractional boundary is anti-aliased along every edge, and
+    // anti-aliased rounded rectangles are what this renderer spends its frame
+    // on. Ten columns at 480px is what QWERTY costs: 38px keys, which a 21px
+    // face fits and a thumb still hits.
+    property <int> cols: 10;
+    property <int> rows: 5;
+    property <int> count: 50;
+    property <int> home-cell: 10;       // 'q', the first letter
 
-    property <length> gap: 8px;
+    property <length> gap: 6px;
     property <length> content-w: root.width - 2 * Theme.pad-side;
     property <length> key-w: Math.floor((root.content-w - (root.cols - 1) * root.gap)
                                         / root.cols / 1px) * 1px;
@@ -258,6 +267,9 @@ export component Keyboard inherits Rectangle {
     // no-op, so nothing leaves the process.
     function insert(ch: string) {
         root.text = root.text + ch;
+        // A one-shot shift is spent by the character it capitalised - or by
+        // whatever was typed instead, so it never lies in wait.
+        if (root.shift && !root.caps-lock) { root.shift = false; }
     }
 
     // The caret lives at the end, always. Left and right belong to the grid, so
@@ -281,7 +293,13 @@ export component Keyboard inherits Rectangle {
     function activate() {
         if (root.region == 0) { root.insert(root.face(root.cell)); return; }
         if (root.region == 1) {
-            if (root.cell == 0) { root.caps = !root.caps; root.symbols = false; return; }
+            if (root.cell == 0) {
+                if (root.caps-lock) { root.caps-lock = false; root.shift = false; }
+                else if (root.shift) { root.caps-lock = true; root.shift = false; }
+                else { root.shift = true; }
+                root.symbols = false;
+                return;
+            }
             if (root.cell == 1) { root.symbols = !root.symbols; return; }
             if (root.cell == 2) { root.insert(" "); return; }
             if (root.cell == 3) { root.backspace(); return; }
@@ -293,17 +311,16 @@ export component Keyboard inherits Rectangle {
     }
 
     function fn-label(i: int) -> string {
-        if (i == 0) { return "SHIFT"; }
+        if (i == 0) { return root.caps-lock ? "CAPS" : "SHIFT"; }
         if (i == 1) { return root.symbols ? (root.caps ? "ABC" : "abc") : "#+="; }
         if (i == 2) { return "SPACE"; }
         if (i == 3) { return "DEL"; }
         return root.revealed ? "HIDE" : "SHOW";
     }
 
-    // SHIFT, the symbol page and SHOW are latches, not one-shots. A one-shot
-    // flips the page out from under the cursor after every keystroke, which on
-    // a D-pad is disorienting, and a passphrase with four capitals in it would
-    // pay for the convenience four times over.
+    // The symbol page and SHOW are latches. SHIFT lights while it is armed or
+    // locked; a passphrase with four capitals in it pays one extra press per
+    // capital, or two for the lot with caps lock.
     function fn-latched(i: int) -> bool {
         return (i == 0 && root.caps) || (i == 1 && root.symbols) || (i == 4 && root.revealed);
     }
@@ -461,7 +478,9 @@ export component Keyboard inherits Rectangle {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     text: root.face(i);
-                    font-size: 26px;
+                    // 21px/600 rather than 26px: a 38px key needs it, and the
+                    // size is already embedded for the card titles.
+                    font-size: 21px;
                     font-weight: 600;
                     color: Theme.text;
                 }

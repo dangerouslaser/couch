@@ -532,6 +532,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .is_ok()
         .then(|| now_monotonic_us() + 2_000_000);
     let mut opened = false;
+    // COUCH_KEYBOARD opens the on-screen keyboard a moment in, so it can be
+    // driven with the real D-pad and touch on the real renderer.
+    let keyboard_at = std::env::var("COUCH_KEYBOARD")
+        .is_ok()
+        .then(|| now_monotonic_us() + 1_500_000);
+    let mut keyboard_opened = false;
+    app.on_keyboard_accepted(|t| println!("couch-gui: keyboard accepted '{t}'"));
+    app.on_keyboard_cancelled(|| println!("couch-gui: keyboard cancelled"));
 
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
@@ -656,6 +664,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let now = now_monotonic_us();
+        if let Some(at) = keyboard_at {
+            if !keyboard_opened && now >= at {
+                keyboard_opened = true;
+                app.set_keyboard_title("TRY THE KEYBOARD".into());
+                app.set_keyboard_placeholder("Type something".into());
+                app.invoke_open_keyboard();
+            }
+        }
         if let Some(at) = open_at {
             if !opened && now >= at {
                 opened = true;

@@ -1,0 +1,45 @@
+import { Theme } from "../../couch-gui/ui/theme.slint";
+import { StatusBar } from "../../couch-gui/ui/components/status_bar.slint";
+import { Keyboard } from "../../couch-gui/ui/components/keyboard.slint";
+
+// The keyboard as a consumer would mount it: full screen, under the status bar
+// the panel always shows. Nothing here is part of the component - it is the
+// shell around it, and it is deliberately the whole of what a consumer has to
+// write.
+export component Demo inherits Window {
+    width: 480px;
+    height: 800px;
+    background: Theme.bg;
+
+    in-out property <string> value;
+    in property <string> title-text: "WI-FI PASSWORD";
+    in property <string> placeholder-text: "Passphrase";
+    in property <bool> masked: true;
+    in-out property <string> result: "";
+
+    callback accepted(string);
+    callback cancelled();
+
+    public function take-focus() { kb.take-focus(); }
+
+    StatusBar {
+        y: 0;
+        width: parent.width;
+        clock: "21:42";
+        title: "SETUP";
+        battery: 64;
+        charging: false;
+    }
+
+    kb := Keyboard {
+        y: 56px;
+        width: parent.width;
+        height: parent.height - 56px;
+        title: root.title-text;
+        placeholder: root.placeholder-text;
+        password: root.masked;
+        text <=> root.value;
+        accepted(t) => { root.result = t; root.accepted(t); }
+        cancelled() => { root.cancelled(); }
+    }
+}

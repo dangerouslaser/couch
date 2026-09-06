@@ -1,0 +1,43 @@
+import { Theme } from "../../couch-gui/ui/theme.slint";
+
+// The floor plus a bare TextInput.
+//
+// The keyboard keeps its text in a TextInput because .slint can concatenate a
+// string but cannot shorten one. This variant prices that decision on its own:
+// the editing machinery, the cursor and the password mask arrive together, and
+// whatever they cost is not the keyboard's doing.
+export component Probe inherits Window {
+    width: 480px;
+    height: 800px;
+    background: Theme.bg;
+    in-out property <string> text: "text";
+
+    VerticalLayout {
+        padding: Theme.pad-side;
+        spacing: 12px;
+        Text {
+            text: "SECTION LABEL";
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+        }
+        Text { text: root.text; font-size: 26px; color: Theme.text; }
+        Text { text: root.text; font-size: 26px; font-weight: 600; color: Theme.text; }
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.r-card;
+            TextInput {
+                width: 100%;
+                height: 100%;
+                font-size: 26px;
+                color: Theme.text;
+                text-cursor-width: 2px;
+                selection-background-color: Theme.accent;
+                selection-foreground-color: Theme.bg;
+                single-line: true;
+                input-type: InputType.password;
+                text <=> root.text;
+            }
+        }
+    }
+}

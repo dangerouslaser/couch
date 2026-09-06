@@ -1,0 +1,28 @@
+import { Theme } from "../../couch-gui/ui/theme.slint";
+
+// The floor the keyboard is measured against.
+//
+// It draws text at every size and weight the keyboard uses, because glyphs are
+// rasterised into the binary per size for the whole character set: a baseline
+// without them would charge the keyboard for font tables couch-gui has already
+// bought, and report a number no consumer would ever pay.
+export component Probe inherits Window {
+    width: 480px;
+    height: 800px;
+    background: Theme.bg;
+    in-out property <string> text: "text";
+
+    VerticalLayout {
+        padding: Theme.pad-side;
+        spacing: 12px;
+        Text {
+            text: "SECTION LABEL";
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+        }
+        Text { text: root.text; font-size: 26px; color: Theme.text; }
+        Text { text: root.text; font-size: 26px; font-weight: 600; color: Theme.text; }
+        Rectangle { background: Theme.surface; border-radius: Theme.r-card; }
+    }
+}

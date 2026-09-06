@@ -6,6 +6,7 @@ import { MicOverlay } from "components/mic_overlay.slint";
 import { Chooser, ChoiceItem } from "components/chooser.slint";
 import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
+import { Keyboard } from "components/keyboard.slint";
 
 export { LiveActivity, RoomRow, SceneCell }
 
@@ -100,6 +101,19 @@ export component App inherits Window {
     /// host's to perform once this key's dispatch has returned.
     callback close-chooser();
 
+    // --- keyboard -------------------------------------------------------------
+    // The on-screen keyboard, over the hub. Instantiated only while shown: it
+    // takes focus on creation, and the shell's FocusScope takes it back when
+    // the keyboard leaves. Nothing on the hub opens it yet; COUCH_KEYBOARD
+    // opens it at startup so it can be tried on the panel.
+    in-out property <bool> keyboard-shown: false;
+    in-out property <string> keyboard-title: "ENTER TEXT";
+    in-out property <string> keyboard-placeholder: "";
+    in-out property <bool> keyboard-password: false;
+    callback keyboard-accepted(string);
+    callback keyboard-cancelled();
+    public function open-keyboard() { root.keyboard-shown = true; }
+
     function chooser-move(delta: int) {
         if (root.chooser-items.length <= 0) { return; }
         root.chooser-index = Math.mod(root.chooser-index + delta + root.chooser-items.length,
@@ -165,7 +179,8 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.chooser-shown ? root.chooser-title : root.area-name;
+        title: root.keyboard-shown ? root.keyboard-title
+             : root.chooser-shown ? root.chooser-title : root.area-name;
         battery: root.battery;
         charging: root.charging;
     }
@@ -232,6 +247,18 @@ export component App inherits Window {
         }
     }
 
+
+    if root.keyboard-shown: Keyboard {
+        x: 0px;
+        y: root.status-h;
+        width: root.width;
+        height: root.height - root.status-h;
+        title: root.keyboard-title;
+        placeholder: root.keyboard-placeholder;
+        password: root.keyboard-password;
+        accepted(t) => { root.keyboard-shown = false; fs.focus(); root.keyboard-accepted(t); }
+        cancelled => { root.keyboard-shown = false; fs.focus(); root.keyboard-cancelled(); }
+    }
 
     MicOverlay {
         x: 0px; y: 0px;

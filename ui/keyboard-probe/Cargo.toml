@@ -1,0 +1,37 @@
+# What the keyboard costs the device, measured rather than guessed.
+#
+# Built twice for armv7-unknown-linux-musleabihf, with and without
+# `--features keyboard`, against the same Slint feature set and the same
+# release profile couch-gui ships with. The difference between the two
+# binaries is the component's price.
+#
+# Its own workspace so that measuring cannot touch couch-gui's lockfile.
+[workspace]
+
+[package]
+name = "keyboard-probe"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Binary-size probe for the Couch on-screen keyboard"
+
+[features]
+keyboard = []
+textinput = []
+
+[dependencies]
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "renderer-software", "libm", "unsafe-single-threaded",
+] }
+
+[build-dependencies]
+slint-build = "1.17"
+
+# Identical to ui/Cargo.toml's, or the two numbers would not be comparable with
+# the binary that actually ships.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
