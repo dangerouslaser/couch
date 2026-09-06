@@ -1,0 +1,17 @@
+# sample.codeset - illustrative codes for exercising `couch-ir codeset`.
+#
+# These are common NEC/SIRC values, NOT verified against any particular set;
+# use --dry-run with them, and replace with your device's real codes (from its
+# service manual or an existing LIRC/Flipper config) before pointing at a TV.
+#
+#   <button> <protocol> <address> <command>
+power    nec     0x04 0x08
+volup    nec     0x04 0x02
+voldn    nec     0x04 0x03
+mute     nec     0x04 0x09
+chup     nec     0x04 0x00
+chdn     nec     0x04 0x01
+input    nec     0x04 0x0b
+# a couple of non-NEC buttons, to exercise the other encoders:
+sony_pwr sony12  0x01 0x15
+tv_ok    rc6     0x00 0x5c

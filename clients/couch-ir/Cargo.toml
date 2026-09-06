@@ -1,0 +1,27 @@
+[package]
+name = "couch-ir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IR blaster transmit client for Couch: protocol encoders and the mt_irtx ABI"
+
+# One dependency, and only for the transmit path.
+#
+# libc for exactly three symbols - `ioctl`, `write` and `close` - against
+# `/dev/irtx`. It contains no C: it is extern declarations over the libc std
+# already links, which for armv7-unknown-linux-musleabihf is the musl rustup
+# ships. So there is no cross sysroot and no cross-gcc, the same constraint
+# couch-voice documents for ALSA. There is no lirc/liblircclient here because
+# this device's blaster is not a lirc device - it is a MediaTek `mt_irtx` PWM
+# character device with a private write() ABI (see src/abi.rs and docs/ir.md).
+#
+# Everything else - every protocol encoder, and the MediaTek PWM waveform
+# generation itself - is pure arithmetic on integers with no dependency and no
+# hardware, which is why `cargo test` proves the whole of it on the host and
+# only the final open/ioctl/write needs the blaster.
+[dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "couch-ir"
+path = "src/main.rs"

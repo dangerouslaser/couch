@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "couch-ir"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "couch-kodi"
 version = "0.1.0"
 dependencies = [
