@@ -67,12 +67,6 @@ enum Standby {
     Off,
 }
 
-const DIM_LEVEL: u8 = 40;
-/// Seconds of no input before dimming, and before powering the panel down.
-/// COUCH_DIM_S and COUCH_OFF_S override them, so the tiers can be watched in
-/// seconds rather than minutes.
-const DIM_AFTER_S: u64 = 30;
-const OFF_AFTER_S: u64 = 120;
 
 /// Bring the panel back, then bring Slint's clock up to date.
 ///
@@ -84,11 +78,11 @@ const OFF_AFTER_S: u64 = 120;
 /// animation already most of the way through: two frames instead of ten,
 /// measured. Refreshing the tick here is what makes the first press after a
 /// wake glide like any other.
-fn wake(screen: &mut Panel) {
+fn wake(screen: &mut Panel, level: u8) {
     if screen.unblank_if_asleep() {
         println!("couch-gui: standby: panel was asleep, unblanked");
     }
-    Panel::set_backlight(255);
+    Panel::set_backlight(level);
     slint::platform::update_timers_and_animations();
 }
 
@@ -511,6 +505,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // worse remote - but a hold is what a hand does without being told, and
     // both have to mean the obvious thing.
     let mut mic_down_at = 0u64;
+    // The menu key's down time, while it is held; None when it is up. A hold on
+    // the home screen opens settings.
+    let mut menu_down_at: Option<u64> = None;
+    const MENU_HOLD_US: u64 = 500_000;
     let mut mic_latched = false;
     const LATCH_UNDER_US: u64 = 600_000;
     let mut pointer = touch::Touch::open();
@@ -538,6 +536,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .is_ok()
         .then(|| now_monotonic_us() + 1_500_000);
     let mut keyboard_opened = false;
+    // COUCH_SETTINGS opens the settings menu a moment in, so it can be driven
+    // with the mapped D-pad keys (the menu key that normally opens it cannot be
+    // injected - the input core drops codes the device does not declare).
+    let settings_at = std::env::var("COUCH_SETTINGS")
+        .is_ok()
+        .then(|| now_monotonic_us() + 1_500_000);
+    let mut settings_opened = false;
     app.on_keyboard_accepted(|t| println!("couch-gui: keyboard accepted '{t}'"));
     app.on_keyboard_cancelled(|| println!("couch-gui: keyboard cancelled"));
 
@@ -556,17 +561,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is counted apart, because it is slack rather than work.
     let (mut frames, mut render_us, mut frame_max, mut wait_us) = (0u64, 0u64, 0u64, 0u64);
 
-    let dim_after_us = env_secs("COUCH_DIM_S", DIM_AFTER_S) * 1_000_000;
-    let off_after_us = env_secs("COUCH_OFF_S", OFF_AFTER_S) * 1_000_000;
+    // Standby timings and brightness come from the saved settings, adjustable
+    // live from the menu, so they are shared cells the menu callbacks write and
+    // the loop reads. COUCH_DIM_S/COUCH_OFF_S still override for testing: a
+    // value of 0 for off means never.
+    let cfg = system::load_settings();
+    let active_level = Rc::new(Cell::new(system::brightness_level(cfg.brightness)));
+    // Dim to a sixth of the set brightness, never below a faint floor and never
+    // above the level itself: dim is "less than now", whatever now is.
+    let dim_level = Rc::new(Cell::new((active_level.get() / 6).clamp(8, active_level.get())));
+    let dim_after_us = Rc::new(Cell::new(
+        env_secs("COUCH_DIM_S", system::DIM_SECS[cfg.dim_index as usize]) * 1_000_000,
+    ));
+    let off_after_us = Rc::new(Cell::new(
+        env_secs("COUCH_OFF_S", system::OFF_SECS[cfg.off_index as usize]) * 1_000_000,
+    ));
+    let settings = Rc::new(std::cell::RefCell::new(cfg));
+
+    // Seed the menu with the choices and the saved values.
+    app.set_dim_choices(ModelRc::new(VecModel::from(
+        system::DIM_LABELS.iter().map(|s| SharedString::from(*s)).collect::<Vec<_>>(),
+    )));
+    app.set_off_choices(ModelRc::new(VecModel::from(
+        system::OFF_LABELS.iter().map(|s| SharedString::from(*s)).collect::<Vec<_>>(),
+    )));
+    {
+        let s = settings.borrow();
+        app.set_setting_brightness(s.brightness);
+        app.set_dim_index(s.dim_index);
+        app.set_off_index(s.off_index);
+    }
+    // Apply the saved brightness now: claim() and backlight_on() above lit the
+    // panel at full to show the splash, but the level a person chose is what
+    // they should see from the first frame, not until the first dim.
+    Panel::set_backlight(active_level.get());
+
+    // Brightness applies to the panel at once (the menu is up, so the screen is
+    // active); the timeouts take effect on the next idle. All three persist.
+    {
+        let (al, dl, sett) = (active_level.clone(), dim_level.clone(), settings.clone());
+        app.on_setting_brightness_changed(move |pct| {
+            let level = system::brightness_level(pct);
+            al.set(level);
+            dl.set((level / 6).clamp(8, level));
+            Panel::set_backlight(level);
+            sett.borrow_mut().brightness = pct;
+            system::save_settings(&sett.borrow());
+        });
+    }
+    {
+        let (da, sett) = (dim_after_us.clone(), settings.clone());
+        app.on_setting_dim_changed(move |i| {
+            let i = i.clamp(0, system::DIM_SECS.len() as i32 - 1);
+            da.set(system::DIM_SECS[i as usize] * 1_000_000);
+            sett.borrow_mut().dim_index = i;
+            system::save_settings(&sett.borrow());
+        });
+    }
+    {
+        let (oa, sett) = (off_after_us.clone(), settings.clone());
+        app.on_setting_off_changed(move |i| {
+            let i = i.clamp(0, system::OFF_SECS.len() as i32 - 1);
+            oa.set(system::OFF_SECS[i as usize] * 1_000_000);
+            sett.borrow_mut().off_index = i;
+            system::save_settings(&sett.borrow());
+        });
+    }
+    // Wired in stage B; announce for now so the paths are testable.
+    app.on_setting_change_wifi(|| println!("couch-gui: settings: change wifi requested"));
+    app.on_setting_toggle_ssh(|| println!("couch-gui: settings: toggle ssh requested"));
+
     let mut standby = Standby::Active;
     let mut last_input = now_monotonic_us();
     // When to re-assert the backlight after a wake, forced past the LED
     // layer; None when nothing is owed.
     let mut verify_at: Option<u64> = None;
     println!(
-        "couch-gui: standby: dim after {}s, off after {}s",
-        dim_after_us / 1_000_000,
-        off_after_us / 1_000_000
+        "couch-gui: standby: dim after {}s, off after {}s (0=never)",
+        dim_after_us.get() / 1_000_000,
+        off_after_us.get() / 1_000_000
     );
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
     let mut last_stat = now_monotonic_us();
@@ -584,9 +657,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let swallow = standby == Standby::Off && press.mic != Some(true);
             if standby != Standby::Active {
                 println!("couch-gui: standby: wake on key ({:?})", standby);
-                wake(&mut screen);
+                wake(&mut screen, active_level.get());
                 standby = Standby::Active;
                 verify_at = Some(now_monotonic_us() + 1_000_000);
+            }
+            // The menu key's edges drive the hold-to-open below. Recorded
+            // before the wake swallow, so a hold that begins on a dark panel
+            // still opens settings once the wake is done.
+            match press.menu {
+                Some(true) => menu_down_at = Some(now_monotonic_us()),
+                Some(false) => menu_down_at = None,
+                None => {}
             }
             if swallow {
                 continue;
@@ -672,10 +753,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.invoke_open_keyboard();
             }
         }
+        if let Some(at) = settings_at {
+            if !settings_opened && now >= at {
+                settings_opened = true;
+                app.set_wifi_ssid(system::wifi_ssid().into());
+                app.set_ssh_available(system::ssh_available());
+                app.set_ssh_on(system::ssh_running());
+                app.invoke_open_settings();
+            }
+        }
         if let Some(at) = open_at {
             if !opened && now >= at {
                 opened = true;
                 app.invoke_activate();
+            }
+        }
+
+        // A hold of the menu key on the home screen opens settings. Only there:
+        // a modal is already up owns the key, and the hub is what settings sits
+        // over. The state it shows - the SSID, whether SSH is up - is read here,
+        // once, at open time rather than on the tick.
+        if let Some(t) = menu_down_at {
+            let on_home = !app.get_settings_shown()
+                && !app.get_keyboard_shown()
+                && !app.get_chooser_shown()
+                && !app.get_pair_shown()
+                && !app.get_setup_mode()
+                && !app.get_recording();
+            if on_home && now - t >= MENU_HOLD_US {
+                menu_down_at = None;
+                app.set_wifi_ssid(system::wifi_ssid().into());
+                app.set_ssh_available(system::ssh_available());
+                app.set_ssh_on(system::ssh_running());
+                app.invoke_open_settings();
             }
         }
 
@@ -738,22 +848,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // thinks it already has.
             if standby != Standby::Off && screen.unblank_if_asleep() {
                 println!("couch-gui: standby: panel found asleep while {:?}, unblanked", standby);
-                Panel::force_backlight(if standby == Standby::Dim { DIM_LEVEL } else { 255 });
+                Panel::force_backlight(if standby == Standby::Dim { dim_level.get() } else { active_level.get() });
                 slint::platform::update_timers_and_animations();
             }
+            // Off-after of 0 means never power the panel down, only dim.
+            let off_us = off_after_us.get();
             if hold {
                 last_input = now;
                 if standby != Standby::Active {
                     println!("couch-gui: standby: wake to show something ({:?})", standby);
-                    wake(&mut screen);
+                    wake(&mut screen, active_level.get());
                     standby = Standby::Active;
                     verify_at = Some(now + 1_000_000);
                 }
-            } else if standby == Standby::Active && idle >= dim_after_us {
+            } else if standby == Standby::Active && idle >= dim_after_us.get() {
                 println!("couch-gui: standby: dim after {}s idle", idle / 1_000_000);
-                Panel::set_backlight(DIM_LEVEL);
+                Panel::set_backlight(dim_level.get());
                 standby = Standby::Dim;
-            } else if standby == Standby::Dim && idle >= off_after_us {
+            } else if standby == Standby::Dim && off_us > 0 && idle >= off_us {
                 println!("couch-gui: standby: off after {}s idle", idle / 1_000_000);
                 Panel::set_backlight(0);
                 screen.blank(true);

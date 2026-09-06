@@ -7,6 +7,7 @@ import { Chooser, ChoiceItem } from "components/chooser.slint";
 import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slint";
 import { Setup } from "screens/setup.slint";
 import { Keyboard } from "components/keyboard.slint";
+import { Settings } from "components/settings.slint";
 
 export { LiveActivity, RoomRow, SceneCell }
 
@@ -115,6 +116,26 @@ export component App inherits Window {
     callback keyboard-cancelled();
     public function open-keyboard() { root.keyboard-shown = true; }
 
+    // --- settings -------------------------------------------------------------
+    // Opened by a hold of the menu key on the home screen (the host times the
+    // hold). A modal page over the hub, owning the D-pad while up.
+    in-out property <bool> settings-shown: false;
+    in-out property <int> setting-brightness: 100;
+    in-out property <[string]> dim-choices;
+    in-out property <int> dim-index: 0;
+    in-out property <[string]> off-choices;
+    in-out property <int> off-index: 0;
+    in-out property <string> wifi-ssid: "";
+    in-out property <bool> ssh-on: false;
+    in-out property <bool> ssh-available: false;
+    callback setting-brightness-changed(int);
+    callback setting-dim-changed(int);
+    callback setting-off-changed(int);
+    callback setting-change-wifi();
+    callback setting-toggle-ssh();
+    callback settings-closed();
+    public function open-settings() { root.settings-shown = true; }
+
     function chooser-move(delta: int) {
         if (root.chooser-items.length <= 0) { return; }
         root.chooser-index = Math.mod(root.chooser-index + delta + root.chooser-items.length,
@@ -180,7 +201,8 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.keyboard-shown ? root.keyboard-title
+        title: root.settings-shown ? "SETTINGS"
+             : root.keyboard-shown ? root.keyboard-title
              : root.chooser-shown ? root.chooser-title : root.area-name;
         battery: root.battery;
         charging: root.charging;
@@ -260,6 +282,29 @@ export component App inherits Window {
         password: root.keyboard-password;
         accepted(t) => { root.keyboard-shown = false; fs.focus(); root.keyboard-accepted(t); }
         cancelled => { root.keyboard-shown = false; fs.focus(); root.keyboard-cancelled(); }
+    }
+
+    if root.settings-shown: Settings {
+        x: 0px;
+        y: root.status-h;
+        width: root.width;
+        height: root.height - root.status-h;
+        shown: root.settings-shown;
+        brightness: root.setting-brightness;
+        dim-choices: root.dim-choices;
+        dim-index: root.dim-index;
+        off-choices: root.off-choices;
+        off-index: root.off-index;
+        wifi-ssid: root.wifi-ssid;
+        wifi-level: root.wifi-level;
+        ssh-on: root.ssh-on;
+        ssh-available: root.ssh-available;
+        brightness-changed(v) => { root.setting-brightness = v; root.setting-brightness-changed(v); }
+        dim-changed(i) => { root.dim-index = i; root.setting-dim-changed(i); }
+        off-changed(i) => { root.off-index = i; root.setting-off-changed(i); }
+        change-wifi => { root.setting-change-wifi(); }
+        toggle-ssh => { root.setting-toggle-ssh(); }
+        closed => { root.settings-shown = false; fs.focus(); root.settings-closed(); }
     }
 
     MicOverlay {

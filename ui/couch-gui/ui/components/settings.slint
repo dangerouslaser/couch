@@ -1,0 +1,272 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "focus_ring.slint";
+
+// One labelled row with a value on the right. `stepper` draws the value between
+// chevrons, the cue that left and right change it.
+component SettingsRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> stepper: true;
+
+    height: 72px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.r-card;
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        spacing: 10px;
+        Text {
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            text: root.title;
+            font-size: 21px;
+            font-weight: 600;
+            color: Theme.text;
+            overflow: elide;
+        }
+        if root.stepper: Text {
+            vertical-alignment: center;
+            text: "<";
+            font-size: 21px;
+            color: Theme.text-tertiary;
+        }
+        Text {
+            vertical-alignment: center;
+            text: root.value;
+            font-size: 21px;
+            color: Theme.accent;
+        }
+        if root.stepper: Text {
+            vertical-alignment: center;
+            text: ">";
+            font-size: 21px;
+            color: Theme.text-tertiary;
+        }
+    }
+}
+
+// The settings menu. Tiered: a root list of sections, and a panel per section.
+// Held open by the menu key on the home screen; owns the D-pad while it is up.
+//
+// It carries its own FocusScope rather than being driven by the shell, the way
+// the keyboard does: a modal with its own navigation is simpler to reason about
+// than one whose every key has to be forwarded, and returning focus to the
+// shell on close is a single `.focus()`.
+//
+// The shell holds the values (brightness, the timeout choices, the Wi-Fi and
+// SSH state) and the host applies and persists them; this only shows them and
+// emits what changed. Left and right step a value where a row has one; OK
+// enters a section or fires an action; BACK climbs one tier, and closes from
+// the root.
+export component Settings inherits Rectangle {
+    in property <bool> shown: false;
+
+    // Display.
+    in-out property <int> brightness;          // 10..100, in tens
+    in property <[string]> dim-choices;
+    in-out property <int> dim-index;
+    in property <[string]> off-choices;
+    in-out property <int> off-index;
+    // Wi-Fi.
+    in property <string> wifi-ssid;            // "" when not connected
+    in property <int> wifi-level;
+    // SSH.
+    in property <bool> ssh-on;
+    in property <bool> ssh-available;          // a key or password is enrolled
+
+    callback brightness-changed(int);
+    callback dim-changed(int);
+    callback off-changed(int);
+    callback change-wifi();
+    callback toggle-ssh();
+    callback closed();
+
+    public function take-focus() { fs.focus(); }
+    public function reset() { root.panel = 0; root.sel = 0; }
+
+    // 0 root, 1 display, 2 wifi, 3 ssh.
+    property <int> panel: 0;
+    property <int> sel: 0;
+    property <length> row-h: 72px;
+    property <length> gap: 10px;
+    property <length> pitch: root.row-h + root.gap;
+    property <[string]> sections: ["Display", "Wi-Fi", "SSH"];
+
+    // Rows per panel, for wrapping the cursor.
+    function row-count() -> int {
+        if (root.panel == 0) { return root.sections.length; }
+        if (root.panel == 1) { return 3; }   // brightness, dim, off
+        if (root.panel == 2) { return 1; }   // change network
+        return 1;                            // ssh toggle
+    }
+
+    // True where left/right change a value rather than doing nothing.
+    function row-has-stepper() -> bool {
+        return root.panel == 1;   // every Display row steps
+    }
+
+    function step(delta: int) {
+        if (root.panel != 1) { return; }
+        if (root.sel == 0) {
+            root.brightness = Math.max(10, Math.min(100, root.brightness + delta * 10));
+            root.brightness-changed(root.brightness);
+        } else if (root.sel == 1) {
+            root.dim-index = Math.mod(root.dim-index + delta + root.dim-choices.length,
+                                      root.dim-choices.length);
+            root.dim-changed(root.dim-index);
+        } else {
+            root.off-index = Math.mod(root.off-index + delta + root.off-choices.length,
+                                      root.off-choices.length);
+            root.off-changed(root.off-index);
+        }
+    }
+
+    function activate() {
+        if (root.panel == 0) { root.panel = root.sel + 1; root.sel = 0; return; }
+        if (root.panel == 2) { root.change-wifi(); return; }
+        if (root.panel == 3) { root.toggle-ssh(); return; }
+        // Display rows have no OK action; left/right do the work.
+    }
+
+    function back() {
+        if (root.panel == 0) { root.closed(); return; }
+        root.panel = 0;
+        root.sel = 0;
+    }
+
+    fs := FocusScope {
+        enabled: root.shown;
+        key-pressed(e) => {
+            if (e.text == Key.UpArrow) {
+                root.sel = Math.mod(root.sel - 1 + root.row-count(), root.row-count());
+                return accept;
+            }
+            if (e.text == Key.DownArrow) {
+                root.sel = Math.mod(root.sel + 1, root.row-count());
+                return accept;
+            }
+            if (e.text == Key.LeftArrow)  { root.step(-1); return accept; }
+            if (e.text == Key.RightArrow) { root.step(1);  return accept; }
+            if (e.text == Key.Return) { root.activate(); return accept; }
+            if (e.text == Key.Escape) { root.back(); return accept; }
+            return accept;   // modal: swallow everything while up
+        }
+    }
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding-left: Theme.pad-side;
+        padding-right: Theme.pad-side;
+        padding-top: Theme.pad-top;
+        padding-bottom: Theme.pad-bottom;
+        spacing: 14px;
+
+        // Header: the section name, or SETTINGS at the root.
+        Text {
+            text: root.panel == 0 ? "SETTINGS"
+                : root.panel == 1 ? "DISPLAY"
+                : root.panel == 2 ? "WI-FI" : "SSH";
+            font-size: 15px;
+            letter-spacing: 0.14 * 15px;
+            color: Theme.text-quaternary;
+        }
+
+        // The rows for the current panel, and one moving ring over them.
+        Rectangle {
+            // Root: the section list.
+            if root.panel == 0: VerticalLayout {
+                spacing: root.gap;
+                for name[i] in root.sections: Rectangle {
+                    height: root.row-h;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.r-card;
+                    HorizontalLayout {
+                        padding-left: 18px; padding-right: 18px;
+                        Text {
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            text: name;
+                            font-size: 21px;
+                            font-weight: 600;
+                            color: Theme.text;
+                        }
+                        Text {
+                            vertical-alignment: center;
+                            text: ">";
+                            font-size: 26px;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                }
+            }
+
+            // Display: three stepper rows.
+            if root.panel == 1: VerticalLayout {
+                spacing: root.gap;
+                SettingsRow { title: "Brightness"; value: root.brightness + "%"; }
+                SettingsRow { title: "Dim after"; value: root.dim-choices[root.dim-index]; }
+                SettingsRow { title: "Screen off after"; value: root.off-choices[root.off-index]; }
+            }
+
+            // Wi-Fi: status and a change action.
+            if root.panel == 2: VerticalLayout {
+                spacing: root.gap;
+                SettingsRow {
+                    title: root.wifi-ssid == "" ? "Not connected" : root.wifi-ssid;
+                    value: root.wifi-ssid == "" ? "" : (root.wifi-level + "/4");
+                    stepper: false;
+                }
+                SettingsRow { title: "Change network"; value: ">"; stepper: false; }
+            }
+
+            // SSH: a single toggle.
+            if root.panel == 3: VerticalLayout {
+                spacing: root.gap;
+                SettingsRow {
+                    title: "SSH access";
+                    value: !root.ssh-available ? "unset" : root.ssh-on ? "ON" : "OFF";
+                    stepper: false;
+                }
+            }
+
+            // The focus ring. Its row differs between panels: on Wi-Fi the
+            // cursor sits on the "Change network" row (index 1 of two), so the
+            // ring is offset by one there.
+            Rectangle {
+                x: 0px;
+                y: (root.panel == 2 ? root.sel + 1 : root.sel) * root.pitch;
+                width: parent.width;
+                height: root.row-h;
+                background: transparent;
+                animate y { duration: 140ms; easing: ease-out; }
+                FocusRing {
+                    focused: true;
+                    radius-inner: Theme.r-card;
+                    box-width: parent.width;
+                    box-height: parent.height;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // A footer hint, so the controls are discoverable without a manual.
+        Text {
+            text: root.panel == 1 ? "Left / right to change  ·  Back to return"
+                : root.panel == 0 ? "OK to open  ·  Back to close"
+                : "OK to change  ·  Back to return";
+            font-size: 14px;
+            color: Theme.text-quaternary;
+            horizontal-alignment: center;
+        }
+    }
+
+    // Focus on creation: shown conditionally, so this runs when it appears.
+    init => { fs.focus(); }
+}

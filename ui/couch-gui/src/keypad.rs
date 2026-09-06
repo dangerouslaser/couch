@@ -29,6 +29,11 @@ use slint::platform::Key;
 /// release matters as much as its press.
 pub const KEY_MIC: u16 = 61;
 
+/// The menu button, KEY_MENU. Reported as an edge like the microphone, because
+/// the home screen opens settings on a *hold* of it and only the host can time
+/// a hold. It is not routed into the UI as a key.
+pub const KEY_MENU: u16 = 139;
+
 pub const REPEAT_DELAY_MS: u64 = 400;
 pub const REPEAT_RATE_MS: u64 = 70;
 
@@ -66,6 +71,9 @@ pub struct Press {
     /// Some(true) when the microphone key went down, Some(false) when it came
     /// back up. Hold to talk, so both edges are events.
     pub mic: Option<bool>,
+    /// Some(true)/Some(false) for the menu key's down/up edges. Hold to open
+    /// settings, so both edges matter and the host times the hold.
+    pub menu: Option<bool>,
     /// Microseconds between the kernel timestamping the event and us seeing it.
     pub latency_us: u64,
     pub repeat: bool,
@@ -179,12 +187,15 @@ impl Keypad {
                 if code == self.held {
                     self.held = 0;
                 }
-                (code == KEY_MIC).then_some(Press {
-                    key: None,
-                    mic: Some(false),
-                    latency_us,
-                    repeat: false,
-                })
+                if code == KEY_MIC {
+                    return Some(Press { key: None, mic: Some(false), menu: None,
+                                        latency_us, repeat: false });
+                }
+                if code == KEY_MENU {
+                    return Some(Press { key: None, mic: None, menu: Some(false),
+                                        latency_us, repeat: false });
+                }
+                None
             }
             1 => {
                 if code == KEY_MIC {
@@ -193,6 +204,19 @@ impl Keypad {
                     return Some(Press {
                         key: None,
                         mic: Some(true),
+                        menu: None,
+                        latency_us,
+                        repeat: false,
+                    });
+                }
+                if code == KEY_MENU {
+                    // The home screen opens settings on a hold; the host times
+                    // it from this down edge and the up edge above. Not held
+                    // for repeat, for the same reason as the mic key.
+                    return Some(Press {
+                        key: None,
+                        mic: None,
+                        menu: Some(true),
                         latency_us,
                         repeat: false,
                     });
@@ -210,6 +234,7 @@ impl Keypad {
                     return Some(Press {
                         key: None,
                         mic: None,
+                        menu: None,
                         latency_us,
                         repeat: false,
                     });
@@ -220,6 +245,7 @@ impl Keypad {
                 Some(Press {
                     key: Some(key),
                     mic: None,
+                    menu: None,
                     latency_us,
                     repeat: false,
                 })
@@ -248,6 +274,7 @@ impl Keypad {
         Some(Press {
             key: map_key(self.held),
             mic: None,
+            menu: None,
             latency_us: 0,
             repeat: true,
         })
