@@ -350,3 +350,17 @@ and the house style already says `CHG`, `HUB`, `OFFLINE` and `IDLE`.
 - **207KB.** Half of it is `TextInput`, and the alternative to `TextInput` is
   writing text editing in Rust and passing it through the component's boundary,
   which is a worse component for a smaller binary.
+
+## Injecting keys: the kernel drops codes the device does not declare
+
+Writing an `input_event` to `/dev/input/eventN` is the way to drive the panel
+from a shell without a finger, but the input core runs every event - injected
+or real - through `is_event_supported` against the device's `keybit` bitmap,
+and silently drops any key code the device did not register. `mt_gpio_kpd`
+declares only the codes in its keymap (the D-pad, OK, back, home, mic), so a
+mapped key can be injected and an unmapped one cannot: the write succeeds, the
+event never arrives, and nothing logs. A real press of an unmapped key does
+arrive - on whichever of the two keypad nodes owns it - which is how "wake on
+any key" can be true for hardware and untestable by injection. Verify the
+mapped-key paths by injection; verify the unmapped path by pressing a real
+button that the log shows as `unmapped key code N`.

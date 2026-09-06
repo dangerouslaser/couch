@@ -197,14 +197,22 @@ impl Keypad {
                         repeat: false,
                     });
                 }
-                // A key this build does not know is worth one line in the log:
-                // the alternative is a button that silently does nothing and a
-                // guess about which code it sends. It is not held either -
-                // holding it repeated a press carrying no key at all, once
-                // every 70ms, for as long as it was down.
+                // A key this build does not know still counts as a press:
+                // any button on a dark panel must wake it, and the idle timer
+                // must not run while someone is pressing keys the UI happens
+                // not to use. It carries no `key`, so nothing is dispatched to
+                // the UI, and it is not held, so it does not repeat a nameless
+                // press every 70ms the way a held mapped key would. The code
+                // is logged once so a button that does nothing else can be
+                // found and mapped.
                 let Some(key) = map_key(code) else {
                     println!("couch-gui: unmapped key code {code}");
-                    return None;
+                    return Some(Press {
+                        key: None,
+                        mic: None,
+                        latency_us,
+                        repeat: false,
+                    });
                 };
                 self.held = code;
                 self.held_since = mono;
@@ -416,13 +424,15 @@ mod tests {
 
     /// A code with no meaning here is logged once and then left alone: held
     /// would make it repeat, and a repeat of nothing is a `Press` carrying no
-    /// key several times a second.
+    /// key several times a second. It still emits one bare press per down, so
+    /// an unknown button wakes the panel, but carries no key and is not held.
     #[test]
-    fn an_unmapped_code_is_not_held() {
+    fn an_unmapped_code_wakes_but_is_not_held_and_carries_no_key() {
         let mut k = blank();
-        assert!(batch(&mut k, &[down(999), syn(), up(999), syn()], 1_000).is_empty());
+        let out = batch(&mut k, &[down(999), syn(), up(999), syn()], 1_000);
+        assert_eq!(out, vec![(None, None, false)], "one bare press, no key, no mic");
         assert_eq!(k.held, 0);
-        assert!(k.repeat(u64::MAX).is_none());
+        assert!(k.repeat(u64::MAX).is_none(), "nothing held, so nothing repeats");
     }
 
     /// A key chattering while the frame loop is stuck must not leave a backlog
