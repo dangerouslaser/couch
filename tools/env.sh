@@ -21,6 +21,10 @@ PART_EXPDB=/dev/block/mmcblk0p13       # 10MB MTK crash dumps: our marker/log sc
 
 # Markers and kernel logs live in expdb, not the recovery slot: after the slot
 # swap, recovery holds Android's boot image and must not be scribbled on.
-MARKER_SECTOR=0
-DMESG_SECTOR=2048                      # 1MB in
-DMESG2_SECTOR=6144                     # 3MB in
+# Boot markers and the kernel-log snapshot. These sit above MTK's crash dump
+# (its sections end around 6.3MB of expdb) so that a watchdog reset cannot
+# overwrite the record of the boot that caused it. Keep in step with BASE and
+# DMESG_SECTOR in initramfs/init.
+MARKER_SECTOR=13000
+DMESG_SECTOR=13064
+DMESG2_SECTOR=15200                    # second snapshot, also above the dump

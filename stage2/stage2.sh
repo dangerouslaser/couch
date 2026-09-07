@@ -8,7 +8,11 @@
 
 BB=/bin/busybox
 LOG=/dev/mmcblk0p13      # expdb: scratch for markers and logs
-BASE=0
+# Above MTK's crash dump, and offset from init's block so the two stages do
+# not overwrite each other's markers (init owns BASE 13000-13005). Keep in
+# step with MARKER_SECTOR / DMESG2_SECTOR in tools/env.sh.
+BASE=13006
+DMESG2_SECTOR=15200
 mark() { $BB echo "[$($BB cut -d. -f1 /proc/uptime)s] $2" | $BB dd of=$LOG bs=512 seek=$1 count=1 conv=notrunc 2>/dev/null; }
 
 echo "= stage2 running from $(dirname "$0")"
@@ -44,7 +48,7 @@ done
 [ -e /system/etc/firmware ] || { $BB mkdir -p /system/etc 2>/dev/null
                                  $BB ln -s /vendor/firmware /system/etc/firmware 2>/dev/null; }
 echo "= nodes: ttyMT2 $([ -e /dev/ttyMT2 ] && echo ok || echo MISSING), /system/vendor $([ -e /system/vendor ] && echo ok || echo MISSING)"
-mark 1 "S1 vendor=$VSRC bundle=$BUNDLE mods=$($BB ls /vendor/lib/modules 2>/dev/null | $BB wc -l)"
+mark $((BASE+1)) "S1 vendor=$VSRC bundle=$BUNDLE mods=$($BB ls /vendor/lib/modules 2>/dev/null | $BB wc -l)"
 $BB mount -t tmpfs tmpfs /dev/__properties__ 2>/dev/null
 ( cd /dev/__properties__ && $BB tar xzf "$PROPS" 2>/dev/null )
 echo "= /system $([ -x /system/bin/linker ] && echo ok || echo FAIL)  /vendor $([ -d /vendor/lib/modules ] && echo ok || echo FAIL)  props $($BB ls /dev/__properties__ | $BB wc -l)"
@@ -73,7 +77,22 @@ echo "= chroot props: $($BB ls $A/dev/__properties__ | $BB wc -l)"
 #
 # wmt_drv also registers stpwmt (major 190) only *after* successful detection,
 # and there is no devtmpfs, so the node has to be made by hand afterwards.
-WIFI=1
+# Vendor .ko blobs are pinned to the kernel they were built against: the CRC in
+# module_layout comes from that build, so they load only into Sanytron's own
+# binary. On a kernel we build ourselves wmt_drv is refused with "disagrees
+# about version of symbol module_layout", and everything below then waits on a
+# chip that will never answer - wmt_loader, then a twenty second poll for "set
+# STP mode success". Probe once here so a from-source kernel still boots to a
+# usable Couch, without a radio, instead of stalling in this block.
+$BB insmod /vendor/lib/modules/wmt_drv.ko 2>/tmp/wmt_drv.err
+if $BB grep -q "^wmt_drv " /proc/modules; then
+    WIFI=1
+else
+    WIFI=0
+    echo "= wifi SKIPPED: $($BB head -1 /tmp/wmt_drv.err 2>/dev/null)"
+    mark $((BASE+2)) "S2 wifi skipped: wmt_drv did not load"
+fi
+
 if [ "$WIFI" = "1" ]; then
     $BB umount /dev/__properties__ 2>/dev/null
     $BB umount $A/dev/__properties__ 2>/dev/null
@@ -81,7 +100,6 @@ if [ "$WIFI" = "1" ]; then
     # userdata now holds our rootfs, so there is no Android /data to borrow.
     # The wlan driver logs an NVRAM warning without it and works regardless.
 
-    $BB insmod /vendor/lib/modules/wmt_drv.ko 2>/dev/null
     $BB sleep 1; $BB mdev -s
     LD_LIBRARY_PATH=/system/lib:/vendor/lib /vendor/bin/wmt_loader >/tmp/wmt.log 2>&1
     echo "= wmt_loader rc=$? chip=$($BB grep -oE '190 mtk_stp_wmt' /proc/devices || echo NOT-DETECTED)"
@@ -119,7 +137,7 @@ if [ "$WIFI" = "1" ]; then
         $BB sleep 1; n=$((n+1))
     done
     echo "= launcher $($BB pidof wmt_launcher >/dev/null && echo running || echo dead), stp after ${n}s"
-    mark 5 "S5 launcher=$($BB pidof wmt_launcher >/dev/null && echo up || echo dead) stp=${n}s"
+    mark $((BASE+5)) "S5 launcher=$($BB pidof wmt_launcher >/dev/null && echo up || echo dead) stp=${n}s"
     $BB echo 1 > /dev/wmtWifi 2>/tmp/wifion.err
     $BB sleep 3; $BB mdev -s
     $BB ifconfig wlan0 up 2>/dev/null
@@ -173,7 +191,7 @@ if [ "$WIFI" = "1" ]; then
                 echo "= dhcp FAILED $($BB tail -1 /tmp/dhcp.log 2>/dev/null)"
             fi
         fi
-        mark 6 "S6 assoc=$ST ip=${IP:-none}"
+        mark $((BASE+6)) "S6 assoc=$ST ip=${IP:-none}"
     fi
 
     # No network: bring up the setup portal so WiFi can be configured without a
@@ -249,7 +267,7 @@ else
     echo "= no couch-gui at $GUI"
 fi
 
-$BB dmesg | $BB dd of=$LOG bs=512 seek=2048 conv=notrunc 2>/dev/null
+$BB dmesg | $BB dd of=$LOG bs=512 seek=$DMESG2_SECTOR conv=notrunc 2>/dev/null
 mark $((BASE+4)) "S4 stage2 done"
 echo ""
 echo "= READY  uptime $($BB cut -d. -f1 /proc/uptime)s"
