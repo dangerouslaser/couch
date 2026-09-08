@@ -342,3 +342,18 @@ The worst frame is now the one B render; every moving frame is under a
 quarter of the budget. A burst of 120 framebuffer captures across the slides
 saw 20 distinct states of a card row and 3 of the pager band - the band
 changed only when the pager's state did.
+
+
+### Whole-row list windows
+
+Room, device and scene lists size cards to fit a whole number of visible rows.
+The minimum card heights remain 90px for rooms/devices and 72px for the chooser;
+extra window space is distributed across those rows. Twelve-pixel gaps leave
+clearance for the six-pixel focus outline. These measurements come from the
+page height and fixed footer, avoiding a layout feedback loop.
+
+Scrolling snaps by row pitch so cards never pass partially through the viewport
+edges. Focus still animates within a window, and page slides are unchanged.
+On-device framebuffer checks with nine rooms, eight devices and twelve scenes
+verified full cards at the top and after scrolling. Use an isolated configuration
+for these checks so household devices and saved configuration remain untouched.

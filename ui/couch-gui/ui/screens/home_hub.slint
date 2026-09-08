@@ -116,8 +116,8 @@ component AreaPane inherits Rectangle {
     // The area list scrolls rather than paginating. Everything else on the hub
     // stays put, so the strip, the labels and the scenes never move - only the
     // rows travel under a fixed window.
-    property <length> row-h: 90px;
-    property <length> row-gap: 11px;
+    property <length> row-h: (root.rows-h - (root.visible-rows - 1) * root.row-gap) / root.visible-rows;
+    property <length> row-gap: 12px;
     property <length> row-pitch: root.row-h + root.row-gap;
     property <length> ring-bleed: 6px;       // ring offset + width
     property <length> gap: 14px;             // between the stacked blocks
@@ -148,30 +148,25 @@ component AreaPane inherits Rectangle {
         ? root.strip-h + 2 * root.ring-bleed + root.gap : 0px;
     property <length> scenes-y: root.height - root.scenes-card-h - 2 * root.ring-bleed;
     out property <length> dots-y: root.scenes-y - root.gap - root.label-h - root.gap - root.dots-h;
-    // The rows window, bleed excluded. Not snapped to whole rows: a list that
-    // overflows shows part of its last row, which is the cue that there is
-    // more, and one that fits is unchanged.
+    // Fit whole rows into the available window. Keep at least the original
+    // 90px card height; the gap also clears both sides of the focus outline.
     property <length> rows-h: root.dots-y - root.gap - 2 * root.ring-bleed - root.rooms-y;
 
+    property <int> visible-rows: max(1, floor((root.rows-h + root.row-gap) / (90px + root.row-gap)));
+
     in-out property <length> scroll: 0px;
-    // Where scroll is heading. `scroll` itself reads mid-flight while it
-    // animates, and both the next scroll decision and the ring need the
-    // destination.
+    // The window and focus ring share the same row-aligned destination.
     property <length> scroll-goal: 0px;
     property <length> max-scroll: max(0px,
         root.rooms.length * root.row-pitch - root.row-gap - root.rows-h);
 
-    // Read at the moment scroll or the ring is set - see place-ring() for why
+    // Read at the moment the ring is set - see place-ring() for why
     // that matters - true for a focus move, false for a landing.
     property <bool> anim: true;
-    animate scroll {
-        duration: root.anim ? 160ms : 0ms;
-        easing: ease-out;
-    }
+    // Snap the window by whole rows so no intermediate frame clips a card.
 
     /// Focus moved, by D-pad or tap: bring the row into the window if it is
-    /// not already there, and glide the ring onto it. Scroll and ring are set
-    /// in the same call with the same curve, so they travel together.
+    /// not already there, and glide the ring onto it.
     public function follow-focus() {
         root.anim = true;
         if (root.focus-row >= root.first-room-row && root.focus-row < root.scenes-row) {
@@ -254,8 +249,7 @@ component AreaPane inherits Rectangle {
         property <length> ring-y: 0px;
         property <length> ring-h: 90px;
         property <length> ring-r: Theme.r-row;
-        // The same curve at the same moment as `scroll`, so a move that also
-        // scrolls keeps the ring on its row the whole way.
+        // The ring can glide within the window; the window itself snaps.
         animate ring-y, ring-h {
             duration: root.anim ? 160ms : 0ms;
             easing: ease-out;

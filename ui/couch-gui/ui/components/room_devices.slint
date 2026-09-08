@@ -15,12 +15,16 @@ export component RoomDevices inherits Rectangle {
     callback open-scenes();
     in property <int> scene-count;
     in property <string> scene-label;
-    property <length> row-h: 90px;
-    property <length> pitch: 101px;
+    // Reserve the footer and focus outline, then fill the window with whole cards.
+    property <length> rows-h: root.height - Theme.pad-top - (root.detail == "" ? 150px : 190px) - 12px;
+    property <length> row-gap: 12px;
+    property <int> visible-rows: max(1, floor((root.rows-h + root.row-gap) / (90px + root.row-gap)));
+    property <length> row-h: (root.rows-h - (root.visible-rows - 1) * root.row-gap) / root.visible-rows;
+    property <length> pitch: root.row-h + root.row-gap;
     property <length> scroll-goal: 0px;
     property <length> ring-y: 0px;
     property <bool> anim: false;
-    animate scroll, ring-y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+    animate ring-y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
     changed items => {
         root.index = 0;
         root.anim = false;
@@ -29,17 +33,25 @@ export component RoomDevices inherits Rectangle {
         root.ring-y = 0px;
     }
     changed shown => { root.ok-down = false; }
-    changed index => {
-        root.anim = true;
+    changed index => { root.follow-focus(true); }
+    changed rows-h => {
+        root.scroll-goal = 0px;
+        root.scroll = 0px;
+        root.follow-focus(false);
+    }
+    function follow-focus(animate-ring: bool) {
+        root.anim = animate-ring;
         if (root.index < root.items.length) {
-        if (root.index * root.pitch < root.scroll-goal) {
-            root.scroll-goal = root.index * root.pitch;
-        }
-        if (root.index * root.pitch + root.row-h > root.scroll-goal + list.height - 12px) {
-            root.scroll-goal = root.index * root.pitch + root.row-h - (list.height - 12px);
-        }
-        root.scroll = root.scroll-goal;
-        root.ring-y = root.index * root.pitch;
+            if (root.index * root.pitch < root.scroll-goal) {
+                root.scroll-goal = root.index * root.pitch;
+            }
+            if (root.index * root.pitch + root.row-h > root.scroll-goal + root.rows-h) {
+                root.scroll-goal = root.index * root.pitch + root.row-h - root.rows-h;
+            }
+            // A scrolling move snaps both the cards and their outline.
+            root.anim = animate-ring && root.scroll == root.scroll-goal;
+            root.scroll = root.scroll-goal;
+            root.ring-y = root.index * root.pitch;
         }
     }
     public function take-focus() { keys.focus(); }
@@ -47,10 +59,10 @@ export component RoomDevices inherits Rectangle {
     list := Rectangle {
         x: Theme.pad-side - 6px; y: Theme.pad-top;
         width: parent.width - 2 * (Theme.pad-side - 6px);
-        height: parent.height - Theme.pad-top - (root.detail == "" ? 150px : 190px); clip: true;
+        height: root.rows-h + 12px; clip: true;
         Rectangle {
             x: 6px; y: 6px - root.scroll; width: parent.width - 12px;
-            height: max(0px, root.items.length * root.pitch - 11px);
+            height: max(0px, root.items.length * root.pitch - root.row-gap);
             for item[i] in root.items : Rectangle {
                 x: 0px; y: i * root.pitch; width: parent.width; height: root.row-h;
                 background: Theme.surface;

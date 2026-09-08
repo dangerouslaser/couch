@@ -38,8 +38,9 @@ export component Chooser inherits Rectangle {
     callback pick(int);
     callback choose(int);
 
-    property <length> row-h: 72px;
-    property <length> gap: 10px;
+    property <int> visible-rows: max(1, floor((root.win-h + root.gap) / (72px + root.gap)));
+    property <length> row-h: (root.win-h - (root.visible-rows - 1) * root.gap) / root.visible-rows;
+    property <length> gap: 12px;
     property <length> pitch: root.row-h + root.gap;
     /// The ring is drawn outside its row, so the viewport needs room for it or
     /// the first row's ring is cut off against the top edge.
@@ -64,12 +65,7 @@ export component Chooser inherits Rectangle {
     property <length> ring-y: 0px;
     // Off for the jump a freshly opened list makes, on for a move within one.
     property <bool> anim: true;
-    // The ring rides inside the scrolled box, so on a move that scrolls, ring-y
-    // gains a pitch while the box loses one - same duration, same easing, set
-    // in the same handler and so from the same tick, which cancels exactly: the
-    // ring holds still against the panel and the list travels under it. On a
-    // move that does not scroll, the ring is the only thing that moves.
-    animate scroll { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
+    // Snap scrolling to whole rows; animate the outline only within a window.
     animate ring-y { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
 
     // Minimal scrolling: move only far enough to bring the focused row fully
@@ -79,8 +75,10 @@ export component Chooser inherits Rectangle {
     // the whole distance while the ring glided.
     function row-into-view(row-y: length) {
         if (row-y < root.scroll) {
+            root.anim = false;
             root.scroll = row-y;
         } else if (row-y + root.row-h > root.scroll + root.win-h) {
+            root.anim = false;
             root.scroll = min(root.max-scroll, row-y + root.row-h - root.win-h);
         }
     }
@@ -92,8 +90,8 @@ export component Chooser inherits Rectangle {
     // geometry that the frame has yet to settle.
     changed index => {
         root.anim = true;
-        root.ring-y = root.index * root.pitch;
         root.row-into-view(root.index * root.pitch);
+        root.ring-y = root.index * root.pitch;
     }
 
     // A fresh list opens at the top. The host sets the index to 0 before it
