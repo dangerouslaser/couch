@@ -22,7 +22,6 @@ pub enum Route {
     Areas,
     Area(Id),
     Room(Id),
-    Scenes,
     Scene(Id),
     Activities,
     Activity(Id),
@@ -44,7 +43,7 @@ impl Route {
             ["areas"] => Route::Areas,
             ["areas", id] => Route::Area(Id::new(*id)),
             ["rooms", id] => Route::Room(Id::new(*id)),
-            ["scenes"] => Route::Scenes,
+            ["scenes"] => Route::Rooms,
             ["scenes", id] => Route::Scene(Id::new(*id)),
             ["activities"] => Route::Activities,
             ["activities", id] => Route::Activity(Id::new(*id)),
@@ -60,7 +59,6 @@ impl Route {
             Route::Areas | Route::NotFound => "/areas".to_string(),
             Route::Area(id) => format!("/areas/{id}"),
             Route::Room(id) => format!("/rooms/{id}"),
-            Route::Scenes => "/scenes".to_string(),
             Route::Scene(id) => format!("/scenes/{id}"),
             Route::Activities => "/activities".to_string(),
             Route::Activity(id) => format!("/activities/{id}"),
@@ -73,7 +71,7 @@ impl Route {
             Route::Overview => Route::Overview,
             Route::Rooms | Route::Room(_) => Route::Rooms,
             Route::Connections => Route::Connections,
-            Route::Scenes | Route::Scene(_) => Route::Scenes,
+            Route::Scene(_) => Route::Rooms,
             Route::Activities | Route::Activity(_) => Route::Activities,
             _ => Route::Areas,
         }
@@ -133,7 +131,6 @@ mod tests {
             Route::Areas,
             Route::Area(Id::new("upstairs")),
             Route::Room(Id::new("study")),
-            Route::Scenes,
             Route::Scene(Id::new("night")),
             Route::Activities,
             Route::Activity(Id::new("tv")),
@@ -141,6 +138,8 @@ mod tests {
             assert_eq!(Route::from_path(&route.path()), route);
         }
         assert_eq!(Route::Room(Id::new("study")).tab(), Route::Rooms);
+        assert_eq!(Route::from_path("/scenes"), Route::Rooms);
+        assert_eq!(Route::Scene(Id::new("night")).tab(), Route::Rooms);
         assert_eq!(Route::from_path("/unknown"), Route::NotFound);
     }
 }

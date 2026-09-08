@@ -32,7 +32,7 @@ try{
  assert.equal((await api('connection','PUT',{url:bridge})).status,502);
  browser=await chromium.launch();const page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await fetch(`${base}/api/rooms`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Test room'})});
- await page.goto(base);await page.getByRole('navigation').getByRole('button',{name:'Connections',exact:true}).click();
+ await page.goto(base);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Scenes',exact:true}).count(),0);await page.getByRole('navigation').getByRole('button',{name:'Connections',exact:true}).click();
  await page.getByLabel('Connection type',{exact:true}).selectOption('hue');const card=page.locator('.hue-connection');await card.getByLabel('Hue bridge address').fill(bridge);
  pressed=true;await card.getByRole('button',{name:'Pair bridge',exact:true}).click();await page.locator('.saved-connection').getByRole('heading',{name:'Philips Hue',exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Add to this room',exact:true}).count(),0);

@@ -125,9 +125,10 @@ and is assigned to its bottom Scenes button on the remote. Adding an already
 imported scene to another room reuses it; **Remove from room** only removes that
 assignment. The picker keeps its selected category and search after adding items.
 
-The separate **Scenes** page remains available for renaming scenes and editing
-room assignments. **Remote screens** controls scene membership on custom home
-pages; ALL ROOMS exposes every saved scene.
+Scenes are managed from **Rooms & devices**; there is no standalone Scenes tab.
+Open a scene in a room to rename it or edit its assignments. Older /scenes
+bookmarks open the rooms list. **Remote screens** controls scene membership on
+custom home pages; ALL ROOMS exposes every saved scene.
 
 The home and room views each have a bottom **Scenes** button. The room picker
 contains only scenes assigned to that room. OK recalls the selected scene and

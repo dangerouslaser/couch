@@ -191,7 +191,6 @@ fn Shell() -> impl IntoView {
                 (Route::Rooms, "Rooms & devices"),
                 (Route::Connections, "Connections"),
                 (Route::Areas, "Remote screens"),
-                (Route::Scenes, "Scenes"),
                 (Route::Activities, "Activities"),
             ]
                 .into_iter()

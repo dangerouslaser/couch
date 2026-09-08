@@ -108,7 +108,9 @@ try {
   await page.getByRole('button',{name:/Watch TV/}).click();
   const deviceId = (await config()).rooms[0].devices[0].id;
   await saved(() => page.getByLabel(/^Source device/).selectOption(deviceId));
-  await navigate('Scenes');
+  assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Scenes',exact:true}).count(),0);
+  await navigate('Remote screens');
+  await page.getByRole('button',{name:/Whole home/}).click();
   await page.getByRole('button',{name:/Movie night/}).click();
   await saved(() => page.locator('.add-row select').selectOption(deviceId));
   assert.equal((await config()).scenes[0].steps.length,1);
@@ -156,7 +158,7 @@ try {
   await saved(() => page.getByRole('button',{name:'Move down',exact:true}).first().click());
   assert.deepEqual((await config()).areas.map(a=>a.id),[beforeOrder[1],beforeOrder[0],...beforeOrder.slice(2)]);
   await page.setViewportSize({width:360,height:800});
-  for (const label of ['Overview','Rooms & devices','Connections','Remote screens','Scenes','Activities']) {
+  for (const label of ['Overview','Rooms & devices','Connections','Remote screens','Activities']) {
     await navigate(label); await noOverflow();
   }
   assert.deepEqual(errors,[]);
