@@ -3,6 +3,12 @@
 //! The screens themselves are still being designed; everything here is the
 //! platform underneath them - panel, input, and the device state the UI shows.
 
+// Opt-in comparison against musl; never assume allocator throughput implies
+// bounded application latency (page faults and OS calls remain possible).
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod evdev;
 mod keypad;
 mod mic;
@@ -86,7 +92,11 @@ enum Standby {
 
 
 #[derive(Debug, PartialEq)]
-enum TouchDisposition { Ignore, Wake, Dispatch }
+enum TouchDisposition {
+    Ignore,
+    Wake,
+    Dispatch,
+}
 
 fn touch_disposition(state: Standby, event: &touch::Event, swallow: &mut bool) -> TouchDisposition {
     if state == Standby::Off {

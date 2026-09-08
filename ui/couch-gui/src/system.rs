@@ -7,7 +7,11 @@ use std::process::Command;
 pub fn report_gui_health() -> std::io::Result<()> {
     // /proc/uptime includes system suspend, matching init's freshness clock.
     let uptime = std::fs::read_to_string("/proc/uptime")?;
-    let seconds = uptime.split('.').next().unwrap_or("").parse::<u64>()
+    let seconds = uptime
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .parse::<u64>()
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     let pid = std::process::id();
     let temporary = format!("/tmp/couch-gui.health.{pid}");

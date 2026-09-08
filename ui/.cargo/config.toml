@@ -3,3 +3,6 @@
 # with no cross-gcc and no Docker.
 [target.armv7-unknown-linux-musleabihf]
 linker = "rust-lld"
+# Device-specific GUI: HA100's Cortex-A7 provides NEON and VFPv4. Do not use
+# this binary on ARMv7 hardware without those features.
+rustflags = ["-C", "target-cpu=cortex-a7"]

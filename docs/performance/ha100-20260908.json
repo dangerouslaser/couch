@@ -1,0 +1,67 @@
+{
+  "kernel": "15b9bb349413240abb5538db678a2f9a8c4653ac",
+  "profile": "normal, IRTX disabled",
+  "workload": "COUCH_NAV=1 COUCH_SLIDE=1, 30 seconds, USB power, interactive governor",
+  "runs": [
+    {
+      "run": "bench-baseline-1",
+      "sha256": "3877de0a3fcac6a3c9fec4568767e47cdcbb969939df2241805387c5626dac4e",
+      "binary_bytes": 1853200,
+      "frames": 634,
+      "weighted_mean_work_us": 4111,
+      "worst_work_us": 20763,
+      "rss_kib": 4836,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 143 frames, 4267 us/frame, 19212 us worst, 12574 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 122 frames, 4112 us/frame, 18478 us worst, 12774 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 118 frames, 4023 us/frame, 20446 us worst, 12831 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 137 frames, 4063 us/frame, 19314 us worst, 12785 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 114 frames, 4064 us/frame, 20763 us worst, 12805 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    4836 kB\nvoluntary_ctxt_switches:\t4067\nnonvoluntary_ctxt_switches:\t9\n604500\n"
+    },
+    {
+      "run": "bench-baseline-2",
+      "sha256": "3877de0a3fcac6a3c9fec4568767e47cdcbb969939df2241805387c5626dac4e",
+      "binary_bytes": 1853200,
+      "frames": 634,
+      "weighted_mean_work_us": 4093,
+      "worst_work_us": 20716,
+      "rss_kib": 4836,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 144 frames, 4139 us/frame, 19052 us worst, 12682 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 122 frames, 4130 us/frame, 20482 us worst, 12747 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 117 frames, 4015 us/frame, 19928 us worst, 12836 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 137 frames, 4105 us/frame, 20452 us worst, 12763 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 114 frames, 4061 us/frame, 20716 us worst, 12808 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    4836 kB\nvoluntary_ctxt_switches:\t4076\nnonvoluntary_ctxt_switches:\t8\n604500\n"
+    },
+    {
+      "run": "bench-candidate-1",
+      "sha256": "bede8c10f6c6c016e01fec603f1fb41aaf419403d27197ffb0619a20dcc69b3b",
+      "binary_bytes": 2326576,
+      "frames": 637,
+      "weighted_mean_work_us": 3761,
+      "worst_work_us": 18588,
+      "rss_kib": 5368,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 144 frames, 3930 us/frame, 17526 us worst, 12885 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3755 us/frame, 18311 us worst, 13077 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 117 frames, 3618 us/frame, 18588 us worst, 13199 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 137 frames, 3765 us/frame, 18538 us worst, 13056 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 115 frames, 3695 us/frame, 16871 us worst, 13114 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    5368 kB\nvoluntary_ctxt_switches:\t4077\nnonvoluntary_ctxt_switches:\t6\n604500\n"
+    },
+    {
+      "run": "bench-candidate-2",
+      "sha256": "bede8c10f6c6c016e01fec603f1fb41aaf419403d27197ffb0619a20dcc69b3b",
+      "binary_bytes": 2326576,
+      "frames": 643,
+      "weighted_mean_work_us": 3786,
+      "worst_work_us": 18477,
+      "rss_kib": 5368,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 143 frames, 3911 us/frame, 17570 us worst, 12903 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3763 us/frame, 18285 us worst, 13069 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 130 frames, 3648 us/frame, 18477 us worst, 13159 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3818 us/frame, 18242 us worst, 13000 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 122 frames, 3777 us/frame, 18283 us worst, 13052 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    5368 kB\nvoluntary_ctxt_switches:\t4069\nnonvoluntary_ctxt_switches:\t8\n604500\n"
+    },
+    {
+      "run": "bench-mimalloc-1",
+      "sha256": "521b62ea62da6a8103e4690a97f05abc931d6ba3b1ce2aa9734a2553481682d0",
+      "binary_bytes": 2445628,
+      "frames": 643,
+      "weighted_mean_work_us": 3589,
+      "worst_work_us": 17391,
+      "rss_kib": 5228,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 143 frames, 3615 us/frame, 15872 us worst, 13169 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3600 us/frame, 17238 us worst, 13205 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 130 frames, 3525 us/frame, 17189 us worst, 13260 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3615 us/frame, 17391 us worst, 13180 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 122 frames, 3590 us/frame, 17157 us worst, 13210 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    5228 kB\nvoluntary_ctxt_switches:\t4073\nnonvoluntary_ctxt_switches:\t10\n604500\n"
+    },
+    {
+      "run": "bench-mimalloc-2",
+      "sha256": "521b62ea62da6a8103e4690a97f05abc931d6ba3b1ce2aa9734a2553481682d0",
+      "binary_bytes": 2445628,
+      "frames": 644,
+      "weighted_mean_work_us": 3581,
+      "worst_work_us": 17587,
+      "rss_kib": 5228,
+      "log": "couch-gui: pacing: sleep to 16.67ms (default; the ioctls stall while a key is held)\ncouch-gui: panel 480x800\ncouch-gui: input /dev/input/event1\ncouch-gui: input /dev/input/event2\ncouch-gui: 2 keypad device(s)\ncouch-gui: input /dev/input/event3\ncouch-gui: touchscreen present\ncouch-gui: standby: dim after 3600s, off after 0s (0=never)\ncouch-gui: 144 frames, 3645 us/frame, 15650 us worst, 13142 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3557 us/frame, 16645 us worst, 13241 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 130 frames, 3506 us/frame, 17351 us worst, 13283 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 124 frames, 3581 us/frame, 16748 us worst, 13210 us paced | input 0 us avg, 0 us max (n=0)\ncouch-gui: 122 frames, 3609 us/frame, 17587 us worst, 13192 us paced | input 0 us avg, 0 us max (n=0)\nVmRSS:\t    5228 kB\nvoluntary_ctxt_switches:\t4080\nnonvoluntary_ctxt_switches:\t7\n604500\n"
+    }
+  ]
+}

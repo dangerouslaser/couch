@@ -19,6 +19,10 @@ libc = "0.2"
 # The setup screen's QR. LVGL had one built in; Slint does not, and qrcodegen is
 # the same encoder LVGL vendored.
 qrcodegen = "1.8"
+mimalloc = { version = "0.1.52", default-features = false, optional = true }
 
 [build-dependencies]
 slint-build = "1.17"
+
+[features]
+mimalloc = ["dep:mimalloc"]
