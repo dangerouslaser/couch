@@ -85,3 +85,30 @@ configuration checksums stayed unchanged. The MTK driver emits a zero-RSSI
 diagnostic scan entry; invalid RSSI values are excluded from the list. Twenty-eight
 GUI tests pass, including six network regressions. No candidate connection was
 selected during device review; a real network change awaits physical validation.
+
+## Black-screen wake: PWM enable cache (September 8)
+
+A physical black screen survived backlight nudges, GUI restart and an explicit
+FBIOBLANK power cycle while mtkfb reported Alive and the framebuffer still changed.
+A reboot restored it. Inspection found that `ddp_pwm.c` cached PWM_EN independently
+of brightness and retained that enable cache through power transitions.
+
+A controlled fault reproduced the mechanism on `30c130c8`: while awake, clearing
+only PWM_EN through `pwm_test:set:0,0,1`, then writing brightness 254/255, left
+register +0x00 at 0 even though duty register +0x14 was `0x03ff03ff` (full brightness).
+Writing 0/255 restored it. This proves the cache defect; no register snapshot was
+captured during the original spontaneous failure, so its exact trigger is not
+proven.
+
+Kernel `0d6673cd8337` reconciles PWM_EN against hardware while clocks are on and
+invalidates the MT6580 enable cache across power transitions. It built on Ollie
+from a clean commit. `build/couch-pwm-resume.img` SHA256:
+`2573bf876c2000499caadaa23ee722e74dd8668b35d2d4947658999da6ba45ad`.
+Boot-partition readback verified; boot health cleared the BCB at normal timeout.
+Recovery p9 remains MD5 `2ac16bf92bf9d92220b8af3f0ea46600`.
+
+The identical fault injection now restores PWM_EN=1 with ordinary brightness
+writes. Three automated cycles with dim=3s/off=8s each reached full powerdown and
+woke to Alive/PWM_EN=1/full duty. Panel resume/present took 459–461 ms and backlight
+writes 2–3 ms. Normal 30s/300s timers were restored. Physical confirmation and a
+longer normal-use soak remain separate from these register-level checks.
