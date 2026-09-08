@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Hue may acknowledge a write before resource snapshots reflect it.
+struct Pending {
+    state: Light,
+    brightness: Option<u8>,
+    until: Instant,
+}
 #[derive(Default)]
 struct Cache {
     lights: HashMap<String, Light>,
@@ -18,8 +24,28 @@ struct Cache {
     generation: u64,
     commanding: bool,
     dirty: bool,
+    pending: HashMap<String, Pending>,
 }
 impl Cache {
+    fn apply_snapshot(&mut self, lights: Vec<Light>, now: Instant) {
+        let mut lights: HashMap<_, _> = lights.into_iter()
+            .map(|light| (light.entity_id.clone(), light)).collect();
+        self.pending.retain(|_, pending| now < pending.until);
+        for (id, pending) in &self.pending {
+            if let Some(observed) = lights.get_mut(id) {
+                // Unavailability and deletion remain authoritative. Only guard
+                // old power/level observations during the bounded settling time.
+                if observed.on.is_some() && (observed.on != pending.state.on
+                    || pending.brightness.is_some_and(|p| p > 0
+                        && observed.brightness_percent != Some(p))) {
+                    *observed = pending.state.clone();
+                    self.dirty = true;
+                }
+            }
+        }
+        self.lights = lights;
+        self.updated = Some(now);
+    }
     fn fresh(&self) -> bool {
         self.updated
             .is_some_and(|t| t.elapsed() < Duration::from_secs(if self.streaming { 65 } else { 5 }))
@@ -57,11 +83,7 @@ impl Session {
         }
         match result {
             Ok(lights) => {
-                cache.lights = lights
-                    .into_iter()
-                    .map(|l| (l.entity_id.clone(), l))
-                    .collect();
-                cache.updated = Some(Instant::now());
+                cache.apply_snapshot(lights, Instant::now());
                 Ok(())
             }
             Err(e) => {
@@ -91,6 +113,7 @@ impl Session {
             self.client.recall_scene(scene)?;
             let mut cache = self.cache.lock().unwrap();
             cache.invalidate();
+            cache.pending.clear();
             cache.dirty = true;
             return Ok(state);
         }
@@ -113,11 +136,21 @@ impl Session {
         c.commanding = false;
         c.generation += 1;
         if let Err(e) = result {
+            c.pending.remove(id);
             c.invalidate();
+            c.dirty = true;
             return Err(e);
         }
         state.on = Some(brightness.map_or(on, |p| p > 0));
-        state.brightness_percent = brightness.or(if on { None } else { Some(0) });
+        // Power-off keeps Hue's saved dimming level for the next power-on.
+        if let Some(percent) = brightness.filter(|p| *p > 0) {
+            state.brightness_percent = Some(percent);
+        }
+        c.pending.insert(id.into(), Pending {
+            state: state.clone(), brightness,
+            until: Instant::now() + Duration::from_secs(2),
+        });
+        c.dirty = true;
         c.lights.insert(id.into(), state.clone());
         // Do not extend the age of other lights based on this command.
         println!(
@@ -316,6 +349,72 @@ fn event(reader: &mut impl BufRead) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn acknowledged_toggle_keeps_brightness_across_stale_snapshots() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr();
+        let id = "00000000-0000-0000-0000-000000000001";
+        let remote = thread::spawn(move || {
+            for on in [true, false, true] {
+                let mut request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+                assert_eq!(request.method(), &tiny_http::Method::Put);
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                    serde_json::json!({"on":{"on":on}}));
+                request.respond(tiny_http::Response::from_string(
+                    serde_json::json!({"errors":[],"data":[{"rid":id,"rtype":"light"}]}).to_string())).unwrap();
+            }
+        });
+        let off = Light { entity_id: id.into(), name: "Test".into(), on: Some(false),
+            brightness_percent: Some(56), dimmable: true };
+        let mut cache = Cache::default();
+        cache.apply_snapshot(vec![off.clone()], Instant::now());
+        let session = Session {
+            client: Arc::new(Hue { base: format!("http://{address}"), key: "fixture".into(),
+                agent: ureq::Agent::new_with_defaults() }),
+            cache: Mutex::new(cache), refresh_lock: Mutex::new(()),
+        };
+        let on = session.toggle(id).unwrap();
+        assert_eq!((on.on, on.brightness_percent), (Some(true), Some(56)));
+        {
+            let mut cache = session.cache.lock().unwrap();
+            // Old state can follow even a matching snapshot while Hue settles.
+            for observed in [off.clone(), on.clone(), off.clone(), on.clone()] {
+                cache.apply_snapshot(vec![observed], Instant::now());
+                assert_eq!(cache.lights[id].on, Some(true));
+                assert_eq!(cache.lights[id].brightness_percent, Some(56));
+            }
+        }
+        assert_eq!(session.toggle(id).unwrap().on, Some(false));
+        assert_eq!(session.toggle(id).unwrap().brightness_percent, Some(56));
+        let mut cache = session.cache.lock().unwrap();
+        let expired = cache.pending[id].until + Duration::from_millis(1);
+        cache.apply_snapshot(vec![off], expired);
+        assert_eq!(cache.lights[id].on, Some(false));
+        assert!(cache.pending.is_empty());
+        remote.join().unwrap();
+    }
+    #[test]
+    fn settling_guard_preserves_unavailability_deletion_and_unrelated_changes() {
+        let state = Light { entity_id: "room:test".into(), name: "Test".into(),
+            on: Some(true), brightness_percent: Some(56), dimmable: true };
+        let mut cache = Cache::default();
+        cache.pending.insert(state.entity_id.clone(), Pending { state: state.clone(),
+            brightness: Some(56), until: Instant::now() + Duration::from_secs(2) });
+        let mut old = state.clone();
+        old.brightness_percent = Some(20);
+        let mut unrelated = old.clone();
+        unrelated.entity_id = "other".into();
+        cache.apply_snapshot(vec![old.clone(), unrelated], Instant::now());
+        assert_eq!(cache.lights["room:test"].brightness_percent, Some(56));
+        assert_eq!(cache.lights["other"].brightness_percent, Some(20));
+        old.on = None;
+        cache.apply_snapshot(vec![old], Instant::now());
+        assert_eq!(cache.lights["room:test"].on, None);
+        cache.apply_snapshot(vec![], Instant::now());
+        assert!(cache.lights.is_empty());
+    }
     #[test]
     fn dimming_uses_cached_state_and_sends_only_the_requested_level() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();

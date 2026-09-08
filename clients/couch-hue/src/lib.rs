@@ -175,9 +175,8 @@ impl Hue {
                 None
             };
             let dimmable = v["dimming"].is_object();
-            let brightness_percent = if on == Some(false) {
-                Some(0)
-            } else if on == Some(true) {
+            // Hue keeps the saved dimming level while powered off.
+            let brightness_percent = if on.is_some() {
                 v["dimming"]["brightness"]
                     .as_f64()
                     .filter(|p| p.is_finite() && (0.0..=100.0).contains(p))

@@ -260,7 +260,7 @@ impl Controller {
         move |room| input.borrow_mut().push_back(Input::Open(room))
     }
     fn row(&self, e: &Entry) -> ChoiceItem {
-        let detail = if self.busy.as_deref() == Some(&e.id) {
+        let detail = if !e.hue && self.busy.as_deref() == Some(&e.id) {
             "Updating…".into()
         } else if e.id.starts_with("device:") {
             "Controls not available yet".into()

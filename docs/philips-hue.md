@@ -197,3 +197,10 @@ Brightness and scene feedback share a large card with 22px labels, 26px names,
 and a 30px brightness percentage. Cards slide in and out over 200ms without
 moving focus. Brightness feedback dwells for one second; scene feedback dwells
 for 1.5 seconds. Scene feedback distinguishes applying, activated and failed.
+
+Toggle feedback preserves Hue’s saved brightness while a light is off, so an
+acknowledged power-on immediately displays its known level. For up to two seconds
+after a successful command, older bridge power/brightness snapshots cannot undo
+that target. Background reconciliation continues; unavailable/deleted devices
+remain authoritative, and external changes are accepted after this settling
+window. Failed commands invalidate the cache for a fresh read.

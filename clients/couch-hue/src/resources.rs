@@ -59,8 +59,7 @@ impl Hue {
                 let on = state.and_then(|s| s["on"]["on"].as_bool());
                 let dimmable = state.is_some_and(|s| s["dimming"].is_object());
                 let brightness_percent = match on {
-                    Some(false) => Some(0),
-                    Some(true) => state
+                    Some(false) | Some(true) => state
                         .and_then(|s| s["dimming"]["brightness"].as_f64())
                         .filter(|p| p.is_finite() && (0.0..=100.0).contains(p))
                         .map(|p| p.round() as u8),
@@ -123,7 +122,7 @@ mod tests {
         let id = "00000000-0000-0000-0000-000000000001";
         for (on, dimming, expected, supported) in [
             (json!(true), json!({"brightness":42.4}), Some(42), true),
-            (json!(false), json!({"brightness":42.4}), Some(0), true),
+            (json!(false), json!({"brightness":42.4}), Some(42), true),
             (Value::Null, json!({"brightness":42.4}), None, true),
             (json!(true), json!({"brightness":101}), None, true),
             (json!(true), Value::Null, None, false),
