@@ -1,3 +1,10 @@
+@font-face {
+  font-family:"Couch Inter";
+  src:url("/inter/InterVariable.woff2") format("woff2");
+  font-weight:100 900;
+  font-style:normal;
+  font-display:swap;
+}
 :root {
   color-scheme:light;
   --bg:#f5f4ef;
@@ -66,17 +73,12 @@ button:focus-visible,a:focus-visible,summary:focus-visible {
   z-index:5;
 }
 .brand {
+  font-family:"Couch Inter",Inter,sans-serif;
   font-size:26px;
   font-weight:750;
   letter-spacing:-.06em;
   color:var(--fg);
   text-decoration:none;
-}
-.brand span {
-  font-size:13px;
-  letter-spacing:0;
-  font-weight:450;
-  color:var(--dim);
 }
 .spacer {
   flex:1;
@@ -552,9 +554,6 @@ input:focus,select:focus {
 @media(max-width:760px) {
   .bar {
     padding:0 18px;
-  }
-  .brand span {
-    display:none;
   }
   .tabs {
     top:var(--bar-h);

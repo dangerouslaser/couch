@@ -144,7 +144,7 @@ fn Shell() -> impl IntoView {
 
     view! {
         <header class="bar">
-            <a class="brand" href="/">"couch"<span>" / configuration"</span></a>
+            <a class="brand" href="/">"couch."</a>
             <span class="spacer"></span>
             <span class="status" role="status" aria-live="polite">
                 {move || if app.busy.get() { "Saving…" } else if app.error.get().is_some() { "Not saved" } else if app.config.get().is_some() { "Saved" } else { "" }}
