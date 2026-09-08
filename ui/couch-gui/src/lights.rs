@@ -243,6 +243,9 @@ impl Controller {
             last_brightness_send: Instant::now() - Duration::from_secs(1),
         }
     }
+    pub fn hue_live(&self) -> Arc<couch_hue::live::Live> {
+        self.hue.clone()
+    }
     pub fn wake(&mut self) {
         self.hue.reset();
         self.cache.0.retain(|id, _| !id.starts_with("hue:"));
@@ -271,6 +274,7 @@ impl Controller {
             detail: detail.into(),
             light: !e.id.starts_with("device:"),
             active: e.state.as_ref().is_some_and(|s| s.on == Some(true)),
+            power_known: e.state.as_ref().is_some_and(|s| s.on.is_some()),
         }
     }
     fn update_rows(&self, app: &App, reset: bool) {

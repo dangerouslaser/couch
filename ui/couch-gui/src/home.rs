@@ -55,6 +55,7 @@ fn project(config: &Config) -> Vec<Area> {
                     devices: r.device_summary().into(),
                     detail: r.device_detail().into(),
                     active_count: 0,
+                    power_state: -1,
                     status_known: false,
                     idle: true,
                     offline: false,
@@ -93,6 +94,15 @@ fn project(config: &Config) -> Vec<Area> {
 mod tests {
     use super::*;
     #[test]
+    fn room_icons_distinguish_on_off_and_unknown_devices() {
+        assert_eq!(room_power([Some(false), Some(false)].into_iter()), 0);
+        assert_eq!(room_power([Some(false), Some(true)].into_iter()), 1);
+        assert_eq!(room_power([None, Some(true)].into_iter()), 1);
+        assert_eq!(room_power([None, Some(false)].into_iter()), -1);
+        assert_eq!(room_power([None].into_iter()), -1);
+        assert_eq!(room_power([].into_iter()), -1);
+    }
+    #[test]
     fn every_room_is_reachable_without_configured_areas() {
         let mut config = Config::seed();
         config.areas.clear();
@@ -125,4 +135,126 @@ pub fn apply_accent(app: &crate::App, rgb: [u8; 3]) {
     let bg = [21u16, 19, 15];
     let tint = std::array::from_fn::<_, 3, _>(|i| ((rgb[i] as u16 * 15 + bg[i] * 85) / 100) as u8);
     app.set_accent_background(slint::Color::from_rgb_u8(tint[0], tint[1], tint[2]));
+}
+
+// One background observer for all rooms, sharing Hue's existing push cache.
+// Unsupported devices stay unknown; an off light cannot prove an entire room off.
+fn room_power(states: impl Iterator<Item = Option<bool>>) -> i32 {
+    let mut any = false;
+    let mut unknown = false;
+    for state in states {
+        any = true;
+        match state {
+            Some(true) => return 1,
+            Some(false) => {}
+            None => unknown = true,
+        }
+    }
+    if any && !unknown {
+        0
+    } else {
+        -1
+    }
+}
+pub struct RoomMonitor {
+    rx: std::sync::mpsc::Receiver<std::collections::HashMap<Id, i32>>,
+    latest: std::collections::HashMap<Id, i32>,
+}
+impl RoomMonitor {
+    pub fn new(hue: std::sync::Arc<couch_hue::live::Live>) -> Self {
+        use std::{
+            collections::HashMap,
+            time::{Duration, Instant},
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut ha_states = HashMap::new();
+            let mut ha_at = Instant::now() - Duration::from_secs(5);
+            loop {
+                let config = std::fs::read(path("config.json"))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok());
+                let mut powers = HashMap::new();
+                if let Some(config) = config {
+                    let has_ha = config.devices().any(|(_, d)| {
+                        matches!(
+                            config.resolve_integration(&d.integration),
+                            Some(couch_model::Integration::HomeAssistant { .. })
+                        )
+                    });
+                    if has_ha && ha_at.elapsed() >= Duration::from_secs(5) {
+                        ha_states = couch_ha::settings::Settings::load(&path("ha-connection.json"))
+                            .and_then(|s| s.client())
+                            .and_then(|c| c.lights())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|s| (s.entity_id, s.on))
+                            .collect();
+                        ha_at = Instant::now();
+                    }
+                    let has_hue = config.devices().any(|(_, d)| {
+                        matches!(
+                            config.resolve_integration(&d.integration),
+                            Some(couch_model::Integration::Hue { .. })
+                        )
+                    });
+                    let hue_states: HashMap<_, _> = if has_hue {
+                        hue.lights()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|s| (s.entity_id, s.on))
+                            .collect()
+                    } else {
+                        HashMap::new()
+                    };
+                    for room in &config.rooms {
+                        powers.insert(
+                            room.id.clone(),
+                            room_power(room.devices.iter().map(|d| {
+                                match config.resolve_integration(&d.integration) {
+                                    Some(couch_model::Integration::Hue { light_id }) => {
+                                        hue_states.get(&light_id).copied().flatten()
+                                    }
+                                    Some(couch_model::Integration::HomeAssistant { entity_id }) => {
+                                        ha_states.get(&entity_id).copied().flatten()
+                                    }
+                                    _ => None,
+                                }
+                            })),
+                        );
+                    }
+                }
+                match tx.try_send(powers) {
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                    _ => {}
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        });
+        Self {
+            rx,
+            latest: Default::default(),
+        }
+    }
+    pub fn poll(&mut self, app: &crate::App, areas: &mut [Area], current: usize) {
+        use slint::Model;
+        while let Ok(latest) = self.rx.try_recv() {
+            self.latest = latest;
+        }
+        let model = app.get_rooms();
+        let rows = model.as_any().downcast_ref::<slint::VecModel<RoomRow>>();
+        for (area_index, area) in areas.iter_mut().enumerate() {
+            for (row_index, (id, row)) in area.room_ids.iter().zip(&mut area.rooms).enumerate() {
+                let power = self.latest.get(id).copied().unwrap_or(-1);
+                if row.power_state != power {
+                    row.power_state = power;
+                    if area_index == current {
+                        if let Some(rows) = rows {
+                            rows.set_row_data(row_index, row.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -169,3 +169,15 @@ target for that light, with at most one send per 100ms and one command in flight
 Acknowledgements update the row; failed commands hide the meter and show an
 error. Non-light rows ignore volume keys; unavailable and non-dimmable lights
 reject brightness changes. Home Assistant lights use its existing service API.
+
+## Live room and device icons
+
+Room icons use the accent color when any configured device is known to be on,
+and fade when every device is known to be off. Empty rooms, unsupported devices,
+and unavailable states stay neutral unless another device is known to be on.
+Device icons use the same on/off/unknown colors. Changes animate over 180ms.
+
+The room observer shares the existing Hue push cache and samples it every 500ms;
+Home Assistant light status is polled every five seconds. Network work stays off
+the GUI thread, and individual model rows update without resetting focus or
+scroll position. Integrations without power feedback are treated as unknown.

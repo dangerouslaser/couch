@@ -17,6 +17,7 @@ export struct RoomRow {
     devices: string,    // "5 devices"
     detail: string,     // "Kodi, Hue, LG C3" - may be empty
 
+    power-state: int,   // -1 unknown, 0 all off, 1 any on
     active-count: int,
     status-known: bool,
     idle: bool,
@@ -364,12 +365,13 @@ component AreaPane inherits Rectangle {
                                     width: 52px;
                                     height: 52px;
                                     border-radius: Theme.r-disc;
-                                    background: area.idle ? Theme.surface-icon-idle : Theme.surface-icon;
+                                    background: area.power-state == 0 ? Theme.surface-icon-idle : Theme.surface-icon;
                                     border-width: 1px;
-                                    border-color: area.idle ? Theme.border-icon-idle : Theme.border-icon;
+                                    border-color: area.power-state == 0 ? Theme.border-icon-idle : Theme.border-icon;
                                     RoomIcon {
                                         shape: area.glyph;
-                                        ink: area.idle ? Theme.text-quaternary : Theme.accent;
+                                        ink: area.power-state > 0 ? Theme.accent : area.power-state == 0 ? Theme.text-quaternary : Theme.text-secondary;
+                                        animate ink { duration: 180ms; easing: ease-out; }
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
                                     }

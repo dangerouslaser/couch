@@ -174,6 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             devices: devices.into(),
             detail: detail.into(),
             active_count: on,
+            power_state: if on > 0 { 1 } else { 0 },
             status_known: true,
             idle: on == 0,
             offline: false,
@@ -290,6 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut loaded_home = String::new();
     if let Some((raw, saved, accent)) = home::read(&loaded_home) { home::apply_accent(&app,accent); loaded_home = raw; areas = saved; }
     let mut light_controls = lights::Controller::install(&app);
+    let mut room_monitor = home::RoomMonitor::new(light_controls.hue_live());
     let scene_controls = scenes::Controller::new();
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
@@ -385,6 +387,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // that would be on every row and mean nothing.
                     active: false,
                     light: false,
+                    power_known: false,
                 })
                 .collect();
             app.set_chooser_title("NOW PLAYING".into());
@@ -415,6 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         detail: "Press OK to activate".into(),
                         active: false,
                         light: false,
+                        power_known: false,
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -452,6 +456,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         detail: "Press OK to activate".into(),
                         active: false,
                         light: false,
+                        power_known: false,
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -991,6 +996,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             screen.snapshot();
         }
         light_controls.poll(&app);
+        room_monitor.poll(&app, &mut areas.borrow_mut(), current.get());
         if room_navigation && was_room != app.get_light_shown() {
             slint::platform::update_timers_and_animations();
             if let Some(us) = screen.render_offscreen(&window) {

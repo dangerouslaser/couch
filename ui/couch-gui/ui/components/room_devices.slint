@@ -73,12 +73,13 @@ export component RoomDevices inherits Rectangle {
                     padding: 18px; spacing: 16px;
                     Rectangle {
                         width: 52px; height: 52px; border-radius: Theme.r-disc;
-                        background: Theme.surface-icon;
-                        border-width: 1px; border-color: Theme.border-icon;
+                        background: item.power-known && !item.active ? Theme.surface-icon-idle : Theme.surface-icon;
+                        border-width: 1px; border-color: item.power-known && !item.active ? Theme.border-icon-idle : Theme.border-icon;
                         Image {
                             x: 14px; y: 14px; width: 24px; height: 24px;
                             source: item.light ? @image-url("../../assets/icon-lightbulb.png") : @image-url("../../assets/icon-monitor.png");
-                            colorize: Theme.accent;
+                            colorize: item.active ? Theme.accent : item.power-known ? Theme.text-quaternary : Theme.text-secondary;
+                            animate colorize { duration: 180ms; easing: ease-out; }
                         }
                     }
                     VerticalLayout {

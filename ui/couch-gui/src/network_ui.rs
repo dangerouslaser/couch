@@ -70,6 +70,7 @@ impl Controller {
                     detail: detail.into(),
                     active: false,
                     light: false,
+                    power_known: false,
                 })
                 .collect::<Vec<_>>(),
         )));
