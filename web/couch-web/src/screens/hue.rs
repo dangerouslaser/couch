@@ -55,7 +55,7 @@ pub fn setup(app: App) -> AnyView {
     };
     view! {
         <section class="card hue-connection"><h2>"Philips Hue"</h2>
-        <p>"Pair the bridge used to reach your Hue lights, rooms and scenes. Assign lighting in Rooms & devices; import bridge scenes in Scenes."</p>
+        <p>"Pair the bridge used to reach your Hue lights, rooms and scenes. Add lights, Hue rooms and scenes in Rooms & devices."</p>
         <label class="field">"Hue bridge address"<input type="text" placeholder="192.168.1.157" prop:value=move || url.get() disabled=move || busy.get() on:input=move |e| url.set(event_target_value(&e))/></label>
         <p class="dim">"Press the round link button on your bridge, then Pair bridge. Couch trusts this bridge on first pairing and pins its HTTPS certificate. Pair again after a certificate change."</p>
         <div class="actions"><button class="primary" disabled=move || busy.get() on:click=save>"Pair bridge"</button>

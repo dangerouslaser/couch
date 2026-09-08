@@ -117,12 +117,17 @@ Adding a Hue room creates one grouped on/off control; OK toggles its grouped-lig
 service with the same push-maintained cache as individual lights. It does not
 create or rename Couch rooms or duplicate all the bridge room's lights.
 
-In **Scenes → Import Hue scenes**, select **Show in room**, then **Find Hue
-scenes** and **Import scene**. The bridge room/zone name distinguishes similarly
-named scenes. Search and the Hue room/zone filter narrow large bridge libraries.
-Scene details let you assign additional Couch rooms with **Show in
-rooms**. Use **Remote screens** to choose home-page scenes. ALL ROOMS also exposes
-all saved scenes while screens are being arranged.
+In **Rooms & devices**, open a Couch room, select the Hue connection, and choose
+**Hue scenes** in the same **Hue controls** picker used for lights and Hue rooms.
+Search by scene or bridge room name, optionally filter by Hue room/zone, and click
+**Add to this room**. The scene immediately appears in the room's **Scenes** list
+and is assigned to its bottom Scenes button on the remote. Adding an already
+imported scene to another room reuses it; **Remove from room** only removes that
+assignment. The picker keeps its selected category and search after adding items.
+
+The separate **Scenes** page remains available for renaming scenes and editing
+room assignments. **Remote screens** controls scene membership on custom home
+pages; ALL ROOMS exposes every saved scene.
 
 The home and room views each have a bottom **Scenes** button. The room picker
 contains only scenes assigned to that room. OK recalls the selected scene and

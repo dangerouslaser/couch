@@ -21,7 +21,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
         });
     }
     let options = connections.clone();
-    view!{<section class="creation device-picker"><h2>"Add devices to this room"</h2><p class="dim">"Choose a saved connection, then select a device. Connection settings stay in Connections."</p>
+    view!{<section class="creation device-picker"><h2>"Add to this room"</h2><p class="dim">"Choose a connection, then add lights, room controls or scenes."</p>
         <label class="field">"From connection"<select aria-label="From connection" prop:value=move ||app.device_source.get() on:change=move |e|{app.device_filter.set(String::new());app.device_source.set(event_target_value(&e));}><option value="">"Choose a connection"</option>{options.into_iter().map(|c|view!{<option value=c.id.to_string()>{super::connections::label(&c)}</option>}).collect_view()}</select></label>
         {move ||connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.clone()),_=>manual(app,c.clone(),room.clone())})}
     </section>}.into_any()
@@ -42,7 +42,11 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     } else {
         "ha"
     };
-    let category = RwSignal::new("lights".to_string());
+    let category = if prefix == "hue" {
+        app.hue_category
+    } else {
+        RwSignal::new("lights".to_string())
+    };
     let fetch = move || {
         if busy.get_untracked() {
             return;
@@ -71,18 +75,81 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         });
     };
     fetch();
-    view!{<p class="dim">{if prefix=="hue" {"Add individual lights or a Hue room to control its lights together. Import Hue scenes from Scenes, then assign them to rooms."} else {"Currently supports lights with on/off and brightness."}}</p>
-        {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option></select></label>})}
+    view!{<p class="dim">{if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Currently supports lights with on/off and brightness."}}</p>
+        {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());app.hue_room_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option><option value="scenes">"Hue scenes"</option></select></label>})}
         <button class="ghost" disabled=move ||busy.get() on:click=move |_|fetch()>"Refresh devices"</button>
         {super::connections::field("Search devices",app.device_filter,"Filter by name")}
+        {(prefix=="hue").then(||view!{<label class="field">"Hue room or zone"<select aria-label="Hue room or zone" prop:value=move ||app.hue_room_filter.get() on:change=move |e|app.hue_room_filter.set(event_target_value(&e))><option value="">"All bridge rooms and zones"</option>{move ||list.get().iter().filter_map(|v|v["room_name"].as_str()).filter(|s|!s.is_empty()).map(str::to_string).collect::<std::collections::BTreeSet<_>>().into_iter().map(|name|view!{<option value=name.clone()>{name.clone()}</option>}).collect_view()}</select></label>})}
         <p role="status">{move ||message.get()}</p>
-        <div class="discovered-devices">{move ||list.get().into_iter().filter(|d|d["name"].as_str().unwrap_or("").to_lowercase().contains(&app.device_filter.get().to_lowercase())).map(|d|{
-            let id=d["entity_id"].as_str().unwrap_or("").to_string();let name=d["name"].as_str().unwrap_or(&id).to_string();let title=name.clone();let room=room.clone();let connection_id=connection.id.clone();let existing=assigned(app,&connection,&id);let used=existing.is_some();
-            view!{<div class="card discovered-device"><strong>{title}</strong><p class="dim">{existing.map(|r|format!("Already in {r}")).unwrap_or_else(||if d["resource_kind"]=="room" {"Hue room · Control all its lights together".into()} else if d["on"].is_null(){"Unavailable".into()}else{"Light · On/off and brightness".into()})}</p>
-                <button class="primary" disabled=move ||app.busy.get()||used on:click=move |_|app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":name,"kind":"light","integration":{"via":"connection","connection_id":connection_id,"resource_id":id}})))>{if used{"Added"}else{"Add to this room"}}</button>
-            </div>}
-        }).collect_view()}</div>
+        <div class="discovered-devices">{move ||list.get().into_iter().filter(|d|{
+            let text=format!("{} {}",d["name"].as_str().unwrap_or(""),d["room_name"].as_str().unwrap_or("")).to_lowercase();
+            app.device_filter.get().to_lowercase().split_whitespace().all(|word|text.contains(word))
+                && (prefix!="hue" || app.hue_room_filter.get().is_empty() || d["room_name"].as_str()==Some(app.hue_room_filter.get().as_str()))
+        }).map(|d| discovery_card(app,&connection,&room,d)).collect_view()}</div>
     }.into_any()
+}
+fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) -> AnyView {
+    let id = value["entity_id"].as_str().unwrap_or("").to_string();
+    let name = value["name"].as_str().unwrap_or(&id).to_string();
+    let scene = value["resource_kind"] == "scene";
+    let saved = if scene {
+        app.config.get().and_then(|c| {
+            c.scenes
+                .iter()
+                .find(|s| {
+                    s.hue.as_ref().is_some_and(|h| {
+                        h.connection_id == connection.id
+                            && Some(h.scene_id.as_str()) == id.strip_prefix("scene:")
+                    })
+                })
+                .cloned()
+        })
+    } else {
+        None
+    };
+    let existing = if scene {
+        None
+    } else {
+        assigned(app, connection, &id)
+    };
+    let used = if scene {
+        saved.as_ref().is_some_and(|s| s.rooms.contains(room))
+    } else {
+        existing.is_some()
+    };
+    let detail = if scene {
+        format!(
+            "Hue scene · {} · Appears in this room’s Scenes button",
+            value["room_name"].as_str().unwrap_or("")
+        )
+    } else {
+        existing
+            .map(|r| format!("Already in {r}"))
+            .unwrap_or_else(|| {
+                if value["resource_kind"] == "room" {
+                    "Hue room · Control all its lights together".into()
+                } else if value["on"].is_null() {
+                    "Unavailable".into()
+                } else {
+                    "Light · On/off and brightness".into()
+                }
+            })
+    };
+    let title = name.clone();
+    let room = room.clone();
+    let connection_id = connection.id.clone();
+    view!{<div class="card discovered-device"><strong>{title}</strong><p class="dim">{detail}</p>
+        <button class="primary" disabled=move ||app.busy.get()||used on:click=move |_|{
+            if scene {
+                if let Some(mut saved)=saved.clone() {
+                    if !saved.rooms.contains(&room) {saved.rooms.push(room.clone());}
+                    app.run(api::put(format!("/api/scenes/{}",saved.id),saved));
+                } else {
+                    app.run(api::post("/api/scenes",json!({"name":name,"rooms":[room],"hue":{"connection_id":connection_id,"scene_id":id.strip_prefix("scene:").unwrap_or("")}})));
+                }
+            } else { app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":name,"kind":"light","integration":{"via":"connection","connection_id":connection_id,"resource_id":id}}))); }
+        }>{if used {"Added"} else {"Add to this room"}}</button>
+    </div>}.into_any()
 }
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
     let infrared = connection.provider == Provider::Ir;
