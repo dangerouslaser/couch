@@ -155,12 +155,15 @@ if [ "$WIFI" = "1" ]; then
 
     LD_LIBRARY_PATH=/system/lib:/vendor/lib:/system/lib/hw:/vendor/lib/hw \
         /vendor/bin/wmt_launcher -p /vendor/firmware/ >/tmp/wl.log 2>&1 &
-    # Wait for the launcher to actually configure the chip rather than guessing.
-    # It reports "set STP mode success" once the transport is up; powering on
-    # WiFi before that gives pwr_on fail(-3).
+    # Wait for the launcher to actually configure the chip rather than guessing:
+    # powering on WiFi before the transport is set gives pwr_on fail(-3). The
+    # vendor module logs "set STP mode success" at that point; the from-source
+    # driver logs the same ioctl as "wmt_lib_set_hif:new hifType", about a tenth
+    # of a second after the launcher starts. Waiting on the vendor string alone
+    # cost the built-in driver the whole 20s timeout on every boot.
     n=0
-    while [ $n -lt 20 ]; do
-        $BB dmesg | $BB grep -q "set STP mode success" && break
+    while ! $BB dmesg | $BB grep -qE "set STP mode success|wmt_lib_set_hif:new hifType"; do
+        [ $n -ge 20 ] && break
         $BB sleep 1; n=$((n+1))
     done
     echo "= launcher $($BB pidof wmt_launcher >/dev/null && echo running || echo dead), stp after ${n}s"
