@@ -55,23 +55,25 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
     Ok(room
         .devices
         .iter()
-        .filter_map(|d| match &d.integration {
-            Integration::HomeAssistant { entity_id } if d.kind == DeviceKind::Light => {
-                Some(Entry {
+        .filter_map(
+            |d| match config.resolve_integration(&d.integration).as_ref() {
+                Some(Integration::HomeAssistant { entity_id }) if d.kind == DeviceKind::Light => {
+                    Some(Entry {
+                        name: d.name.clone(),
+                        id: entity_id.clone(),
+                        state: None,
+                        hue: false,
+                    })
+                }
+                Some(Integration::Hue { light_id }) if d.kind == DeviceKind::Light => Some(Entry {
                     name: d.name.clone(),
-                    id: entity_id.clone(),
+                    id: format!("hue:{light_id}"),
                     state: None,
-                    hue: false,
-                })
-            }
-            Integration::Hue { light_id } if d.kind == DeviceKind::Light => Some(Entry {
-                name: d.name.clone(),
-                id: format!("hue:{light_id}"),
-                state: None,
-                hue: true,
-            }),
-            _ => None,
-        })
+                    hue: true,
+                }),
+                _ => None,
+            },
+        )
         .collect())
 }
 fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {

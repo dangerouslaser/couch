@@ -53,6 +53,8 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 mod device;
+mod connection;
+pub use connection::{Connection, Provider};
 mod icon;
 mod id;
 mod seed;
@@ -95,6 +97,8 @@ pub struct Config {
     #[serde(default)]
     pub revision: u64,
     #[serde(default)]
+    pub connections: Vec<Connection>,
+    #[serde(default)]
     pub areas: Vec<Area>,
     #[serde(default)]
     pub rooms: Vec<Room>,
@@ -109,6 +113,7 @@ impl Default for Config {
         Config {
             schema_version: SCHEMA_VERSION,
             revision: 0,
+            connections: Vec::new(),
             areas: Vec::new(),
             rooms: Vec::new(),
             scenes: Vec::new(),

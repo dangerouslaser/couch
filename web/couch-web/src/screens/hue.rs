@@ -14,7 +14,7 @@ pub fn setup(app: App) -> AnyView {
     let token_set = RwSignal::new(false);
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
-    let lights = RwSignal::new(Vec::<Value>::new());
+
     spawn_local(async move {
         match api::ha("GET", "/api/hue/connection", None).await {
             Ok(s) => {
@@ -33,30 +33,20 @@ pub fn setup(app: App) -> AnyView {
         let data = json!({"url":url.get_untracked().trim()});
         spawn_local(async move {
             match api::ha("PUT", "/api/hue/connection", Some(data)).await {
-                Ok(result) => {
+                Ok(_result) => {
                     token_set.set(true);
-                    lights.set(result["lights"].as_array().cloned().unwrap_or_default());
-                    message.set(
-                        "Connected and saved. Choose a light below to add it to a room.".into(),
-                    );
-                }
-                Err(e) => fail(app, message, e),
-            }
-            busy.set(false);
-        });
-    };
-    let discover = move |_| {
-        if busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
-        message.set("Finding lights…".into());
-        spawn_local(async move {
-            match api::ha("GET", "/api/hue/lights", None).await {
-                Ok(result) => {
-                    let list = result.as_array().cloned().unwrap_or_default();
-                    message.set(format!("Found {} lights", list.len()));
-                    lights.set(list);
+                    if !app
+                        .config
+                        .get_untracked()
+                        .is_some_and(|c| c.connections.iter().any(|c| c.provider.kind() == "hue"))
+                    {
+                        app.run(api::post(
+                            "/api/connections",
+                            json!({"name":"Philips Hue","provider":{"kind":"hue"}}),
+                        ));
+                    }
+
+                    message.set("Connected and saved. Add devices from Rooms & devices.".into());
                 }
                 Err(e) => fail(app, message, e),
             }
@@ -65,51 +55,18 @@ pub fn setup(app: App) -> AnyView {
     };
     view! {
         <section class="card hue-connection"><h2>"Philips Hue"</h2>
-        <p>"Control Hue lights directly on your local network. Pair your bridge, then add its lights to rooms."</p>
+        <p>"Pair the bridge used to reach your Hue lights. Room assignment and light controls are in Rooms & devices."</p>
         <label class="field">"Hue bridge address"<input type="text" placeholder="192.168.1.157" prop:value=move || url.get() disabled=move || busy.get() on:input=move |e| url.set(event_target_value(&e))/></label>
         <p class="dim">"Press the round link button on your bridge, then Pair bridge. Couch trusts this bridge on first pairing and pins its HTTPS certificate. Pair again after a certificate change."</p>
         <div class="actions"><button class="primary" disabled=move || busy.get() on:click=save>"Pair bridge"</button>
-        <button class="ghost" disabled=move || busy.get() || !token_set.get() on:click=discover>"Find lights"</button></div>
+        <Show when=move || token_set.get() && !app.config.get().is_some_and(|c|c.connections.iter().any(|c|c.provider.kind()=="hue"))><button class="ghost" disabled=move ||busy.get() on:click=move |_|app.run(api::post("/api/connections",json!({"name":"Philips Hue","provider":{"kind":"hue"}})))>"Use saved connection"</button></Show>
+        </div>
         <p role="status">{move || message.get()}</p>
-        {move || lights.get().into_iter().map(|light| discovered(app,light)).collect_view()}
+
         </section>
     }.into_any()
 }
-fn discovered(app: App, light: Value) -> AnyView {
-    let id = light["entity_id"].as_str().unwrap_or("").to_string();
-    let name = light["name"].as_str().unwrap_or(&id).to_string();
-    let room = RwSignal::new(String::new());
-    let rooms: Vec<_> = app
-        .config
-        .get_untracked()
-        .map(|c| {
-            c.rooms
-                .into_iter()
-                .map(|r| (r.id.to_string(), r.name))
-                .collect()
-        })
-        .unwrap_or_default();
-    let already = {
-        let id = id.clone();
-        move || {
-            app.config.get().is_some_and(|c| c.devices().any(|(_,d)| matches!(&d.integration,couch_model::Integration::Hue{light_id} if light_id == &id)))
-        }
-    };
-    let add_id = id.clone();
-    let add_name = name.clone();
-    view! {
-        <div class="card"><strong>{name}</strong><p class="dim">{id}</p>
-        {controls(app,light.clone())}
-        <p>{if light["on"].is_null() {"Unavailable"} else if light["dimmable"] == true {"On/off and brightness"} else {"On/off"}}</p>
-        <label class="field">"Add to room"<select aria-label="Add to room" prop:value=move || room.get() on:change=move |e| room.set(event_target_value(&e))><option value="">"Choose a room"</option>{rooms.into_iter().map(|(id,name)| view!{<option value=id>{name}</option>}).collect_view()}</select></label>
-        <button class="ghost" disabled=move || app.busy.get() || room.get().is_empty() || already() on:click=move |_| {
-            app.run(api::post(format!("/api/rooms/{}/devices",room.get_untracked()),json!({"name":add_name,"kind":"light","integration":{"via":"hue","light_id":add_id}})));
-        }>"Add light"</button>
-        </div>
-    }.into_any()
-}
-
-fn controls(app: App, initial: Value) -> AnyView {
+pub(super) fn controls(app: App, initial: Value) -> AnyView {
     let light = RwSignal::new(initial);
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());

@@ -4,24 +4,19 @@
 The editor starts with **Overview**, then offers **Rooms & devices**,
 **Connections**, **Remote screens**, **Scenes**, and **Activities**. Existing
 `/areas/...`, `/rooms/...`, `/scenes/...`, and `/activities/...` links still work.
-The JSON schema and daemon endpoints are unchanged.
+The configuration now includes saved connections; legacy inline device definitions remain readable.
 
 ### Set up a home
 
-1. Open **Rooms & devices**, enter a room name, and choose **Create room**.
-   Open the room and use **Add a device**. Choose a device type and connection,
-   fill the connection fields, then save. **Set up later** creates an inventory
-   entry without pretending it can be controlled.
-2. Open **Activities** to describe a task such as Watch TV: choose its room,
-   source device and startup commands. Open **Scenes** for a named sequence of
-   device commands, such as Movie night. Saving a command does not execute it.
-3. Open **Remote screens** and create an area such as Upstairs. An area is a
-   screen containing ordered references to rooms, activities and scenes. Add
-   existing items or create them within the area. The structure preview shows
-   exactly which configured entries are included, in order.
-4. Use **Connections** to review settings across the home. A client means the
-   integration attached to a device; there is no separate client entity or
-   global client configuration in the current model.
+1. Open **Connections**, choose **Add a connection**, and select Kodi, Home Assistant,
+   Philips Hue or Infrared. Save the player address, server credentials or bridge pairing.
+2. Open **Rooms & devices**, create or open a room, then choose **From connection**.
+   Search discovered HA/Hue lights or name a Kodi/infrared device and choose
+   **Add to this room**. Infrared devices carry a codeset name.
+3. Open **Activities** or **Scenes** to arrange device commands. Saving a command
+   does not execute it; execution remains pending.
+4. Open **Remote screens** to choose which rooms, activities and scenes appear
+   together. Rooms always remain accessible in All rooms on the physical remote.
 
 Rooms remain discoverable even when no area includes them. A room or scene can
 appear on several screens without duplication. **Unlink** removes an area's
@@ -29,8 +24,7 @@ reference; **Delete** removes the entity and its dependent references. Room
 removal also deletes its devices and room-bound activities.
 
 Device edits are local drafts with explicit **Save device** and **Discard changes**
-buttons. Changing connection type does not write or erase saved fields until
-Save; switching back before saving preserves the original fields. Other names,
+buttons. Connection settings are edited separately on Connections. Other names,
 selectors and ordering save on change. Writes are serialized, controls disable
 while saving, and the header reports Saved, Saving or Not saved. Requests send
 the loaded revision in `If-Match`; a stale write reloads saved configuration with
@@ -40,11 +34,11 @@ validation/network failures keep local drafts for correction or retry.
 ### Current product boundary
 
 The Slint GUI reads saved rooms and area order and reloads changes while on its
-home screen. Opening a room provides Home Assistant light controls. Activities,
+home screen. Opening a room provides Home Assistant and Philips Hue light controls. Activities,
 scenes and other device domains are still pending. The screen preview is a
 configuration visualization, not a live screenshot or a free-form layout editor.
-Home Assistant server setup, light discovery and explicit light controls are
-available under Connections; see [Home Assistant lights](home-assistant.md).
+Server and bridge setup live in Connections; discovery, assignment and light
+controls live inside rooms. See [Home Assistant lights](home-assistant.md).
 Infrared learning/discovery and execution of configured scenes remain pending. The separate `stage2/www` portal handles Wi-Fi and SSH setup.
 
 ### Validation
@@ -533,8 +527,29 @@ To render a real config, `couch-gui` would:
 The counts in the seed are what make step 4 checkable: a first cut can be held
 against the screen it replaces.
 
-## Direct Philips Hue lights
+## Connections and room devices
 
-Connections now includes bridge pairing, discovery, test controls and room import
-for the Rust Hue API v2 client. See [Philips Hue setup](philips-hue.md) for pairing,
-private credential storage, certificate pinning and validation.
+**Connections** manages named Kodi players, the Home Assistant server, the Philips
+Hue bridge, and the built-in infrared transmitter. Add a connection by type; edit
+its server or pairing settings there. This page has no device assignment or light
+controls. Kodi supports multiple connections; HA, Hue and infrared each support
+one. Infrared sending remains unavailable on the current production kernel.
+
+**Rooms & devices** creates rooms and assigns devices from saved connections.
+Open a room, select **From connection**, then search discovered HA/Hue lights or
+name a Kodi/infrared device. Infrared codesets belong to devices. Light controls
+appear on assigned devices. Credentials and server addresses never appear in the
+room creation flow.
+
+Connections are non-secret records in `config.json`. New devices reference a
+connection ID and resource ID; changing a Kodi connection updates all references.
+The model rejects deleting an in-use connection. Removing a connection retains
+private HA/Hue credentials so **Use saved connection** can restore it without
+another pairing. Existing inline device configurations remain readable. On first
+upgrade, existing HA/Hue private settings are adopted as saved connections.
+
+Tests: `node web/tests/hue.mjs`, `node web/tests/home-assistant.mjs`, and
+`COUCH_TEST_URL=http://127.0.0.1:PORT node web/tests/browser.mjs` against disposable
+host daemons. The latter covers Kodi/IR setup, room assignment, shared settings,
+removal protection, drafts, screen ordering and stale edits. See
+[Philips Hue setup](philips-hue.md) for certificate pinning and real-device status.

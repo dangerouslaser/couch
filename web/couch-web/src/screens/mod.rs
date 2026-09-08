@@ -249,3 +249,6 @@ mod tests {
 }
 
 mod hue;
+
+mod connections;
+mod device_picker;

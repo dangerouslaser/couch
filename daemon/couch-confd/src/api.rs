@@ -22,6 +22,7 @@
 
 mod ha;
 mod hue;
+mod connections;
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -272,6 +273,7 @@ impl Api {
             return Reply::error(401, "not paired - open the page and enter the PIN on your remote");
         }
 
+        if rest.first() == Some(&"connections") { return self.connection_route(&method, &rest[1..], &body, if_match); }
         if rest.first() == Some(&"hue") { return hue::route(&method, &rest[1..], &body); }
         if rest.first() == Some(&"ha") { return ha::route(&method, &rest[1..], &body); }
 

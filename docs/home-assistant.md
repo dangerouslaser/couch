@@ -1,3 +1,7 @@
+> Updated configuration flow: configure the server in **Connections**. Then open
+> a room under **Rooms & devices**, select the saved Home Assistant connection,
+> and add discovered lights there. Controls are on assigned devices, not Connections.
+
 # Home Assistant lights
 
 `clients/couch-ha` is a Rust library and CLI for Home Assistant light discovery,

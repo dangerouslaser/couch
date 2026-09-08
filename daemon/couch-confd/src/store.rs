@@ -61,7 +61,22 @@ impl Store {
             Ok(bytes) => {
                 let config: Config = serde_json::from_slice(&bytes).map_err(Error::Parse)?;
                 config.validate().map_err(Error::Invalid)?;
-                Ok(Store { path, config })
+                let legacy = serde_json::from_slice::<serde_json::Value>(&bytes).ok().is_some_and(|v|v.get("connections").is_none());
+                let mut store = Store { path, config };
+                if legacy {
+                    let parent=store.path.parent().unwrap_or_else(||Path::new("."));
+                    for (file, name, provider) in [("ha-connection.json","Home Assistant",couch_model::Provider::HomeAssistant),("hue-connection.json","Philips Hue",couch_model::Provider::Hue)] {
+                        if parent.join(file).is_file() {
+                            store.config.connections.push(couch_model::Connection{id:couch_model::Id::from_name(name),name:name.into(),provider});
+                        }
+                    }
+                    if !store.config.connections.is_empty() {
+                        store.config.revision=store.config.revision.wrapping_add(1);
+                        store.config.validate().map_err(Error::Invalid)?;
+                        store.write()?;
+                    }
+                }
+                Ok(store)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let store = Store { path, config: Config::seed() };
@@ -212,5 +227,19 @@ mod tests {
         let mut store = Store::open(&path).unwrap();
         store.mutate(None, |cfg| cfg.remove_room(&Id::new("porch"))).unwrap();
         assert!(!path.with_extension("json.tmp").exists());
+    }
+}
+
+#[cfg(test)]
+mod connection_migration_tests {
+    use super::*;
+    #[test]
+    fn paired_bridge_is_adopted_once_without_touching_credentials() {
+        let dir=std::env::temp_dir().join(format!("couch-connection-migration-{}",std::process::id()));fs::create_dir_all(&dir).unwrap();
+        let path=dir.join("config.json");let credential=dir.join("hue-connection.json");
+        fs::write(&path,br#"{"schema_version":1,"revision":3,"rooms":[]}"#).unwrap();fs::write(&credential,b"private fixture").unwrap();
+        let mut store=Store::open(&path).unwrap();assert_eq!(store.revision(),4);assert_eq!(store.config().connections.len(),1);
+        store.mutate(Some(4),|c|c.connections.clear()).unwrap();drop(store);
+        assert!(Store::open(&path).unwrap().config().connections.is_empty());assert_eq!(fs::read(&credential).unwrap(),b"private fixture");fs::remove_dir_all(dir).unwrap();
     }
 }

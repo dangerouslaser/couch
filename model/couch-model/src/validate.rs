@@ -100,6 +100,33 @@ impl Config {
             }
         }
 
+        let mut connection_ids = Vec::new();
+        for (i,c) in self.connections.iter().enumerate() {
+            check_entity(&mut problems, &mut connection_ids, "connections", i, &c.id, &c.name);
+            if let crate::Provider::Kodi{host,port}=&c.provider {
+                if host.trim().is_empty() || *port==0 { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Kodi needs an address and a TCP port from 1 to 65535".into()}); }
+            } else if self.connections[..i].iter().any(|old|old.provider.kind()==c.provider.kind()) {
+                problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Only one connection of this type is supported".into()});
+            }
+        }
+        for (room,device) in self.devices() {
+            if let crate::Integration::Connection{connection_id,resource_id}=&device.integration {
+                let at=alloc::format!("rooms.{}.devices.{}",room.id,device.id);
+                match self.connection(connection_id) {
+                    None=>problems.push(Problem{at,message:"This device refers to a missing connection; remove its devices before deleting the connection".into()}),
+                    Some(c)=>{
+                        let valid=match c.provider {
+                            crate::Provider::Kodi{..}=>resource_id.is_empty(),
+                            crate::Provider::HomeAssistant=>resource_id.starts_with("light.") && resource_id.len()>6 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'.'),
+                            crate::Provider::Hue=>resource_id.len()==36 && resource_id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}),
+                            crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),
+                        };
+                        if !valid {problems.push(Problem{at,message:"Choose a valid device from this connection".into()});}
+                    }
+                }
+            }
+        }
+
         // References.
         for (i, area) in self.areas.iter().enumerate() {
             for (j, id) in area.rooms.iter().enumerate() {

@@ -32,23 +32,27 @@ let browser;
 try{
   for(let i=0;i<50;i++){try{if((await fetch(`${base}/api/health`)).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
   browser=await chromium.launch();const page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await fetch(`${base}/api/rooms`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Test room'})});
   await page.goto(base);await page.getByRole('navigation').getByRole('button',{name:'Connections',exact:true}).click();
+  await page.getByLabel('Connection type',{exact:true}).selectOption('home-assistant');
   await page.getByLabel('Server URL',{exact:true}).fill(ha);
   await page.getByLabel('Long-lived access token').fill('test-secret');
   await page.getByRole('button',{name:'Test & save connection'}).click();
-  await page.getByText('Connected and saved.',{exact:false}).waitFor();
+  await page.locator('.saved-connection').getByRole('heading',{name:'Home Assistant',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Add to this room',exact:true}).count(),0);
   assert.equal(await page.getByLabel('Long-lived access token').inputValue(),'');
   assert.equal((await stat(settings)).mode & 0o777,0o600);
   const publicSettings=await(await fetch(`${base}/api/ha/connection`)).json();assert(!JSON.stringify(publicSettings).includes('test-secret'));
   const before=await readFile(settings,'utf8');
   const rejected=await fetch(`${base}/api/ha/connection`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:ha,token:'wrong'})});assert.equal(rejected.status,502);assert.equal(await readFile(settings,'utf8'),before);
+  await page.getByRole('navigation').getByRole('button',{name:'Rooms & devices',exact:true}).click();await page.getByRole('button',{name:/^Test room/}).click();
+  await page.getByRole('button',{name:'Add to this room',exact:true}).click();await page.locator('.device').getByRole('heading',{name:'Test light',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Show light controls',exact:true}).click();
   await page.getByRole('button',{name:'Turn off',exact:true}).click();await page.getByText('Off',{exact:true}).waitFor();
   await page.getByLabel('Brightness (%)',{exact:true}).fill('37');await page.getByRole('button',{name:'Apply brightness'}).click();await page.getByText('On · 37%',{exact:true}).waitFor();
   assert(commands.some(([url,body])=>url.endsWith('turn_off')));assert(commands.some(([,body])=>body.brightness_pct===37));
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:'build/webui-review/home-assistant-mobile.png',fullPage:true});
-  await page.getByLabel('Add to room',{exact:true}).selectOption({index:1});await page.getByRole('button',{name:'Add light',exact:true}).click();
-  await page.getByRole('status').filter({hasText:/^Saved$/}).waitFor();
-  const config=await(await fetch(`${base}/api/config`)).json();assert(config.rooms.some(r=>r.devices.some(d=>d.kind==='light' && d.integration.entity_id==='light.test')));
+  const config=await(await fetch(`${base}/api/config`)).json();assert(config.rooms.some(r=>r.devices.some(d=>d.kind==='light' && d.integration.resource_id==='light.test')));
   assert.deepEqual(errors,[]);console.log('PASS: connection test/save, private credentials, rejected replacement, discovery, service control, brightness, room import, mobile layout');
 }finally{if(browser)await browser.close();daemon.kill();await new Promise(r=>mock.close(r));await rm(directory,{recursive:true,force:true});}

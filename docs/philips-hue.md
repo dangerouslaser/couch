@@ -10,11 +10,11 @@ implemented yet. One bridge connection is supported per remote.
 1. Open the remote's web editor, pair with its on-screen PIN, and open **Connections → Philips Hue**.
 2. Enter the bridge IP address (for example `192.168.1.157`). Press the bridge's
    round link button, then **Pair bridge**. A failed pairing leaves saved settings intact.
-3. Create a room under **Rooms & devices** if needed. Click **Find lights**, choose
-   a destination room, and **Add light**. Discovery never adds devices automatically.
+3. Open **Rooms & devices**, create or open a room, then choose the saved Hue
+   connection under **Add devices to this room**. Search the discovered lights and
+   click **Add to this room**. Discovery never assigns devices automatically.
 4. Open that room on the remote. Touch or use the D-pad to select a light, turn
-   it on/off, adjust brightness, or refresh its state. The web editor also has
-   controls for testing before import. Zero-percent brightness means off.
+   it on/off, adjust brightness, or refresh its state. Use **Show light controls** on an assigned device in the web editor to test it. Zero-percent brightness means off.
 
 Unreachable lights display as unavailable. Commands are acknowledged by the
 bridge; refresh to see reported state. This is not proof of physical illumination.
@@ -32,7 +32,8 @@ bypass setting for normal control requests.
 The application key and certificate are saved atomically with mode `0600` in
 `/opt/couch/hue-connection.json`, separate from the exportable house configuration.
 The API never returns the key. `COUCH_HUE_CONNECTION` overrides the daemon's path.
-House devices store only `{"via":"hue","light_id":"<v2 light UUID>"}`.
+New house devices store `{"via":"connection","connection_id":"philips-hue",
+"resource_id":"<v2 light UUID>"}`. Existing inline Hue definitions remain readable.
 Adding this integration requires updated readers of the shared configuration.
 
 ## CLI and validation
@@ -64,4 +65,5 @@ unit tests passed, as did the isolated Hue browser test and existing Home Assist
 browser regression. On the physical remote, D-pad discovery, on and 40% brightness
 passed against an isolated HTTPS bridge fixture; production configuration was
 restored afterward. The real BSB002 at `192.168.1.157` responds over HTTPS with
-“link button not pressed”; real pairing and household-light validation are pending.
+48 discovered lights (42 reachable). Pairing and read-only discovery succeeded;
+real household-light command testing remains pending.

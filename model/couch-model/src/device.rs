@@ -147,6 +147,7 @@ pub enum Integration {
     /// counted and named, which is what the hub's room rows show.
     #[default]
     None,
+    Connection { connection_id: Id, #[serde(default)] resource_id: String },
     Kodi {
         host: String,
         #[serde(default = "default_kodi_port")]
@@ -171,6 +172,7 @@ fn default_kodi_port() -> u16 {
 impl Integration {
     pub fn via(&self) -> &'static str {
         match self {
+            Integration::Connection { .. } => "connection",
             Integration::None => "none",
             Integration::Kodi { .. } => "kodi",
             Integration::Hue { .. } => "hue",

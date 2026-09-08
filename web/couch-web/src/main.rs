@@ -40,6 +40,8 @@ pub struct App {
     pub error: RwSignal<Option<String>>,
     pub busy: RwSignal<bool>,
     pub router: Router,
+    pub device_source: RwSignal<String>,
+    pub device_filter: RwSignal<String>,
     /// `None` until the first status call answers, so the app shows neither the
     /// house nor a PIN box while it does not yet know which is right.
     pub paired: RwSignal<Option<bool>>,
@@ -114,6 +116,8 @@ fn Shell() -> impl IntoView {
         error: RwSignal::new(None),
         busy: RwSignal::new(false),
         router: Router::install(),
+        device_source: RwSignal::new(String::new()),
+        device_filter: RwSignal::new(String::new()),
         paired: RwSignal::new(None),
     };
     provide_context(app);

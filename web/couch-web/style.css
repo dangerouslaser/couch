@@ -432,7 +432,7 @@ main {
   font-weight:550;
   color:var(--dim);
 }
-input[type=text],select {
+input[type=text],input[type=url],input[type=password],input[type=number],select {
   width:100%;
   padding:12px;
   border:1px solid #c3cdc3;
@@ -642,3 +642,10 @@ input:focus,select:focus {
 .ha-connection .actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
 .ha-connection .field { margin:14px 0; }
 .ha-connection .card { margin-top:18px; }
+
+/* Shared setup fields and room controls. */
+.actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.saved-connection summary,.device summary { cursor:pointer; padding:12px 0; font-weight:600; }
+.saved-connection details[open] { margin-bottom:16px; }
+.discovered-devices { display:grid; gap:12px; margin-top:16px; }
+.discovered-device { margin:0; }
