@@ -163,7 +163,8 @@ component AreaPane inherits Rectangle {
     // Read at the moment the ring is set - see place-ring() for why
     // that matters - true for a focus move, false for a landing.
     property <bool> anim: true;
-    // Snap the window by whole rows so no intermediate frame clips a card.
+    // Animate between row-aligned destinations, matching the focus ring.
+    animate scroll { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
 
     /// Focus moved, by D-pad or tap: bring the row into the window if it is
     /// not already there, and glide the ring onto it.
@@ -249,7 +250,7 @@ component AreaPane inherits Rectangle {
         property <length> ring-y: 0px;
         property <length> ring-h: 90px;
         property <length> ring-r: Theme.r-row;
-        // The ring can glide within the window; the window itself snaps.
+        // Match the scrolling curve so the outline stays on its moving row.
         animate ring-y, ring-h {
             duration: root.anim ? 160ms : 0ms;
             easing: ease-out;

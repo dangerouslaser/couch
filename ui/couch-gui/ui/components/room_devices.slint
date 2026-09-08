@@ -24,7 +24,7 @@ export component RoomDevices inherits Rectangle {
     property <length> scroll-goal: 0px;
     property <length> ring-y: 0px;
     property <bool> anim: false;
-    animate ring-y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+    animate scroll, ring-y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
     changed items => {
         root.index = 0;
         root.anim = false;
@@ -35,6 +35,7 @@ export component RoomDevices inherits Rectangle {
     changed shown => { root.ok-down = false; }
     changed index => { root.follow-focus(true); }
     changed rows-h => {
+        root.anim = false;
         root.scroll-goal = 0px;
         root.scroll = 0px;
         root.follow-focus(false);
@@ -48,8 +49,6 @@ export component RoomDevices inherits Rectangle {
             if (root.index * root.pitch + root.row-h > root.scroll-goal + root.rows-h) {
                 root.scroll-goal = root.index * root.pitch + root.row-h - root.rows-h;
             }
-            // A scrolling move snaps both the cards and their outline.
-            root.anim = animate-ring && root.scroll == root.scroll-goal;
             root.scroll = root.scroll-goal;
             root.ring-y = root.index * root.pitch;
         }

@@ -352,8 +352,11 @@ extra window space is distributed across those rows. Twelve-pixel gaps leave
 clearance for the six-pixel focus outline. These measurements come from the
 page height and fixed footer, avoiding a layout feedback loop.
 
-Scrolling snaps by row pitch so cards never pass partially through the viewport
-edges. Focus still animates within a window, and page slides are unchanged.
+Scrolling animates between whole-row destinations (160ms for rooms/devices,
+140ms for the chooser). Rows pass through the viewport edges during motion,
+then settle with complete rows visible. Scroll decisions use the destination
+rather than an intermediate animation position, including on rapid presses.
+The focus outline follows the same curve; page slides are unchanged.
 On-device framebuffer checks with nine rooms, eight devices and twelve scenes
 verified full cards at the top and after scrolling. Use an isolated configuration
 for these checks so household devices and saved configuration remain untouched.

@@ -62,11 +62,12 @@ export component Chooser inherits Rectangle {
     // evaluated instead, which is a frame too late to turn the animation off
     // for a move that should not be seen.
     property <length> scroll: 0px;
+    property <length> scroll-goal: 0px;
     property <length> ring-y: 0px;
     // Off for the jump a freshly opened list makes, on for a move within one.
     property <bool> anim: true;
-    // Snap scrolling to whole rows; animate the outline only within a window.
-    animate ring-y { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
+    // Share a curve so the outline tracks its row while the list moves.
+    animate scroll, ring-y { duration: root.anim ? 140ms : 0ms; easing: ease-out; }
 
     // Minimal scrolling: move only far enough to bring the focused row fully
     // into the window, and not at all while it is already there. This used to
@@ -74,13 +75,13 @@ export component Chooser inherits Rectangle {
     // on moves that did not need it - and it was a binding, so the list jumped
     // the whole distance while the ring glided.
     function row-into-view(row-y: length) {
-        if (row-y < root.scroll) {
-            root.anim = false;
-            root.scroll = row-y;
-        } else if (row-y + root.row-h > root.scroll + root.win-h) {
-            root.anim = false;
-            root.scroll = min(root.max-scroll, row-y + root.row-h - root.win-h);
+        // Use the destination, not a mid-animation position, for rapid presses.
+        if (row-y < root.scroll-goal) {
+            root.scroll-goal = row-y;
+        } else if (row-y + root.row-h > root.scroll-goal + root.win-h) {
+            root.scroll-goal = min(root.max-scroll, row-y + root.row-h - root.win-h);
         }
+        root.scroll = root.scroll-goal;
     }
 
     // A change handler rather than the public function the hub exposes: the
@@ -102,6 +103,7 @@ export component Chooser inherits Rectangle {
     changed shown => {
         if (root.shown) {
             root.anim = false;
+            root.scroll-goal = 0px;
             root.scroll = 0px;
             root.ring-y = root.index * root.pitch;
             root.anim = true;
