@@ -65,9 +65,12 @@ export CC_armv7_unknown_linux_musleabihf="$PWD/tools/arm-musl-cc.py"
 
 The ARM CLI, editor and Slint room controls are deployed. The GUI reads saved
 area/room order and reloads changes on the home screen; ALL ROOMS keeps rooms
-accessible during setup. Open a room, choose a light, then use on/off or brightness
-in 10% steps. Requests run on a bounded worker queue; unavailable lights show
-Refresh/Back and old responses cannot replace a newer screen. Aggregate room
+accessible during setup. Rooms show a flat device list immediately; highlight a
+light and press OK to toggle its live on/off state. Physical Back returns home,
+with a 180 ms slide in both directions. Brightness remains in the web editor.
+Requests run on a bounded worker queue; unavailable lights show an error in the
+room and old responses cannot replace a newer screen. State refreshes automatically
+every five seconds without moving focus. Aggregate room
 status remains hidden until all device state is available. PIN pairing blocks
 interaction with covered controls.
 

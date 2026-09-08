@@ -1,0 +1,49 @@
+import { Theme } from "../theme.slint";
+import { ChoiceItem } from "chooser.slint";
+
+// One flat list. State updates mutate model rows, preserving focus and scroll.
+export component RoomDevices inherits Rectangle {
+    in property <bool> shown;
+    in property <string> title;
+    in property <string> detail;
+    in property <[ChoiceItem]> items;
+    property <int> index: 0;
+    property <bool> ok-down: false;
+    property <length> scroll: 0px;
+    callback activate(int);
+    callback back();
+    changed items => { root.index = 0; root.scroll = 0px; }
+    changed shown => { root.ok-down = false; }
+    changed index => {
+        if (root.index * 82px < root.scroll) { root.scroll = root.index * 82px; }
+        if ((root.index + 1) * 82px > root.scroll + list.height) { root.scroll = (root.index + 1) * 82px - list.height; }
+    }
+    public function take-focus() { keys.focus(); }
+    background: Theme.bg;
+    Text { x: 20px; y: 24px; width: parent.width - 40px; height: 42px; text: root.title; color: Theme.text; font-size: 28px; font-weight: 600; overflow: elide; }
+    list := Rectangle {
+        x: 16px; y: 88px; width: parent.width - 32px; height: parent.height - 156px; clip: true;
+        for item[i] in root.items : Rectangle {
+            y: i * 82px - root.scroll; width: parent.width; height: 82px;
+            background: i == root.index ? Theme.surface : Theme.bg;
+            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: i == root.index ? Theme.accent : transparent; }
+            Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border; }
+            Text { x: 18px; y: 12px; width: parent.width - 36px; height: 28px; text: item.title; color: Theme.text; font-size: 22px; overflow: elide; }
+            Text { x: 18px; y: 45px; width: parent.width - 36px; height: 22px; text: item.detail; color: item.active ? Theme.accent : Theme.text-secondary; font-size: 16px; overflow: elide; }
+            TouchArea { clicked => { root.index = i; root.activate(i); } }
+        }
+    }
+    Text { x: 20px; y: parent.height - 56px; width: parent.width - 40px; height: 48px; text: root.detail; color: Theme.text-secondary; font-size: 16px; wrap: word-wrap; }
+    keys := FocusScope {
+        enabled: root.shown;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { root.back(); return accept; }
+            if (root.items.length == 0) { return accept; }
+            if (e.text == Key.UpArrow) { root.index = Math.mod(root.index - 1 + root.items.length, root.items.length); return accept; }
+            if (e.text == Key.DownArrow) { root.index = Math.mod(root.index + 1, root.items.length); return accept; }
+            if (e.text == Key.Return) { if (!root.ok-down) { root.ok-down = true; root.activate(root.index); } return accept; }
+            return accept;
+        }
+        key-released(e) => { if (e.text == Key.Return) { root.ok-down = false; } return accept; }
+    }
+}

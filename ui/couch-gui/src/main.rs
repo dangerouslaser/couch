@@ -827,7 +827,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 None => {}
             }
-            if let Some(key) = press.key.filter(|_| !app.get_pair_shown()) {
+            if let Some(key) = press.key.filter(|key| {
+                !app.get_pair_shown()
+                    && !(press.repeat && app.get_light_shown()
+                        && *key == slint::platform::Key::Return)
+            }) {
                 let text = SharedString::from(char::from(key));
                 window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
                 window.dispatch_event(WindowEvent::KeyReleased { text });
@@ -930,7 +934,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         network_setup.poll(&app);
+        // Capture only navigation, then slide framebuffer snapshots so the
+        // room animation does not rasterize the entire Slint scene every frame.
+        let was_room = app.get_light_shown();
+        let room_navigation = !app.get_pair_shown() && light_controls.navigation_pending();
+        if room_navigation {
+            screen.snapshot();
+        }
         light_controls.poll(&app);
+        if room_navigation && was_room != app.get_light_shown() {
+            slint::platform::update_timers_and_animations();
+            if let Some(us) = screen.render_offscreen(&window) {
+                frames += 1;
+                render_us += us;
+                frame_max = frame_max.max(us);
+                let from = if app.get_light_shown() { Arrive::FromRight } else { Arrive::FromLeft };
+                let status = (0, app.get_status_h().round() as u32);
+                let cost = screen.slide(from, &[status], SLIDE);
+                frames += cost.frames;
+                render_us += cost.work_us;
+                wait_us += cost.wait_us;
+                frame_max = frame_max.max(cost.max_us);
+                println!("couch-gui: room slide {} ({} frames)",
+                    if app.get_light_shown() { "in" } else { "out" }, cost.frames);
+            }
+            slint::platform::update_timers_and_animations();
+        }
 
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {

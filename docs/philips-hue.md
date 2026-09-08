@@ -13,8 +13,10 @@ implemented yet. One bridge connection is supported per remote.
 3. Open **Rooms & devices**, create or open a room, then choose the saved Hue
    connection under **Add devices to this room**. Search the discovered lights and
    click **Add to this room**. Discovery never assigns devices automatically.
-4. Open that room on the remote. Touch or use the D-pad to select a light, turn
-   it on/off, adjust brightness, or refresh its state. Use **Show light controls** on an assigned device in the web editor to test it. Zero-percent brightness means off.
+4. Open that room on the remote. Devices appear in one flat list. Highlight a light
+   and press OK to toggle it, or tap its row. Physical Back returns home. Use
+   **Show light controls** on an assigned device in the web editor for brightness.
+   Zero-percent brightness means off.
 
 Unreachable lights display as unavailable. Commands are acknowledged by the
 bridge; refresh to see reported state. This is not proof of physical illumination.
@@ -70,10 +72,16 @@ real household-light command testing remains pending.
 
 Room navigation uses saved device names immediately, then refreshes bridge state
 in the background. Background updates preserve D-pad focus. A five-second cache
-avoids repeated status reads when opening a just-refreshed light; explicit Refresh
-bypasses the cache, and commands still validate live state before sending.
+provides recent display state while the worker refreshes it. Status refreshes
+automatically every five seconds; OK reads live state before toggling. Holding OK
+does not repeatedly toggle. Entering and leaving rooms uses a 180 ms framebuffer
+slide, keeping the status bar stationary. There are no Refresh or Back rows.
 
 Physical validation: with a deliberately three-second HTTPS response delay, the
 saved one-light list was ready in 582 microseconds (local preparation, excluding
 frame presentation) and visible before status arrived. Background refresh preserved
 the selected D-pad row. The same test verified the configured purple accent.
+
+Flat-room validation: on-device HTTPS fixture testing verified direct OK on/off,
+live-state toggle after an external state change, and one toggle when OK is held.
+Both entry and exit slides rendered 11 frames. All 32 GUI unit tests passed.
