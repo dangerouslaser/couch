@@ -113,6 +113,10 @@ export component App inherits Window {
     in-out property <string> light-detail;
     in-out property <[ChoiceItem]> light-items;
     callback light-activate(int);
+    callback light-brightness(int, int);
+    in-out property <bool> brightness-shown: false;
+    in-out property <int> light-brightness-percent: 0;
+    in-out property <string> brightness-target;
     callback light-back();
     callback room-scenes();
     in-out property <int> light-scene-count;
@@ -318,6 +322,7 @@ export component App inherits Window {
         scene-label: root.light-scene-label;
         open-scenes => {root.room-scenes();}
         activate(i) => {root.light-activate(i);}
+        brightness(i, delta) => {root.light-brightness(i, delta);}
         back => {root.light-back();}
     }
 
@@ -411,6 +416,15 @@ export component App inherits Window {
         }
     }
 
+    VolumeOverlay {
+        x: 36px;
+        width: parent.width - 72px;
+        y: parent.height - self.height - 36px;
+        target: "Brightness · " + root.brightness-target;
+        value: root.light-brightness-percent;
+        percentage: true;
+        shown: root.brightness-shown && root.light-shown && !root.chooser-shown;
+    }
     VolumeOverlay {
         x: 36px;
         width: parent.width - 72px;

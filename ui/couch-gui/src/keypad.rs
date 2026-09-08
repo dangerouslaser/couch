@@ -297,6 +297,10 @@ fn map_key(code: u16) -> Option<Key> {
         // that 28 and 96 both are.
         28 | 96 | 352 | 353 => Some(Key::Return),
         1 | 158 => Some(Key::Escape),   // KEY_ESC / KEY_BACK
+        // Slint has no volume key variants; reserve F23/F24 as internal
+        // volume-up/down tokens. They follow normal hold-to-repeat handling.
+        115 => Some(Key::F23),         // KEY_VOLUMEUP
+        114 => Some(Key::F24),         // KEY_VOLUMEDOWN
         172 => Some(Key::Home),         // KEY_HOMEPAGE
         _ => None,
     }
@@ -376,6 +380,12 @@ mod tests {
 
     /// The bug this guards: the microphone edge used to return from the middle
     /// of the batch, and everything decoded beside it went in the bin.
+    #[test]
+    fn volume_keys_map_to_repeatable_brightness_inputs() {
+        assert_eq!(map_key(115).map(char::from), Some(char::from(Key::F23)));
+        assert_eq!(map_key(114).map(char::from), Some(char::from(Key::F24)));
+    }
+
     #[test]
     fn a_key_and_a_mic_edge_in_one_batch_both_arrive_in_order() {
         let mut k = blank();

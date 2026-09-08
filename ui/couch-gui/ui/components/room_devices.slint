@@ -11,6 +11,7 @@ export component RoomDevices inherits Rectangle {
     property <bool> ok-down: false;
     property <length> scroll: 0px;
     callback activate(int);
+    callback brightness(int, int);
     callback back();
     callback open-scenes();
     in property <int> scene-count;
@@ -107,6 +108,12 @@ export component RoomDevices inherits Rectangle {
     keys := FocusScope {
         enabled: root.shown;
         key-pressed(e) => {
+            if (e.text == Key.F23 || e.text == Key.F24) {
+                if (root.index < root.items.length && root.items[root.index].light) {
+                    root.brightness(root.index, e.text == Key.F23 ? 5 : -5);
+                }
+                return accept;
+            }
             if (e.text == Key.Escape) { root.back(); return accept; }
             if (e.text == Key.UpArrow) { root.index = Math.mod(root.index - 1 + root.items.length + 1, root.items.length + 1); return accept; }
             if (e.text == Key.DownArrow) { root.index = Math.mod(root.index + 1, root.items.length + 1); return accept; }

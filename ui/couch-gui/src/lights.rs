@@ -37,6 +37,7 @@ struct Entry {
 enum Operation {
     List,
     Toggle(String),
+    Brightness(String, u8),
 }
 enum Answer {
     List(Vec<Entry>),
@@ -45,6 +46,7 @@ enum Answer {
 enum Input {
     Open(Id),
     Pick(usize),
+    Brightness(usize, i32),
     Back,
 }
 pub struct Controller {
@@ -59,6 +61,10 @@ pub struct Controller {
     busy: Option<String>,
     refreshing: bool,
     last_refresh: Instant,
+    brightness_pending: VecDeque<(String, u8)>,
+    brightness_flight: Option<(String, u8)>,
+    brightness_until: Option<Instant>,
+    last_brightness_send: Instant,
 }
 fn configured(room: &Id) -> Result<Vec<Entry>, String> {
     let config: Config = serde_json::from_slice(
@@ -143,6 +149,23 @@ fn perform(room: &Id, operation: Operation, hue: &couch_hue::live::Live) -> Resu
             }
             Ok(Answer::List(entries))
         }
+        Operation::Brightness(id, percent) => {
+            if !entries.iter().any(|e| e.id == id) {
+                return Err("This device was removed from the room".into());
+            }
+            let mut state = if let Some(raw) = id.strip_prefix("hue:") {
+                hue.brightness(raw, percent).map_err(|e| e.to_string())?
+            } else if id.starts_with("device:") {
+                return Err("This device does not support brightness".into());
+            } else {
+                let c = ha()?;
+                c.command(&id, Command::Brightness(percent))
+                    .map_err(|e| e.to_string())?;
+                c.light(&id).map_err(|e| e.to_string())?
+            };
+            state.entity_id = id;
+            Ok(Answer::State(state))
+        }
         Operation::Toggle(id) => {
             if !entries.iter().any(|e| e.id == id) {
                 return Err("This device was removed from the room".into());
@@ -182,6 +205,13 @@ impl Controller {
             }
         });
         let q = input.clone();
+        app.on_light_brightness(move |i, delta| {
+            if i >= 0 {
+                q.borrow_mut()
+                    .push_back(Input::Brightness(i as usize, delta));
+            }
+        });
+        let q = input.clone();
         app.on_light_back(move || q.borrow_mut().push_back(Input::Back));
         let (tx, requests) = mpsc::sync_channel::<(u64, Id, Operation)>(1);
         let (events, rx) = mpsc::channel();
@@ -207,6 +237,10 @@ impl Controller {
             busy: None,
             refreshing: false,
             last_refresh: Instant::now(),
+            brightness_pending: VecDeque::new(),
+            brightness_flight: None,
+            brightness_until: None,
+            last_brightness_send: Instant::now() - Duration::from_secs(1),
         }
     }
     pub fn wake(&mut self) {
@@ -265,7 +299,72 @@ impl Controller {
             .try_send((self.generation, room, Operation::List))
             .is_ok();
     }
+    fn clear_brightness(&mut self, app: &App) {
+        self.brightness_pending.clear();
+        self.brightness_flight = None;
+        self.brightness_until = None;
+        app.set_brightness_shown(false);
+    }
+    fn adjust_brightness(&mut self, app: &App, i: usize, delta: i32) {
+        let Some(entry) = self.entries.get(i) else {
+            return;
+        };
+        let Some(state) = &entry.state else {
+            app.set_light_detail("Checking this light’s status. Try again in a moment.".into());
+            return;
+        };
+        let target = self
+            .brightness_pending
+            .iter()
+            .find(|(id, _)| id == &entry.id)
+            .or_else(|| {
+                self.brightness_flight
+                    .as_ref()
+                    .filter(|(id, _)| id == &entry.id)
+            })
+            .map(|(_, p)| *p);
+        match brightness_step(state, target, delta) {
+            Ok(percent) => {
+                queue_brightness(&mut self.brightness_pending, entry.id.clone(), percent);
+                app.set_brightness_target(entry.name.clone().into());
+                app.set_light_brightness_percent(percent as i32);
+                app.set_brightness_shown(true);
+                app.set_light_detail("".into());
+                self.brightness_until = Some(Instant::now() + Duration::from_secs(2));
+            }
+            Err(error) => {
+                app.set_light_detail(error.into());
+            }
+        }
+    }
+    fn send_brightness(&mut self) {
+        if self.busy.is_some()
+            || self.refreshing
+            || self.last_brightness_send.elapsed() < Duration::from_millis(100)
+        {
+            return;
+        }
+        let Some(room) = self.room.clone() else {
+            return;
+        };
+        let Some((id, percent)) = self.brightness_pending.front().cloned() else {
+            return;
+        };
+        let generation = self.generation + 1;
+        if self
+            .tx
+            .try_send((generation, room, Operation::Brightness(id.clone(), percent)))
+            .is_ok()
+        {
+            self.generation = generation;
+            self.busy = Some(id.clone());
+            self.brightness_flight = Some((id, percent));
+            self.brightness_pending.pop_front();
+            self.last_brightness_send = Instant::now();
+        }
+    }
     fn open_room(&mut self, app: &App, room: Id) {
+        self.clear_brightness(app);
         let started = Instant::now();
         self.generation += 1;
         self.room = Some(room.clone());
@@ -329,8 +428,16 @@ impl Controller {
             .any(|input| matches!(input, Input::Open(_) | Input::Back))
     }
     pub fn poll(&mut self, app: &App) {
+        if self
+            .brightness_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.brightness_until = None;
+            app.set_brightness_shown(false);
+        }
         if app.get_pair_shown() {
             self.input.borrow_mut().clear();
+            self.clear_brightness(app);
             return;
         }
         loop {
@@ -340,6 +447,7 @@ impl Controller {
             match input {
                 Input::Open(room) => self.open_room(app, room),
                 Input::Back => {
+                    self.clear_brightness(app);
                     self.generation += 1;
                     self.room = None;
                     self.busy = None;
@@ -347,8 +455,16 @@ impl Controller {
                     app.set_light_shown(false);
                     app.invoke_focus_home();
                 }
+                Input::Brightness(i, delta) => {
+                    if self.room.is_some() {
+                        self.adjust_brightness(app, i, delta);
+                    }
+                }
                 Input::Pick(i) => {
-                    if self.room.is_none() || self.busy.is_some() {
+                    if self.room.is_none()
+                        || self.busy.is_some()
+                        || !self.brightness_pending.is_empty()
+                    {
                         continue;
                     }
                     let Some(e) = self.entries.get(i) else {
@@ -389,6 +505,7 @@ impl Controller {
             self.last_refresh = Instant::now();
             self.refreshing = false;
             self.busy = None;
+            let brightness = self.brightness_flight.take();
             match result {
                 Ok(Answer::List(entries)) => {
                     let reset = self.entries.len() != entries.len()
@@ -414,12 +531,19 @@ impl Controller {
                     app.set_light_detail("".into());
                 }
                 Err(error) => {
+                    if let Some((id, _)) = brightness {
+                        self.brightness_pending
+                            .retain(|(pending, _)| pending != &id);
+                        app.set_brightness_shown(false);
+                    }
                     app.set_light_detail(error.into());
                     self.update_rows(app, false);
                 }
             }
         }
+        self.send_brightness();
         if self.room.is_some()
+            && self.brightness_pending.is_empty()
             && self.busy.is_none()
             && !self.refreshing
             && self.last_refresh.elapsed()
@@ -432,6 +556,32 @@ impl Controller {
             self.refresh();
         }
     }
+}
+// Retain only the latest unsent level per device, preserving device order.
+fn queue_brightness(queue: &mut VecDeque<(String, u8)>, id: String, percent: u8) {
+    if let Some((_, target)) = queue.iter_mut().find(|(pending, _)| pending == &id) {
+        *target = percent;
+    } else {
+        queue.push_back((id, percent));
+    }
+}
+fn brightness_step(light: &Light, target: Option<u8>, delta: i32) -> Result<u8, &'static str> {
+    if light.on.is_none() {
+        return Err("This light is unavailable.");
+    }
+    if !light.dimmable {
+        return Err("This light does not support brightness.");
+    }
+    let current = target
+        .or_else(|| {
+            if light.on == Some(false) {
+                Some(0)
+            } else {
+                light.brightness_percent
+            }
+        })
+        .ok_or("Checking brightness. Try again in a moment.")?;
+    Ok((current as i32 + delta.clamp(-100, 100)).clamp(0, 100) as u8)
 }
 fn description(light: &Light) -> String {
     match light.on {
@@ -446,6 +596,42 @@ fn description(light: &Light) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn brightness_steps_use_pending_targets_clamp_and_reject_unsupported_lights() {
+        let mut light = Light {
+            entity_id: "light.test".into(),
+            name: "Test".into(),
+            on: Some(true),
+            brightness_percent: Some(50),
+            dimmable: true,
+        };
+        assert_eq!(brightness_step(&light, None, 5), Ok(55));
+        assert_eq!(brightness_step(&light, Some(55), 5), Ok(60));
+        assert_eq!(brightness_step(&light, Some(98), 5), Ok(100));
+        assert_eq!(brightness_step(&light, Some(2), -5), Ok(0));
+        light.on = Some(false);
+        assert_eq!(brightness_step(&light, None, 5), Ok(5));
+        light.on = None;
+        assert!(brightness_step(&light, Some(50), 5).is_err());
+        light.on = Some(true);
+        light.dimmable = false;
+        assert!(brightness_step(&light, None, 5).is_err());
+        light.dimmable = true;
+        light.brightness_percent = None;
+        assert!(brightness_step(&light, None, 5).is_err());
+    }
+    #[test]
+    fn rapid_dimming_keeps_latest_target_without_dropping_other_lights() {
+        let mut queue = VecDeque::new();
+        queue_brightness(&mut queue, "one".into(), 55);
+        queue_brightness(&mut queue, "two".into(), 25);
+        queue_brightness(&mut queue, "one".into(), 60);
+        queue_brightness(&mut queue, "one".into(), 65);
+        assert_eq!(
+            queue.into_iter().collect::<Vec<_>>(),
+            vec![("one".into(), 65), ("two".into(), 25)]
+        );
+    }
     #[test]
     fn toggle_uses_live_state_and_rejects_unavailable() {
         let mut state = Light {

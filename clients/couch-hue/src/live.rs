@@ -71,6 +71,9 @@ impl Session {
         }
     }
     fn toggle(&self, id: &str) -> Result<Light> {
+        self.command(id, None)
+    }
+    fn command(&self, id: &str, brightness: Option<u8>) -> Result<Light> {
         let cached = {
             let c = self.cache.lock().unwrap();
             if c.fresh() {
@@ -92,13 +95,20 @@ impl Session {
             return Ok(state);
         }
         let on = !state.on.ok_or(Error::Unavailable)?;
+        if brightness.is_some_and(|p| p > 100 || !state.dimmable) {
+            return Err(Error::Brightness);
+        }
         {
             let mut c = self.cache.lock().unwrap();
             c.generation += 1;
             c.commanding = true;
         }
         let started = Instant::now();
-        let result = self.client.set_power(id, on);
+        let result = if let Some(p) = brightness {
+            self.client.command_for_state(&state, couch_ha::Command::Brightness(p))
+        } else {
+            self.client.set_power(id, on)
+        };
         let mut c = self.cache.lock().unwrap();
         c.commanding = false;
         c.generation += 1;
@@ -106,12 +116,12 @@ impl Session {
             c.invalidate();
             return Err(e);
         }
-        state.on = Some(on);
-        state.brightness_percent = if on { None } else { Some(0) };
+        state.on = Some(brightness.map_or(on, |p| p > 0));
+        state.brightness_percent = brightness.or(if on { None } else { Some(0) });
         c.lights.insert(id.into(), state.clone());
         // Do not extend the age of other lights based on this command.
         println!(
-            "couch-hue: power acknowledged in {} ms (cached={fast})",
+            "couch-hue: command acknowledged in {} ms (cached={fast})",
             started.elapsed().as_millis()
         );
         Ok(state)
@@ -175,6 +185,12 @@ impl Live {
             return Err(Error::Unavailable);
         }
         Ok(c.lights.values().cloned().collect())
+    }
+    pub fn brightness(&self, id: &str, percent: u8) -> Result<Light> {
+        if percent > 100 || id.starts_with("scene:") {
+            return Err(Error::Brightness);
+        }
+        self.session()?.command(id, Some(percent))
     }
     pub fn toggle(&self, id: &str) -> Result<Light> {
         self.session()?.toggle(id)
@@ -300,6 +316,49 @@ fn event(reader: &mut impl BufRead) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dimming_uses_cached_state_and_sends_only_the_requested_level() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr();
+        let id = "00000000-0000-0000-0000-000000000001";
+        let remote = thread::spawn(move || {
+            for expected in [
+                serde_json::json!({"on":{"on":true},"dimming":{"brightness":55}}),
+                serde_json::json!({"on":{"on":false}}),
+            ] {
+                let mut request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+                assert_eq!(request.method(), &tiny_http::Method::Put);
+                assert_eq!(request.url(), format!("/clip/v2/resource/light/{id}"));
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), expected);
+                request.respond(tiny_http::Response::from_string(
+                    serde_json::json!({"errors":[],"data":[{"rid":id,"rtype":"light"}]}).to_string()
+                )).unwrap();
+            }
+        });
+        let mut cache = Cache::default();
+        cache.updated = Some(Instant::now());
+        cache.lights.insert(id.into(), Light {
+            entity_id: id.into(), name: "Test".into(), on: Some(true),
+            brightness_percent: Some(50), dimmable: true,
+        });
+        let session = Session {
+            client: Arc::new(Hue {
+                base: format!("http://{address}"), key: "fixture".into(),
+                agent: ureq::Agent::new_with_defaults(),
+            }),
+            cache: Mutex::new(cache), refresh_lock: Mutex::new(()),
+        };
+        assert!(matches!(session.command(id, Some(101)), Err(Error::Brightness)));
+        let state = session.command(id, Some(55)).unwrap();
+        assert_eq!(state.brightness_percent, Some(55));
+        assert_eq!(session.cache.lock().unwrap().lights[id].brightness_percent, Some(55));
+        assert_eq!(session.command(id, Some(0)).unwrap().on, Some(false));
+        session.cache.lock().unwrap().lights.get_mut(id).unwrap().dimmable = false;
+        assert!(matches!(session.command(id, Some(5)), Err(Error::Brightness)));
+        remote.join().unwrap();
+    }
     #[test]
     fn old_snapshot_cannot_undo_an_acknowledged_command() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();

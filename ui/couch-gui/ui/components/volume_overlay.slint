@@ -6,6 +6,7 @@ export component VolumeOverlay inherits Rectangle {
     in property <string> target;     // e.g. "SONOS ARC"
     in property <int> value;         // 0-100
     in property <bool> shown;
+    in property <bool> percentage: false;
 
     // Geometry is set by the caller: a component's own root cannot see a
     // parent it does not yet have.
@@ -30,14 +31,16 @@ export component VolumeOverlay inherits Rectangle {
         HorizontalLayout {
             Text {
                 text: root.target;
+                horizontal-stretch: 1;
+                overflow: elide;
                 font-size: 15px;
                 letter-spacing: 0.14 * 15px;
                 color: Theme.text-secondary;
                 vertical-alignment: bottom;
             }
-            Rectangle { }   // spacer: space-between
             Text {
-                text: root.value;
+                text: root.percentage ? root.value + "%" : root.value;
+                horizontal-stretch: 0;
                 font-size: 26px;
                 color: Theme.text;
                 horizontal-alignment: right;

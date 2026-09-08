@@ -155,3 +155,17 @@ The fixture's room list contained one assigned scene while the home list contain
 two. Tests do not send commands to household lights.
 
 Read-only discovery on the paired BSB002 returned 14 Hue rooms and 181 scenes.
+
+## Brightness from the remote
+
+With a dimmable light selected in a room, Volume Up/Down changes brightness by
+5 percentage points. Holding a button repeats. A transient brightness meter
+shows the light name and requested percentage, then fades after two seconds.
+Zero switches the light off; increasing an off light starts at 5%.
+
+Hue uses the same fresh cache and command connection as instant toggles, without
+a preflight GET when cached state is valid. Rapid presses replace the unsent
+target for that light, with at most one send per 100ms and one command in flight.
+Acknowledgements update the row; failed commands hide the meter and show an
+error. Non-light rows ignore volume keys; unavailable and non-dimmable lights
+reject brightness changes. Home Assistant lights use its existing service API.
