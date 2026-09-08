@@ -1,5 +1,6 @@
 //! Direct local Hue API v2 light control. Use from a worker thread.
 pub mod live;
+pub mod resources;
 pub mod settings;
 mod tls;
 pub use couch_ha::{Command, Light};
@@ -142,13 +143,19 @@ impl Hue {
         Ok(settings)
     }
     pub fn lights(&self) -> Result<Vec<Light>> {
-        let all = data(response(
+        let all = self.raw_resources()?;
+        Self::parse_lights(&all)
+    }
+    fn raw_resources(&self) -> Result<Vec<Value>> {
+        data(response(
             self.agent
                 .get(format!("{}/clip/v2/resource", self.base))
                 .header("hue-application-key", &self.key)
                 .call()
                 .map_err(transport)?,
-        )?)?;
+        )?)
+    }
+    fn parse_lights(all: &[Value]) -> Result<Vec<Light>> {
         let mut lights = Vec::new();
         for v in all.iter().filter(|r| r["type"] == "light") {
             let id = v["id"]
@@ -202,7 +209,7 @@ impl Hue {
         if matches!(command,Command::Brightness(p) if p>100) {
             return Err(Error::Brightness);
         }
-        let state = self.light(id)?;
+        let state = self.control_state(id)?;
         self.command_for_state(&state, command)
     }
     /// Toggle from a fresh observation. Returns the bridge-acknowledged target,
@@ -235,23 +242,31 @@ impl Hue {
     /// Send an explicit power target without a preflight GET. The caller owns
     /// state freshness and reachability checks (see live::Live).
     pub fn set_power(&self, id: &str, on: bool) -> Result<()> {
-        if !valid_id(id) {
+        if !resources::valid_control(id) || id.starts_with("scene:") {
             return Err(Error::Configuration);
         }
         self.write_light(id, json!({"on":{"on":on}}))
     }
     fn write_light(&self, id: &str, body: Value) -> Result<()> {
+        let (kind, id) = if let Some(id) = id.strip_prefix("room:") {
+            ("grouped_light", id)
+        } else {
+            ("light", id)
+        };
+        self.write_resource(kind, id, body)
+    }
+    fn write_resource(&self, kind: &str, id: &str, body: Value) -> Result<()> {
+        if !valid_id(id) {
+            return Err(Error::Configuration);
+        }
         let updated = data(response(
             self.agent
-                .put(format!("{}/clip/v2/resource/light/{id}", self.base))
+                .put(format!("{}/clip/v2/resource/{kind}/{id}", self.base))
                 .header("hue-application-key", &self.key)
                 .send_json(body)
                 .map_err(transport)?,
         )?)?;
-        if !updated
-            .iter()
-            .any(|r| r["rid"] == id && r["rtype"] == "light")
-        {
+        if !updated.iter().any(|r| r["rid"] == id && r["rtype"] == kind) {
             return Err(Error::Response);
         }
         Ok(())

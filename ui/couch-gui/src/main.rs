@@ -21,9 +21,10 @@ mod network;
 mod network_ui;
 mod home;
 mod lights;
+mod scenes;
 use home::Area;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -200,6 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Area {
             name: "WHOLE HOME".into(),
             room_ids: Vec::new(),
+            scene_ids: Vec::new(),
             activities: vec![
                 act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
                 act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
@@ -222,6 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Area {
             name: "UPSTAIRS".into(),
             room_ids: Vec::new(),
+            scene_ids: Vec::new(),
             activities: vec![act(0, "White noise", "SONOS", "BEDROOM")],
             rooms: vec![
                 room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
@@ -233,6 +236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Area {
             name: "DOWNSTAIRS".into(),
             room_ids: Vec::new(),
+            scene_ids: Vec::new(),
             activities: vec![
                 act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
                 act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
@@ -254,6 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Area {
             name: "OUTSIDE".into(),
             room_ids: Vec::new(),
+            scene_ids: Vec::new(),
             activities: vec![],
             rooms: vec![
                 room("Garden", "3 devices", "Hue, Cameras", 1, 6),
@@ -285,6 +290,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut loaded_home = String::new();
     if let Some((raw, saved, accent)) = home::read(&loaded_home) { home::apply_accent(&app,accent); loaded_home = raw; areas = saved; }
     let mut light_controls = lights::Controller::install(&app);
+    let scene_controls = scenes::Controller::new();
+    let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
     let areas = Rc::new(std::cell::RefCell::new(areas));
@@ -391,30 +398,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let areas = areas.clone();
         let current = current.clone();
         let ask = ask.clone();
+        let choices = scene_choices.clone();
         app.on_open_scenes(move || {
             let Some(app) = weak.upgrade() else { return };
-            let area_data = areas.borrow();
-            let a = &area_data[current.get()];
-            match a.scenes.len() {
-                0 => return,
-                1 => {
-                    println!("couch-gui: run scene '{}'", a.scenes[0].name);
-                    return;
-                }
-                _ => {}
+            let data = areas.borrow();
+            let area = &data[current.get()];
+            if area.scene_ids.is_empty() {
+                return;
             }
-            let items: Vec<ChoiceItem> = a
+            *choices.borrow_mut() = area.scene_ids.clone();
+            app.set_chooser_items(ModelRc::new(VecModel::from(
+                area.scenes
+                    .iter()
+                    .map(|s| ChoiceItem {
+                        title: s.name.clone(),
+                        detail: "Press OK to activate".into(),
+                        active: false,
+                        light: false,
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+            app.set_chooser_title("SCENES".into());
+            app.set_chooser_index(0);
+            ask(Intent::OpenChooser);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let choices = scene_choices.clone();
+        let ask = ask.clone();
+        app.on_room_scenes(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let Ok(bytes) = std::fs::read(home::path("config.json")) else {
+                return;
+            };
+            let Ok(cfg) = serde_json::from_slice::<couch_model::Config>(&bytes) else {
+                return;
+            };
+            let room = couch_model::Id::new(app.get_light_room_id().as_str());
+            let list: Vec<_> = cfg
                 .scenes
                 .iter()
-                .map(|x| ChoiceItem {
-                    title: x.name.clone(),
-                    detail: SharedString::new(),
-                    active: x.active,
-                    light: false,
-                })
+                .filter(|s| s.rooms.contains(&room))
                 .collect();
+            if list.is_empty() {
+                return;
+            }
+            *choices.borrow_mut() = list.iter().map(|s| s.id.clone()).collect();
+            app.set_chooser_items(ModelRc::new(VecModel::from(
+                list.iter()
+                    .map(|s| ChoiceItem {
+                        title: s.name.as_str().into(),
+                        detail: "Press OK to activate".into(),
+                        active: false,
+                        light: false,
+                    })
+                    .collect::<Vec<_>>(),
+            )));
             app.set_chooser_title("SCENES".into());
-            app.set_chooser_items(ModelRc::new(VecModel::from(items)));
             app.set_chooser_index(0);
             ask(Intent::OpenChooser);
         });
@@ -431,6 +472,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = app.as_weak();
         let ask = ask.clone();
+        let choices=scene_choices.clone(); let recall=scene_controls.opener();
         app.on_chosen(move |index| {
             let Some(app) = weak.upgrade() else { return };
             let title = app
@@ -438,6 +480,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .row_data(index as usize)
                 .map(|i| i.title.to_string())
                 .unwrap_or_default();
+            if app.get_chooser_title()=="SCENES" {
+                if let Some(id)=choices.borrow().get(index as usize) { recall(id.clone()); }
+            }
             println!("couch-gui: chose '{title}'");
             ask(Intent::CloseChooser);
         });
@@ -832,7 +877,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(key) = press.key.filter(|key| {
                 !app.get_pair_shown()
-                    && !(press.repeat && app.get_light_shown()
+                    && !(press.repeat && (app.get_light_shown() || app.get_chooser_title()=="SCENES" && app.get_chooser_shown())
                         && *key == slint::platform::Key::Return)
             }) {
                 let text = SharedString::from(char::from(key));
@@ -936,6 +981,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_toast("".into());
         }
 
+        if let Some(message)=scene_controls.poll() { toast(message, 4); }
         network_setup.poll(&app);
         // Capture only navigation, then slide framebuffer snapshots so the
         // room animation does not rasterize the entire Slint scene every frame.

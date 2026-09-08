@@ -162,6 +162,13 @@ pub struct Room {
     pub devices: Vec<Device>,
 }
 
+/// A bridge scene reached through a saved Hue connection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HueScene {
+    pub connection_id: Id,
+    pub scene_id: String,
+}
+
 /// One press that puts several devices into a known state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
@@ -171,6 +178,10 @@ pub struct Scene {
     pub icon: Option<Icon>,
     #[serde(default)]
     pub steps: Vec<Action>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue: Option<HueScene>,
+    #[serde(default)]
+    pub rooms: Vec<RoomId>,
 }
 
 /// A thing you sit down to do, in one room, with a source device.
@@ -337,6 +348,7 @@ impl Config {
     pub fn remove_room(&mut self, id: &RoomId) -> Option<Room> {
         let at = self.rooms.iter().position(|r| &r.id == id)?;
         let room = self.rooms.remove(at);
+        for scene in &mut self.scenes { scene.rooms.retain(|r|r!=id); }
         for area in &mut self.areas {
             area.rooms.retain(|r| r != id);
         }

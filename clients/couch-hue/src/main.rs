@@ -25,13 +25,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if args.is_empty() || args == ["--help"] {
-        println!("couch-hue [--settings PATH] pair BRIDGE_IP | lights | state UUID | on UUID | off UUID | brightness UUID PERCENT");
+        println!("couch-hue [--settings PATH] pair BRIDGE_IP | lights | rooms | scenes | recall SCENE_UUID | state UUID | on UUID | off UUID | brightness UUID PERCENT");
         return Ok(());
     }
     let c = Settings::load(path)?.client()?;
     match args.as_slice() {
         ["lights"] => println!("{}", serde_json::to_string_pretty(&c.lights()?)?),
-        ["state", id] => println!("{}", serde_json::to_string_pretty(&c.light(id)?)?),
+        ["rooms"] => println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &c.resources()?
+                    .into_iter()
+                    .filter(|r| r.resource_kind == "room")
+                    .collect::<Vec<_>>()
+            )?
+        ),
+        ["scenes"] => println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &c.resources()?
+                    .into_iter()
+                    .filter(|r| r.resource_kind == "scene")
+                    .collect::<Vec<_>>()
+            )?
+        ),
+        ["recall", id] => c.recall_scene(id)?,
+        ["state", id] => println!("{}", serde_json::to_string_pretty(&c.control_state(id)?)?),
         ["on", id] => c.command(id, Command::On)?,
         ["off", id] => c.command(id, Command::Off)?,
         ["brightness", id, p] => c.command(id, Command::Brightness(p.parse()?))?,

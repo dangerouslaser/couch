@@ -81,12 +81,14 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                         hue: false,
                     })
                 }
-                Some(Integration::Hue { light_id }) if d.kind == DeviceKind::Light => Some(Entry {
-                    name: d.name.clone(),
-                    id: format!("hue:{light_id}"),
-                    state: None,
-                    hue: true,
-                }),
+                Some(Integration::Hue { light_id }) if !light_id.starts_with("scene:") => {
+                    Some(Entry {
+                        name: d.name.clone(),
+                        id: format!("hue:{light_id}"),
+                        state: None,
+                        hue: true,
+                    })
+                }
                 _ => Some(Entry {
                     name: d.name.clone(),
                     id: format!("device:{}", d.id),
@@ -274,6 +276,25 @@ impl Controller {
             .and_then(|c| c.room(&room).map(|r| r.name.clone()))
             .unwrap_or_else(|| "Room".into());
         app.set_light_title(title.into());
+        app.set_light_room_id(room.as_str().into());
+        let scene_names = std::fs::read(home::path("config.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
+            .map(|c| {
+                c.scenes
+                    .iter()
+                    .filter(|s| s.rooms.contains(&room))
+                    .map(|s| s.name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let scenes = scene_names.len();
+        app.set_light_scene_label(if scenes == 1 {
+            scene_names[0].clone().into()
+        } else {
+            format!("{scenes} scenes").into()
+        });
+        app.set_light_scene_count(scenes as i32);
         app.set_light_detail("".into());
         app.set_light_shown(true);
         match configured(&room) {

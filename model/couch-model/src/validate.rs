@@ -119,7 +119,7 @@ impl Config {
                         let valid=match c.provider {
                             crate::Provider::Kodi{..}=>resource_id.is_empty(),
                             crate::Provider::HomeAssistant=>resource_id.starts_with("light.") && resource_id.len()>6 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'.'),
-                            crate::Provider::Hue=>resource_id.len()==36 && resource_id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}),
+                            crate::Provider::Hue=>{ let id=resource_id.strip_prefix("room:").unwrap_or(resource_id); id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) },
                             crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),
                         };
                         if !valid {problems.push(Problem{at,message:"Choose a valid device from this connection".into()});}
@@ -128,6 +128,15 @@ impl Config {
             }
         }
 
+        for (i, scene) in self.scenes.iter().enumerate() {
+            for room in &scene.rooms { if self.room(room).is_none() { problems.push(Problem{at:alloc::format!("scenes[{i}].rooms"),message:"Choose an existing room".into()}); } }
+            if let Some(hue) = &scene.hue {
+                let id=&hue.scene_id;
+                let valid=self.connection(&hue.connection_id).is_some_and(|c|c.provider==crate::Provider::Hue)
+                    && id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) && scene.steps.is_empty();
+                if !valid { problems.push(Problem{at:alloc::format!("scenes[{i}].hue"),message:"Choose a Hue connection and scene; bridge scenes cannot include device steps".into()}); }
+            }
+        }
         // References.
         for (i, area) in self.areas.iter().enumerate() {
             for (j, id) in area.rooms.iter().enumerate() {
@@ -303,6 +312,8 @@ mod tests {
     fn a_scene_step_must_name_a_real_device() {
         let cfg = Config {
             scenes: vec![crate::Scene {
+                hue: None,
+                rooms: vec![],
                 id: Id::new("s"),
                 name: "S".to_string(),
                 icon: None,

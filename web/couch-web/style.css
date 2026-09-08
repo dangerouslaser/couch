@@ -657,3 +657,6 @@ input:focus,select:focus {
 input[type=color] { width:100%; height:48px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
 .accent-preview { display:flex; flex-direction:column; gap:12px; padding:22px; border:3px solid; border-radius:18px; background:#15130f; }
 .accent-preview strong { color:#f2ede4; font-size:22px; }
+
+.room-assignment { display: flex; align-items: center; gap: .75rem; padding: .6rem 0; }
+.room-assignment input[type="checkbox"] { width: 1.1rem; height: 1.1rem; margin: 0; }

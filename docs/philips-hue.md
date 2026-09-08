@@ -1,9 +1,10 @@
-# Philips Hue lights
+# Philips Hue lights, rooms and scenes
 
 `clients/couch-hue` is a Rust client for direct local Hue API v2 control. It does
 not require Home Assistant, a Hue cloud account, or a kernel change. Start with
-on/off and brightness; color, scenes and grouped lights are not
-implemented yet. One bridge connection is supported per remote.
+light on/off and brightness, grouped room on/off, and recall of scenes saved on
+the bridge. Color editing, scene creation and Hue zones as controls are deferred.
+One bridge connection is supported per remote.
 
 ## Connect and add lights
 
@@ -107,3 +108,44 @@ real-bridge/bulb latency measurements. Production credentials and configuration
 were preserved. No household lights were changed by automated fixture tests.
 
 [Hue v2 push support](https://developers.meethue.com/new-hue-api/).
+
+## Hue rooms and scenes
+
+In **Rooms & devices**, open a Couch room and choose the Hue connection. The
+**Hue controls** selector switches between individual lights and **Hue rooms**.
+Adding a Hue room creates one grouped on/off control; OK toggles its grouped-light
+service with the same push-maintained cache as individual lights. It does not
+create or rename Couch rooms or duplicate all the bridge room's lights.
+
+In **Scenes → Import Hue scenes**, select **Show in room**, then **Find Hue
+scenes** and **Import scene**. The bridge room/zone name distinguishes similarly
+named scenes. Search and the Hue room/zone filter narrow large bridge libraries.
+Scene details let you assign additional Couch rooms with **Show in
+rooms**. Use **Remote screens** to choose home-page scenes. ALL ROOMS also exposes
+all saved scenes while screens are being arranged.
+
+The home and room views each have a bottom **Scenes** button. The room picker
+contains only scenes assigned to that room. OK recalls the selected scene and
+returns to the previous view with acknowledgement or error feedback. Scenes are
+not device rows or on/off toggles. Custom device-step scene execution remains
+unimplemented and reports that explicitly.
+
+Bridge room controls retain connection references using `room:GROUPED_LIGHT_UUID`;
+old bare light UUIDs remain valid. Scenes save an optional `hue` connection/scene
+reference and `rooms` list in the existing Scene model. Invalid references and
+removing a connection still used by a scene are rejected. Removing a Couch room
+removes its scene assignments without deleting the scenes or changing the bridge.
+
+CLI: `couch-hue rooms`, `couch-hue scenes`, `couch-hue on room:UUID`,
+`couch-hue off room:UUID`, and `couch-hue recall SCENE_UUID`.
+API: GET `/api/hue/rooms` and `/api/hue/scenes`; POST
+`/api/hue/scenes/SCENE_UUID/recall`. Room power uses the existing light command
+route with a `room:UUID` identifier.
+
+Validation: resource/payload and configuration tests, mobile browser import and
+room-assignment checks, and physical-device HTTPS/SSE fixture tests for grouped
+power, room-filtered scene selection, home scene selection, recall and Back.
+The fixture's room list contained one assigned scene while the home list contained
+two. Tests do not send commands to household lights.
+
+Read-only discovery on the paired BSB002 returned 14 Hue rooms and 181 scenes.

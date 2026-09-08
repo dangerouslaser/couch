@@ -42,18 +42,20 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     } else {
         "ha"
     };
+    let category = RwSignal::new("lights".to_string());
     let fetch = move || {
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
         message.set("Finding devices…".into());
+        let category = category.get_untracked();
         spawn_local(async move {
-            match api::ha("GET", &format!("/api/{prefix}/lights"), None).await {
+            match api::ha("GET", &format!("/api/{prefix}/{category}"), None).await {
                 Ok(v) => {
                     let values = v.as_array().cloned().unwrap_or_default();
                     message.set(format!(
-                        "{} lights found. Choose the ones that belong in this room.",
+                        "{} controls found. Choose the ones that belong in this room.",
                         values.len()
                     ));
                     list.set(values);
@@ -69,13 +71,14 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         });
     };
     fetch();
-    view!{<p class="dim">"Currently supports lights with on/off and brightness."</p>
+    view!{<p class="dim">{if prefix=="hue" {"Add individual lights or a Hue room to control its lights together. Import Hue scenes from Scenes, then assign them to rooms."} else {"Currently supports lights with on/off and brightness."}}</p>
+        {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option></select></label>})}
         <button class="ghost" disabled=move ||busy.get() on:click=move |_|fetch()>"Refresh devices"</button>
         {super::connections::field("Search devices",app.device_filter,"Filter by name")}
         <p role="status">{move ||message.get()}</p>
         <div class="discovered-devices">{move ||list.get().into_iter().filter(|d|d["name"].as_str().unwrap_or("").to_lowercase().contains(&app.device_filter.get().to_lowercase())).map(|d|{
             let id=d["entity_id"].as_str().unwrap_or("").to_string();let name=d["name"].as_str().unwrap_or(&id).to_string();let title=name.clone();let room=room.clone();let connection_id=connection.id.clone();let existing=assigned(app,&connection,&id);let used=existing.is_some();
-            view!{<div class="card discovered-device"><strong>{title}</strong><p class="dim">{existing.map(|r|format!("Already in {r}")).unwrap_or_else(||if d["on"].is_null(){"Unavailable".into()}else{"Light · On/off and brightness".into()})}</p>
+            view!{<div class="card discovered-device"><strong>{title}</strong><p class="dim">{existing.map(|r|format!("Already in {r}")).unwrap_or_else(||if d["resource_kind"]=="room" {"Hue room · Control all its lights together".into()} else if d["on"].is_null(){"Unavailable".into()}else{"Light · On/off and brightness".into()})}</p>
                 <button class="primary" disabled=move ||app.busy.get()||used on:click=move |_|app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":name,"kind":"light","integration":{"via":"connection","connection_id":connection_id,"resource_id":id}})))>{if used{"Added"}else{"Add to this room"}}</button>
             </div>}
         }).collect_view()}</div>

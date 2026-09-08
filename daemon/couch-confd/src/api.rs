@@ -600,15 +600,14 @@ impl Api {
     }
 
     fn create_scene(&self, body: &[u8], if_match: Option<u64>) -> Reply {
-        let new: NewNamed = match parse(body) {
-            Ok(v) => v,
-            Err(r) => return r,
-        };
+        #[derive(Deserialize)]
+        struct NewScene { name: String, #[serde(default)] icon: Option<Icon>, #[serde(default)] hue: Option<couch_model::HueScene>, #[serde(default)] rooms: Vec<Id> }
+        let new: NewScene = match parse(body) { Ok(v) => v, Err(r) => return r };
         let mut created = Id::new("");
         let reply = self.edit(if_match, |cfg| {
             let id = cfg.fresh_scene_id(&new.name);
             created = id.clone();
-            cfg.scenes.push(Scene { id, name: new.name, icon: new.icon, steps: Vec::new() });
+            cfg.scenes.push(Scene { id, name: new.name, icon: new.icon, steps: Vec::new(), hue: new.hue, rooms: new.rooms });
         });
         with_created(reply, &created)
     }
@@ -714,6 +713,10 @@ impl Api {
             icon: Option<Icon>,
             #[serde(default)]
             steps: Vec<Action>,
+            #[serde(default)]
+            hue: Option<couch_model::HueScene>,
+            #[serde(default)]
+            rooms: Vec<Id>,
         }
         let incoming: Body = match parse(body) {
             Ok(v) => v,
@@ -725,6 +728,8 @@ impl Api {
             scene.name = incoming.name;
             scene.icon = incoming.icon;
             scene.steps = incoming.steps;
+            scene.hue = incoming.hue;
+            scene.rooms = incoming.rooms;
             Some(())
         })
     }
@@ -833,6 +838,8 @@ impl Api {
                         name: name.clone(),
                         icon: req.icon,
                         steps: Vec::new(),
+                        hue: None,
+                        rooms: Vec::new(),
                     });
                     id
                 }

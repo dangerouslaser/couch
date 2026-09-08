@@ -8,6 +8,7 @@ pub struct Area {
     pub rooms: Vec<RoomRow>,
     pub scenes: Vec<SceneCell>,
     pub room_ids: Vec<Id>,
+    pub scene_ids: Vec<Id>,
 }
 pub fn path(file: &str) -> PathBuf {
     if let Some(root) = std::env::var_os("COUCH_HOME_DIR") {
@@ -32,12 +33,20 @@ pub fn read(previous: &str) -> Option<(String, Vec<Area>, [u8; 3])> {
     Some((raw, project(&config), config.appearance.rgb()?))
 }
 fn project(config: &Config) -> Vec<Area> {
-    let make = |name: String, ids: Vec<Id>| {
+    let make = |name: String, ids: Vec<Id>, scene_ids: Vec<Id>| {
         let rooms: Vec<_> = ids.iter().filter_map(|id| config.room(id)).collect();
         Area {
             name,
             activities: Vec::new(),
-            scenes: Vec::new(),
+            scenes: scene_ids
+                .iter()
+                .filter_map(|id| config.scene(id))
+                .map(|s| SceneCell {
+                    name: s.name.as_str().into(),
+                    active: false,
+                })
+                .collect(),
+            scene_ids,
             room_ids: rooms.iter().map(|r| r.id.clone()).collect(),
             rooms: rooms
                 .iter()
@@ -70,11 +79,12 @@ fn project(config: &Config) -> Vec<Area> {
     let mut areas: Vec<_> = config
         .areas
         .iter()
-        .map(|a| make(a.name.clone(), a.rooms.clone()))
+        .map(|a| make(a.name.clone(), a.rooms.clone(), a.scenes.clone()))
         .collect();
     areas.push(make(
         "ALL ROOMS".into(),
         config.rooms.iter().map(|r| r.id.clone()).collect(),
+        config.scenes.iter().map(|s| s.id.clone()).collect(),
     ));
 
     areas

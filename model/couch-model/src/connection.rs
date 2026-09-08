@@ -73,6 +73,42 @@ mod tests {
     use crate::{Device, DeviceKind, Room};
     use alloc::vec;
     #[test]
+    fn hue_scene_room_assignments_validate_and_survive_round_trip() {
+        let mut c = Config::default();
+        c.connections.push(Connection {
+            id: "hue".into(),
+            name: "Hue".into(),
+            provider: Provider::Hue,
+        });
+        c.rooms.push(Room {
+            id: "office".into(),
+            name: "Office".into(),
+            icon: None,
+            devices: vec![],
+        });
+        c.scenes.push(crate::Scene {
+            id: "relax".into(),
+            name: "Relax".into(),
+            icon: None,
+            steps: vec![],
+            rooms: vec!["office".into()],
+            hue: Some(crate::HueScene {
+                connection_id: "hue".into(),
+                scene_id: "00000000-0000-0000-0000-000000000001".into(),
+            }),
+        });
+        assert!(c.validate().is_ok());
+        let saved = serde_json::to_string(&c).unwrap();
+        let restored: Config = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored, c);
+        c.connections.clear();
+        assert!(c.validate().is_err());
+        let mut c = restored;
+        c.remove_room(&"office".into());
+        assert!(c.scenes[0].rooms.is_empty());
+        assert!(c.validate().is_ok());
+    }
+    #[test]
     fn shared_connection_updates_devices_and_cannot_be_deleted_in_use() {
         let mut c = Config::default();
         c.connections.push(Connection {

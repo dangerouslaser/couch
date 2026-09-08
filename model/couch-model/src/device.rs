@@ -153,6 +153,8 @@ pub enum Integration {
         #[serde(default = "default_kodi_port")]
         port: u16,
     },
+    // UUID for a light or room:GROUPED_LIGHT_UUID. Scenes use Scene.hue.
+    // Keep the legacy field name for backwards-compatible saved configurations.
     Hue { light_id: String },
     HomeAssistant {
         entity_id: String,

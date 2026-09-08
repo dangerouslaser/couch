@@ -61,11 +61,19 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8]) -> Reply {
         Err(_) => return Reply::error(400, "Set up the Hue connection first"),
     };
     match (method, path) {
+        ("GET", [kind @ ("rooms" | "scenes")]) => match client.resources() {
+            Ok(items) => Reply::json(200, &items.into_iter().filter(|r|r.resource_kind==if *kind=="rooms" {"room"} else {"scene"}).collect::<Vec<_>>()),
+            Err(e) => Reply::error(502,e.to_string()),
+        },
+        ("POST", ["scenes", id, "recall"]) => match client.recall_scene(id) {
+            Ok(()) => Reply::json(200,&json!({"accepted":true})),
+            Err(e) => Reply::error(502,e.to_string()),
+        },
         ("GET", ["lights"]) => match client.lights() {
             Ok(l) => Reply::json(200, &l),
             Err(e) => Reply::error(502, e.to_string()),
         },
-        ("GET", ["lights", id]) => match client.light(id) {
+        ("GET", ["lights", id]) => match client.control_state(id) {
             Ok(l) => Reply::json(200, &l),
             Err(e) => Reply::error(502, e.to_string()),
         },

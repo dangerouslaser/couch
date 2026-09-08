@@ -14,7 +14,7 @@ const mock=https.createServer({key:await readFile(`${dir}/key.pem`),cert:await r
  const send=v=>res.end(JSON.stringify(v));
  if(req.url==='/api' && req.method==='POST'){assert.equal(JSON.parse(text).devicetype,'couch#remote');send(pressed?[{success:{username:'test-secret'}}]:[{error:{type:101,description:'link button not pressed'}}]);return;}
  if(req.headers['hue-application-key']!=='test-secret'){res.writeHead(403);send({});return;}
- if(req.url==='/clip/v2/resource'){send({errors:[],data:[{type:'light',id,owner:{rid:'device'},metadata:{name:'Test Hue light'},on:{on:power},dimming:{brightness}},{type:'zigbee_connectivity',owner:{rid:'device'},status:connected?'connected':'disconnected'}]});return;}
+ if(req.url==='/clip/v2/resource'){send({errors:[],data:[{type:'room',id:'bridge-office',metadata:{name:'Bridge Office'},services:[{rtype:'grouped_light',rid:id}]},{type:'grouped_light',id,on:{on:power}},{type:'scene',id,metadata:{name:'Relax'},group:{rid:'bridge-office'}},{type:'light',id,owner:{rid:'device'},metadata:{name:'Test Hue light'},on:{on:power},dimming:{brightness}},{type:'zigbee_connectivity',owner:{rid:'device'},status:connected?'connected':'disconnected'}]});return;}
  if(req.method==='PUT' && req.url===`/clip/v2/resource/light/${id}`){
   if(reject){send({errors:[{description:'rejected'}],data:[]});return;}
   const body=JSON.parse(text);commands.push(body);power=body.on.on;if(body.dimming)brightness=body.dimming.brightness;
@@ -48,7 +48,30 @@ try{
  connected=false;assert.equal((await(await api(`lights/${id}`)).json()).on,null);const n=commands.length;assert.equal((await api(`lights/${id}/command`,'POST',{action:'on'})).status,502);assert.equal(commands.length,n);connected=true;
  assert.equal((await api(`lights/${id}/command`,'POST',{action:'brightness',brightness:101})).status,400);
  const cfg=await(await fetch(`${base}/api/config`)).json();assert(cfg.rooms.some(r=>r.devices.some(d=>d.integration.via==='connection' && d.integration.resource_id===id)));
+ await page.getByLabel('Hue controls',{exact:true}).selectOption('rooms');
+ await page.locator('.discovered-device').getByText('Bridge Office',{exact:true}).waitFor();
+ await page.locator('.discovered-device').getByRole('button',{name:'Add to this room',exact:true}).click();
+ await page.locator('.device').getByRole('heading',{name:'Bridge Office',exact:true}).waitFor();
+ await page.goto(`${base}/scenes`);
+ await page.getByLabel('Show in room',{exact:true}).selectOption('test-room');
+ await page.getByRole('button',{name:'Find Hue scenes',exact:true}).click();
+ await page.locator('.hue-scene').getByText('Bridge Office',{exact:true}).waitFor();
+ await page.getByLabel('Search Hue scenes',{exact:true}).fill('no-match');
+ assert.equal(await page.locator('.hue-scene').count(),0);
+ await page.getByLabel('Search Hue scenes',{exact:true}).fill('relax');
+ await page.getByLabel('Hue room or zone',{exact:true}).selectOption('Bridge Office');
+ await page.locator('.hue-scene').getByRole('button',{name:'Import scene',exact:true}).click();
+ await page.locator('.row-main').filter({hasText:'Relax'}).click();
+ await page.getByRole('heading',{name:'Hue scene',exact:true}).waitFor();
+ assert.equal(await page.getByRole('heading',{name:'Device commands',exact:true}).isVisible(),false);
+ assert.equal(await page.getByLabel('Test room',{exact:true}).isChecked(),true);
+ const cfg2=await (await fetch(`${base}/api/config`)).json();
+ assert.equal(cfg2.scenes.find(s=>s.name==='Relax').hue.scene_id,id);
+ assert.deepEqual(cfg2.scenes.find(s=>s.name==='Relax').rooms,['test-room']);
+ const hueConnection=cfg2.connections.find(c=>c.provider.kind==='hue').id;
+ assert.equal((await fetch(`${base}/api/connections/${hueConnection}`,{method:'DELETE'})).status,422);
+ await page.screenshot({path:'build/hue-scenes-web.png',fullPage:true});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'build/webui-review/hue-mobile.png',fullPage:true});
  const corrupt=JSON.parse(before);corrupt.certificate[0]^=1;await writeFile(settings,JSON.stringify(corrupt));assert.equal((await api('lights')).status,502);await writeFile(settings,before);
- assert.deepEqual(errors,[]);console.log('PASS: HTTPS pairing, link-button errors, pinned certificate rejection, private settings, discovery, on/off/brightness, unreachable lights, Hue error envelopes, room import and mobile UI');
+ assert.deepEqual(errors,[]);console.log('PASS: HTTPS pairing, link-button errors, pinned certificate rejection, private settings, discovery, on/off/brightness, unreachable lights, Hue error envelopes, room controls, scene import/search/filter/assignment and mobile UI');
 }finally{if(browser)await browser.close();daemon.kill();mock.closeAllConnections();await new Promise(r=>mock.close(r));await rm(dir,{recursive:true,force:true});}

@@ -114,6 +114,11 @@ export component App inherits Window {
     in-out property <[ChoiceItem]> light-items;
     callback light-activate(int);
     callback light-back();
+    callback room-scenes();
+    in-out property <int> light-scene-count;
+    in-out property <string> light-scene-label;
+    in-out property <string> light-room-id;
+    changed chooser-shown => { if (root.chooser-shown) { fs.focus(); } else if (root.light-shown) { light-page.take-focus(); } }
     public function focus-light() { light-page.take-focus(); }
     public function focus-home() { fs.focus(); }
 
@@ -231,7 +236,7 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.light-shown ? root.light-title
+        title: root.light-shown && !root.chooser-shown ? root.light-title
              : root.wifi-setup-shown && !root.keyboard-shown ? "WI-FI"
              : root.settings-shown ? "SETTINGS"
              : root.keyboard-shown ? root.keyboard-title
@@ -305,10 +310,13 @@ export component App inherits Window {
 
 
     light-page := RoomDevices {
-        x: root.light-shown ? 0px : root.width;
+        x: root.light-shown && !root.chooser-shown ? 0px : root.width;
         y: root.status-h; width: root.width; height: root.height - root.status-h;
         shown: root.light-shown;
         detail: root.light-detail; items: root.light-items;
+        scene-count: root.light-scene-count;
+        scene-label: root.light-scene-label;
+        open-scenes => {root.room-scenes();}
         activate(i) => {root.light-activate(i);}
         back => {root.light-back();}
     }

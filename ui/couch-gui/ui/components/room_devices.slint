@@ -12,6 +12,9 @@ export component RoomDevices inherits Rectangle {
     property <length> scroll: 0px;
     callback activate(int);
     callback back();
+    callback open-scenes();
+    in property <int> scene-count;
+    in property <string> scene-label;
     property <length> row-h: 90px;
     property <length> pitch: 101px;
     property <length> scroll-goal: 0px;
@@ -28,6 +31,7 @@ export component RoomDevices inherits Rectangle {
     changed shown => { root.ok-down = false; }
     changed index => {
         root.anim = true;
+        if (root.index < root.items.length) {
         if (root.index * root.pitch < root.scroll-goal) {
             root.scroll-goal = root.index * root.pitch;
         }
@@ -36,13 +40,14 @@ export component RoomDevices inherits Rectangle {
         }
         root.scroll = root.scroll-goal;
         root.ring-y = root.index * root.pitch;
+        }
     }
     public function take-focus() { keys.focus(); }
     background: Theme.bg;
     list := Rectangle {
         x: Theme.pad-side - 6px; y: Theme.pad-top;
         width: parent.width - 2 * (Theme.pad-side - 6px);
-        height: parent.height - Theme.pad-top - 68px; clip: true;
+        height: parent.height - Theme.pad-top - (root.detail == "" ? 150px : 190px); clip: true;
         Rectangle {
             x: 6px; y: 6px - root.scroll; width: parent.width - 12px;
             height: max(0px, root.items.length * root.pitch - 11px);
@@ -71,22 +76,30 @@ export component RoomDevices inherits Rectangle {
                     }
                 }
             }
-            if root.items.length > 0: Rectangle {
+            if root.items.length > 0 && root.index < root.items.length: Rectangle {
                 x: 0px; y: root.ring-y; width: parent.width; height: root.row-h;
                 background: transparent;
                 FocusRing { focused: true; radius-inner: Theme.r-row; box-width: parent.width; box-height: parent.height; }
             }
         }
     }
-    Text { x: 20px; y: parent.height - 56px; width: parent.width - 40px; height: 48px; text: root.detail; color: Theme.text-secondary; font-size: 16px; wrap: word-wrap; }
+    Text { x: 20px; y: parent.height - 188px; width: parent.width - 40px; height: 48px; text: root.detail; color: Theme.text-secondary; font-size: 16px; wrap: word-wrap; }
+    Text { x: Theme.pad-side; y: parent.height - 128px; text: "SCENES"; color: Theme.text-secondary; font-size: 15px; letter-spacing: 1.8px; }
+    Rectangle {
+        x: Theme.pad-side; y: parent.height - 96px; width: parent.width - 2 * Theme.pad-side; height: 74px;
+        background: Theme.surface; border-width: 1px; border-color: Theme.border; border-radius: Theme.r-card;
+        Text { x: 18px; y: 0px; width: parent.width - 70px; height: parent.height; vertical-alignment: center; text: root.scene-label; overflow: elide; color: Theme.text; font-size: 21px; }
+        Image { x: parent.width - 36px; y: 28px; width: 18px; height: 18px; source: @image-url("../../assets/chevron-right.png"); colorize: Theme.text-secondary; }
+        TouchArea { clicked => { root.index=root.items.length; root.open-scenes(); } }
+        FocusRing { focused: root.index == root.items.length; box-width: parent.width; box-height: parent.height; radius-inner: Theme.r-card; }
+    }
     keys := FocusScope {
         enabled: root.shown;
         key-pressed(e) => {
             if (e.text == Key.Escape) { root.back(); return accept; }
-            if (root.items.length == 0) { return accept; }
-            if (e.text == Key.UpArrow) { root.index = Math.mod(root.index - 1 + root.items.length, root.items.length); return accept; }
-            if (e.text == Key.DownArrow) { root.index = Math.mod(root.index + 1, root.items.length); return accept; }
-            if (e.text == Key.Return) { if (!root.ok-down) { root.ok-down = true; root.activate(root.index); } return accept; }
+            if (e.text == Key.UpArrow) { root.index = Math.mod(root.index - 1 + root.items.length + 1, root.items.length + 1); return accept; }
+            if (e.text == Key.DownArrow) { root.index = Math.mod(root.index + 1, root.items.length + 1); return accept; }
+            if (e.text == Key.Return) { if (!root.ok-down) { root.ok-down = true; if (root.index == root.items.length) { root.open-scenes(); } else { root.activate(root.index); } } return accept; }
             return accept;
         }
         key-released(e) => { if (e.text == Key.Return) { root.ok-down = false; } return accept; }

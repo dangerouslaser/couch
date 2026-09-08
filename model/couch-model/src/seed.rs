@@ -45,7 +45,7 @@ fn area(id: &str, name: &str, rooms: &[&str], scenes: &[&str], activities: &[&st
 
 
 fn scene(id: &str, name: &str, steps: Vec<Action>) -> Scene {
-    Scene { id: Id::new(id), name: name.to_string(), icon: None, steps }
+    Scene { id: Id::new(id), name: name.to_string(), icon: None, steps, hue: None, rooms: Vec::new() }
 }
 
 pub(crate) fn seed() -> Config {

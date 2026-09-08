@@ -48,7 +48,7 @@ impl Session {
             cache.dirty = false;
             cache.generation
         };
-        let result = self.client.lights();
+        let result = self.client.control_states();
         let mut cache = self.cache.lock().unwrap();
         // A response started before a command must not overwrite its target.
         if cache.generation != generation || cache.commanding || cache.dirty {
@@ -82,8 +82,15 @@ impl Session {
         let fast = cached.is_some();
         let mut state = match cached {
             Some(s) => s,
-            None => self.client.light(id)?,
+            None => self.client.control_state(id)?,
         };
+        if let Some(scene) = id.strip_prefix("scene:") {
+            self.client.recall_scene(scene)?;
+            let mut cache = self.cache.lock().unwrap();
+            cache.invalidate();
+            cache.dirty = true;
+            return Ok(state);
+        }
         let on = !state.on.ok_or(Error::Unavailable)?;
         {
             let mut c = self.cache.lock().unwrap();
