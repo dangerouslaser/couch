@@ -54,6 +54,8 @@ use serde::{Deserialize, Serialize};
 
 mod device;
 mod connection;
+mod appearance;
+pub use appearance::Appearance;
 pub use connection::{Connection, Provider};
 mod icon;
 mod id;
@@ -97,6 +99,8 @@ pub struct Config {
     #[serde(default)]
     pub revision: u64,
     #[serde(default)]
+    pub appearance: Appearance,
+    #[serde(default)]
     pub connections: Vec<Connection>,
     #[serde(default)]
     pub areas: Vec<Area>,
@@ -113,6 +117,7 @@ impl Default for Config {
         Config {
             schema_version: SCHEMA_VERSION,
             revision: 0,
+            appearance: Appearance::default(),
             connections: Vec::new(),
             areas: Vec::new(),
             rooms: Vec::new(),

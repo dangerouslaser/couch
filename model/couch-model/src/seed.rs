@@ -309,5 +309,5 @@ pub(crate) fn seed() -> Config {
     ];
 
 
-    Config { schema_version: SCHEMA_VERSION, revision: 0, connections: Vec::new(), areas, rooms, scenes, activities }
+    Config { schema_version: SCHEMA_VERSION, revision: 0, appearance: crate::Appearance::default(), connections: Vec::new(), areas, rooms, scenes, activities }
 }

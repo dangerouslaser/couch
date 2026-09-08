@@ -649,3 +649,11 @@ input:focus,select:focus {
 .saved-connection details[open] { margin-bottom:16px; }
 .discovered-devices { display:grid; gap:12px; margin-top:16px; }
 .discovered-device { margin:0; }
+
+.accent-presets { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+.accent-presets button { display:flex; align-items:center; gap:8px; }
+.accent-presets [aria-pressed=true] { outline:2px solid var(--accent); }
+.color-swatch { width:18px; height:18px; border-radius:50%; border:1px solid #999; }
+input[type=color] { width:100%; height:48px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+.accent-preview { display:flex; flex-direction:column; gap:12px; padding:22px; border:3px solid; border-radius:18px; background:#15130f; }
+.accent-preview strong { color:#f2ede4; font-size:22px; }

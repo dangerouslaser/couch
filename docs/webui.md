@@ -553,3 +553,19 @@ Tests: `node web/tests/hue.mjs`, `node web/tests/home-assistant.mjs`, and
 host daemons. The latter covers Kodi/IR setup, room assignment, shared settings,
 removal protection, drafts, screen ordering and stale edits. See
 [Philips Hue setup](philips-hue.md) for certificate pinning and real-device status.
+
+## Remote accent color
+
+Open **Remote screens → Appearance**. Choose Purple, Teal, Blue, Rose or Orange,
+or use the custom picker / `#RRGGBB` field. The dark preview is local until
+**Save appearance**; **Discard color changes** restores the saved value. The
+remote updates its shared accent and recessed tint within the next configuration
+poll (about one second), including open overlays. The choice persists in
+`config.json` as `appearance.accent`. Existing configurations retain their original
+orange until changed. `PUT /api/appearance` validates the color and uses the same
+revision guard as other edits; it cannot overwrite room or connection changes.
+
+Room lists on the physical remote render saved device names before querying
+Home Assistant or Hue. Status refreshes run in the worker and update rows in
+place without resetting D-pad focus. A short navigation cache does not replace
+live validation before commands.

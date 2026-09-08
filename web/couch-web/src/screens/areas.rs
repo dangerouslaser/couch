@@ -58,11 +58,12 @@ pub fn list(app: App, config: &Config) -> AnyView {
     let empty = config.areas.is_empty();
     view! {
         {ui::page_header(app, "Remote screens".to_string(), None)}
+        {super::appearance::editor(app, config)}
         <p class="dim pad-x">
             "Each area is one remote screen, such as Whole home or Upstairs. Choose its rooms, activity strip and scene shortcuts. Use the arrows to set the left-to-right screen order."
         </p>
         <ul class="rows">{rows}</ul>
-        {empty.then(|| ui::empty("No areas yet. The remote needs at least one."))}
+        {empty.then(|| ui::empty("No custom screens yet. Your rooms are available in All rooms."))}
         {ui::add_row("Screen / area name", "Create screen", move |name| {
             app.run(api::post("/api/areas", json!({ "name": name })))
         })}

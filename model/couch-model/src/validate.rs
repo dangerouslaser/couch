@@ -45,6 +45,7 @@ impl std::error::Error for ValidationError {}
 impl Config {
     pub fn validate(&self) -> Result<(), ValidationError> {
         let mut problems = Vec::new();
+        if self.appearance.rgb().is_none() { problems.push(Problem{at:"appearance.accent".into(),message:"Use a color in #RRGGBB format".into()}); }
 
         if self.schema_version > SCHEMA_VERSION {
             problems.push(Problem {

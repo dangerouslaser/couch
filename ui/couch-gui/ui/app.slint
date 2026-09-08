@@ -16,6 +16,8 @@ export component App inherits Window {
     width: 480px;
     height: 800px;
     background: Theme.bg;
+    in-out property <color> accent <=> Theme.accent;
+    in-out property <color> accent-background <=> Theme.accent-bg;
 
     // --- shell ----------------------------------------------------------------
     in-out property <string> clock: "--:--";

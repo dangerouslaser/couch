@@ -286,6 +286,10 @@ impl Api {
             ("GET", ["meta"]) => self.meta(),
 
             ("GET", ["config"]) => self.with(|s| Reply::json(200, s.config()).at(s.revision())),
+            ("PUT", ["appearance"]) => {
+                let appearance: couch_model::Appearance = match parse(&body) {Ok(value)=>value,Err(reply)=>return reply};
+                self.edit(if_match, move |cfg| cfg.appearance=appearance)
+            }
             ("PUT", ["config"]) => self.replace_config(&body, if_match),
             ("POST", ["config", "reset"]) => {
                 self.edit(if_match, |cfg| *cfg = Config::seed())

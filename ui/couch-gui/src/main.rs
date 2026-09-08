@@ -283,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut loaded_home = String::new();
-    if let Some((raw, saved)) = home::read(&loaded_home) { loaded_home = raw; areas = saved; }
+    if let Some((raw, saved, accent)) = home::read(&loaded_home) { home::apply_accent(&app,accent); loaded_home = raw; areas = saved; }
     let mut light_controls = lights::Controller::install(&app);
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -940,13 +940,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tz_checked = now;
             }
             app.set_clock(SharedString::from(system::clock_24h(tz_offset)));
-            if !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
-                if let Some((raw, saved)) = home::read(&loaded_home) {
-                    if raw != loaded_home {
-                        loaded_home = raw; *areas.borrow_mut() = saved;
-                        current.set(0); app.set_area_dots(ModelRc::new(VecModel::from(vec![true;areas.borrow().len()])));
-                        put_front(&app,0);
-                    }
+            if let Some((raw, saved, accent)) = home::read(&loaded_home) {
+                home::apply_accent(&app,accent);
+                // Appearance updates in overlays too; defer home navigation changes
+                // until returning home so an open device control remains in place.
+                if !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
+                    loaded_home = raw; *areas.borrow_mut() = saved;
+                    current.set(0); app.set_area_dots(ModelRc::new(VecModel::from(vec![true;areas.borrow().len()])));
+                    put_front(&app,0);
                 }
             }
 

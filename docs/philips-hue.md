@@ -67,3 +67,13 @@ passed against an isolated HTTPS bridge fixture; production configuration was
 restored afterward. The real BSB002 at `192.168.1.157` responds over HTTPS with
 48 discovered lights (42 reachable). Pairing and read-only discovery succeeded;
 real household-light command testing remains pending.
+
+Room navigation uses saved device names immediately, then refreshes bridge state
+in the background. Background updates preserve D-pad focus. A five-second cache
+avoids repeated status reads when opening a just-refreshed light; explicit Refresh
+bypasses the cache, and commands still validate live state before sending.
+
+Physical validation: with a deliberately three-second HTTPS response delay, the
+saved one-light list was ready in 582 microseconds (local preparation, excluding
+frame presentation) and visible before status arrived. Background refresh preserved
+the selected D-pad row. The same test verified the configured purple accent.

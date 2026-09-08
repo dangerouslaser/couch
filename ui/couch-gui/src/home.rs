@@ -20,7 +20,7 @@ pub fn path(file: &str) -> PathBuf {
     };
     PathBuf::from(root).join(file)
 }
-pub fn read(previous: &str) -> Option<(String, Vec<Area>)> {
+pub fn read(previous: &str) -> Option<(String, Vec<Area>, [u8; 3])> {
     let raw = std::fs::read_to_string(path("config.json")).ok()?;
     if raw == previous {
         return None;
@@ -29,7 +29,7 @@ pub fn read(previous: &str) -> Option<(String, Vec<Area>)> {
     if config.schema_version != couch_model::SCHEMA_VERSION {
         return None;
     }
-    Some((raw, project(&config)))
+    Some((raw, project(&config), config.appearance.rgb()?))
 }
 fn project(config: &Config) -> Vec<Area> {
     let make = |name: String, ids: Vec<Id>| {
@@ -107,4 +107,12 @@ mod tests {
         assert_eq!(areas[0].room_ids, config.areas[0].rooms);
         assert_eq!(areas.last().unwrap().room_ids.len(), config.rooms.len());
     }
+}
+
+/// Set both focus/text accent and its recessed tint from the saved RGB value.
+pub fn apply_accent(app: &crate::App, rgb: [u8; 3]) {
+    app.set_accent(slint::Color::from_rgb_u8(rgb[0], rgb[1], rgb[2]));
+    let bg = [21u16, 19, 15];
+    let tint = std::array::from_fn::<_, 3, _>(|i| ((rgb[i] as u16 * 15 + bg[i] * 85) / 100) as u8);
+    app.set_accent_background(slint::Color::from_rgb_u8(tint[0], tint[1], tint[2]));
 }
