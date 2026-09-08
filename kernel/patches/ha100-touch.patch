@@ -1,0 +1,283 @@
+From b3028d1a1be2eb42d330e317291b443347a6d9a1 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:35:28 -0400
+Subject: [PATCH] input: add HA100 TLSC6x reports without firmware updates
+
+---
+ drivers/input/touchscreen/mediatek/Kconfig    |   8 +
+ drivers/input/touchscreen/mediatek/Makefile   |   2 +
+ .../input/touchscreen/mediatek/couch_tlsc6x.c | 235 ++++++++++++++++++
+ 3 files changed, 245 insertions(+)
+ create mode 100644 drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+
+diff --git a/drivers/input/touchscreen/mediatek/Kconfig b/drivers/input/touchscreen/mediatek/Kconfig
+index 0d63b32f..bd74e15e 100644
+--- a/drivers/input/touchscreen/mediatek/Kconfig
++++ b/drivers/input/touchscreen/mediatek/Kconfig
+@@ -234,4 +234,12 @@ config TOUCHSCREEN_LGE_FT8707
+ 	  connected to your system.
+ 	  To compile this dirver as a module, choose M here: the
+ 	  module will be called.
++config TOUCHSCREEN_COUCH_TLSC6X
++	bool "HA100 TLSC6x input-only touchscreen"
++	depends on I2C && TOUCHSCREEN_MTK
++	default n
++	help
++	  Read the HA100 touchscreen using its existing controller firmware.
++	  This driver contains no firmware updater or calibration writer.
++
+ endif
+diff --git a/drivers/input/touchscreen/mediatek/Makefile b/drivers/input/touchscreen/mediatek/Makefile
+index ad7b6cd9..ea715888 100644
+--- a/drivers/input/touchscreen/mediatek/Makefile
++++ b/drivers/input/touchscreen/mediatek/Makefile
+@@ -34,3 +34,5 @@ obj-$(CONFIG_TOUCHSCREEN_MTK_FT6336_K200)	+=  ft6336_k200/
+ obj-$(CONFIG_TOUCHSCREEN_MTK_FT6436U)	+=  ft6436u/
+ 
+ obj-$(CONFIG_TOUCHSCREEN_MTK_ELAN2K)	+=  ektf2k/
++
++obj-$(CONFIG_TOUCHSCREEN_COUCH_TLSC6X) += couch_tlsc6x.o
+diff --git a/drivers/input/touchscreen/mediatek/couch_tlsc6x.c b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+new file mode 100644
+index 00000000..b1fa2132
+--- /dev/null
++++ b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+@@ -0,0 +1,235 @@
++// SPDX-License-Identifier: GPL-2.0
++/* HA100 TLSC6x input-only driver. No firmware loader, updater or NVM writes.
++ * Report protocol: Telink tlsc6x_main.c in danascape/linux-daria-mt6877,
++ * commit 6d4bc1f32fecbe3ecf178354ee3995eebfa2f7b716.
++ */
++#include <linux/i2c.h>
++#include <linux/input/mt.h>
++#include <linux/of_irq.h>
++#include <linux/delay.h>
++#include "tpd.h"
++
++#define TLSC_POINTS 2
++#define TLSC_REPORT_SIZE 18
++
++struct couch_touch {
++	struct i2c_client *client;
++	struct regulator *supply;
++	bool suspended;
++};
++
++/* The MediaTek framework supplies callbacks for this single panel. */
++static struct couch_touch *panel_touch;
++
++static int couch_touch_read(struct i2c_client *client, u8 *report)
++{
++	u8 reg = 0;
++	int ret;
++
++	/* The vendor protocol uses a STOP between selecting and reading reg 0. */
++	ret = i2c_master_send(client, &reg, 1);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	ret = i2c_master_recv(client, report, TLSC_REPORT_SIZE);
++	return ret == TLSC_REPORT_SIZE ? 0 : (ret < 0 ? ret : -EIO);
++}
++
++static void couch_touch_clear(void)
++{
++	int slot;
++
++	for (slot = 0; slot < TLSC_POINTS; slot++) {
++		input_mt_slot(tpd->dev, slot);
++		input_mt_report_slot_state(tpd->dev, MT_TOOL_FINGER, false);
++	}
++	input_report_key(tpd->dev, BTN_TOUCH, 0);
++	input_sync(tpd->dev);
++}
++
++static irqreturn_t couch_touch_irq(int irq, void *data)
++{
++	struct couch_touch *ts = data;
++	u8 report[TLSC_REPORT_SIZE];
++	unsigned int seen = 0;
++	int i, ret;
++
++	ret = couch_touch_read(ts->client, report);
++	if (ret || (report[2] & 7) > TLSC_POINTS) {
++		dev_warn_ratelimited(&ts->client->dev, "invalid touch report (%d)\n", ret);
++		couch_touch_clear();
++		return IRQ_HANDLED;
++	}
++	if (report[2] & 7) {
++		for (i = 0; i < TLSC_POINTS; i++) {
++			u8 *point = &report[3 + i * 6];
++			unsigned int slot = point[2] >> 4;
++			unsigned int x = ((point[0] & 15) << 8) | point[1];
++			unsigned int y = ((point[2] & 15) << 8) | point[3];
++
++			/* 00/10 are down/contact; 01 is up, 11 is unused. */
++			if ((point[0] & 0x40) || slot >= TLSC_POINTS ||
++			    x >= TPD_RES_X || y >= TPD_RES_Y)
++				continue;
++			seen |= BIT(slot);
++			input_mt_slot(tpd->dev, slot);
++			input_mt_report_slot_state(tpd->dev, MT_TOOL_FINGER, true);
++			input_report_abs(tpd->dev, ABS_MT_POSITION_X, x);
++			input_report_abs(tpd->dev, ABS_MT_POSITION_Y, y);
++		}
++	}
++	for (i = 0; i < TLSC_POINTS; i++) {
++		if (!(seen & BIT(i))) {
++			input_mt_slot(tpd->dev, i);
++			input_mt_report_slot_state(tpd->dev, MT_TOOL_FINGER, false);
++		}
++	}
++	input_report_key(tpd->dev, BTN_TOUCH, seen != 0);
++	input_sync(tpd->dev);
++	return IRQ_HANDLED;
++}
++
++static void couch_touch_reset(void)
++{
++	tpd_gpio_output(0, 0);
++	msleep(20);
++	tpd_gpio_output(0, 1);
++	msleep(50);
++}
++
++static void couch_touch_suspend(struct device *dev)
++{
++	struct couch_touch *ts = panel_touch;
++	u8 sleep_cmd[] = { 0xa5, 3 };
++	int ret;
++
++	if (!ts || ts->suspended)
++		return;
++	disable_irq(ts->client->irq);
++	ts->suspended = true;
++	couch_touch_clear();
++	ret = i2c_master_send(ts->client, sleep_cmd, sizeof(sleep_cmd));
++	if (ret != sizeof(sleep_cmd))
++		dev_warn(&ts->client->dev, "touch sleep command failed: %d\n", ret);
++}
++
++static void couch_touch_resume(struct device *dev)
++{
++	struct couch_touch *ts = panel_touch;
++
++	if (!ts || !ts->suspended)
++		return;
++	couch_touch_reset();
++	couch_touch_clear();
++	ts->suspended = false;
++	enable_irq(ts->client->irq);
++}
++
++static int couch_touch_probe(struct i2c_client *client,
++			     const struct i2c_device_id *id)
++{
++	struct couch_touch *ts;
++	struct device_node *node;
++	u8 report[TLSC_REPORT_SIZE];
++	int ret;
++
++	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
++		return -EOPNOTSUPP;
++	if (panel_touch || !tpd || !tpd->dev)
++		return -ENODEV;
++	ts = devm_kzalloc(&client->dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++	ts->client = client;
++	ts->supply = regulator_get(tpd->tpd_dev, "vtouch");
++	if (IS_ERR(ts->supply))
++		return PTR_ERR(ts->supply);
++	ret = regulator_set_voltage(ts->supply, 2800000, 2800000);
++	if (ret)
++		goto put_supply;
++	ret = regulator_enable(ts->supply);
++	if (ret)
++		goto put_supply;
++	tpd_gpio_as_int(1);
++	couch_touch_reset();
++	ret = couch_touch_read(client, report);
++	if (ret)
++		goto disable_supply;
++	node = of_find_matching_node(NULL, touch_of_match);
++	if (!node) {
++		ret = -ENODEV;
++		goto disable_supply;
++	}
++	client->irq = irq_of_parse_and_map(node, 0);
++	of_node_put(node);
++	if (client->irq <= 0) {
++		ret = -EINVAL;
++		goto disable_supply;
++	}
++	ret = input_mt_init_slots(tpd->dev, TLSC_POINTS, INPUT_MT_DIRECT);
++	if (ret)
++		goto disable_supply;
++	input_set_capability(tpd->dev, EV_KEY, BTN_TOUCH);
++	ret = request_threaded_irq(client->irq, NULL, couch_touch_irq,
++		IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "couch-tlsc6x", ts);
++	if (ret)
++		goto disable_supply;
++	i2c_set_clientdata(client, ts);
++	panel_touch = ts;
++	tpd_load_status = 1;
++	dev_info(&client->dev, "HA100 touch enabled using existing firmware, irq %d\n", client->irq);
++	return 0;
++
++disable_supply:
++	regulator_disable(ts->supply);
++put_supply:
++	regulator_put(ts->supply);
++	return ret;
++}
++
++static int couch_touch_remove(struct i2c_client *client)
++{
++	struct couch_touch *ts = i2c_get_clientdata(client);
++
++	free_irq(client->irq, ts);
++	panel_touch = NULL;
++	regulator_disable(ts->supply);
++	regulator_put(ts->supply);
++	return 0;
++}
++
++static const struct i2c_device_id couch_touch_ids[] = {
++	{ "tlsc6x_touch", 0 }, { }
++};
++static const struct of_device_id couch_touch_of[] = {
++	{ .compatible = "mediatek,tlsc6x_touch" }, { }
++};
++static struct i2c_driver couch_touch_driver = {
++	.driver = {
++		.name = "couch-tlsc6x",
++		.of_match_table = couch_touch_of,
++	},
++	.probe = couch_touch_probe,
++	.remove = couch_touch_remove,
++	.id_table = couch_touch_ids,
++};
++
++static int couch_touch_local_init(void)
++{
++	return i2c_add_driver(&couch_touch_driver);
++}
++
++static struct tpd_driver_t couch_tpd_driver = {
++	.tpd_device_name = "couch-tlsc6x",
++	.tpd_local_init = couch_touch_local_init,
++	.suspend = couch_touch_suspend,
++	.resume = couch_touch_resume,
++};
++
++static int __init couch_touch_init(void)
++{
++	tpd_get_dts_info();
++	return tpd_driver_add(&couch_tpd_driver);
++}
++module_init(couch_touch_init);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("HA100 TLSC6x input driver, without firmware updates");
+-- 
+2.43.0
+

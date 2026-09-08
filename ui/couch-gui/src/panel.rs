@@ -140,7 +140,7 @@ impl Panel {
         // scrollback), and rendering to that means drawing three screens per
         // frame. fb_var_screeninfo starts xres, yres, xres_virtual, ...
         let mut vinfo = [0u32; 40];
-        let rc = unsafe { libc::ioctl(fb.as_raw_fd(), FBIOGET_VSCREENINFO, vinfo.as_mut_ptr()) };
+        let rc = unsafe { libc::ioctl(fb.as_raw_fd(), FBIOGET_VSCREENINFO as _, vinfo.as_mut_ptr()) };
         let var = (rc == 0 && vinfo[0] > 0 && vinfo[1] > 0).then_some(vinfo);
         let (width, height) = var.map_or((480, 800), |v| (v[0], v[1]));
         let stride = std::fs::read_to_string("/sys/class/graphics/fb0/stride")
@@ -307,7 +307,7 @@ impl Panel {
             return;
         }
         let arg = if off { FB_BLANK_POWERDOWN } else { FB_BLANK_UNBLANK };
-        let rc = unsafe { libc::ioctl(self.fb.as_raw_fd(), FBIOBLANK, arg as libc::c_ulong) };
+        let rc = unsafe { libc::ioctl(self.fb.as_raw_fd(), FBIOBLANK as _, arg as libc::c_ulong) };
         if rc != 0 {
             println!("couch-gui: FBIOBLANK({arg}) failed: {}", std::io::Error::last_os_error());
             return;
@@ -624,11 +624,11 @@ fn probe(name: &str, why: &mut Vec<String>, call: &mut dyn FnMut() -> Result<(),
 
 fn wait_for_vsync(fd: libc::c_int) -> Result<(), i32> {
     let mut arg: u32 = 0;
-    ioctl_result(unsafe { libc::ioctl(fd, FBIO_WAITFORVSYNC, &mut arg as *mut u32) })
+    ioctl_result(unsafe { libc::ioctl(fd, FBIO_WAITFORVSYNC as _, &mut arg as *mut u32) })
 }
 
 fn pan_display(fd: libc::c_int, var: &mut [u32; 40]) -> Result<(), i32> {
-    ioctl_result(unsafe { libc::ioctl(fd, FBIOPAN_DISPLAY, var.as_mut_ptr()) })
+    ioctl_result(unsafe { libc::ioctl(fd, FBIOPAN_DISPLAY as _, var.as_mut_ptr()) })
 }
 
 fn ioctl_result(rc: libc::c_int) -> Result<(), i32> {

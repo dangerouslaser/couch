@@ -3,6 +3,7 @@
 //! The screens themselves are still being designed; everything here is the
 //! platform underneath them - panel, input, and the device state the UI shows.
 
+mod evdev;
 mod keypad;
 mod mic;
 mod panel;

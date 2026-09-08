@@ -19,7 +19,6 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::io::AsRawFd;
 
 use slint::platform::Key;
 
@@ -36,8 +35,6 @@ pub const KEY_MENU: u16 = 139;
 
 pub const REPEAT_DELAY_MS: u64 = 400;
 pub const REPEAT_RATE_MS: u64 = 70;
-
-const NODES: [&str; 2] = ["/dev/input/event1", "/dev/input/event2"];
 
 /// evdev's input_event is 16 bytes on 32-bit ARM: two 4-byte timeval words,
 /// then type, code and value.
@@ -81,18 +78,7 @@ pub struct Press {
 
 impl Keypad {
     pub fn open() -> Self {
-        let files = NODES
-            .iter()
-            .filter_map(|p| {
-                let f = File::options().read(true).open(p).ok()?;
-                unsafe {
-                    let fd = f.as_raw_fd();
-                    let fl = libc::fcntl(fd, libc::F_GETFL);
-                    libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
-                }
-                Some(f)
-            })
-            .collect();
+        let files = crate::evdev::open_named(&["mt_gpio_kpd", "mtk-kpd"]);
         Keypad {
             files,
             queue: VecDeque::new(),
