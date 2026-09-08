@@ -36,6 +36,10 @@ export component StatusBar inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.title;
+        // Keep long room names clear of the status indicators.
+        width: max(0px, 2 * (wifi.x - 12px) - parent.width);
+        horizontal-alignment: center;
+        overflow: elide;
         // Tracked out, not scaled up: 15px is a size the section labels and the
         // keyboard already embed, and the 16px this asked for was 21KB of
         // charset for one line.

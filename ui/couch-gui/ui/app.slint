@@ -231,7 +231,7 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.light-shown ? "DEVICES"
+        title: root.light-shown ? root.light-title
              : root.wifi-setup-shown && !root.keyboard-shown ? "WI-FI"
              : root.settings-shown ? "SETTINGS"
              : root.keyboard-shown ? root.keyboard-title
@@ -308,7 +308,7 @@ export component App inherits Window {
         x: root.light-shown ? 0px : root.width;
         y: root.status-h; width: root.width; height: root.height - root.status-h;
         shown: root.light-shown;
-        title: root.light-title; detail: root.light-detail; items: root.light-items;
+        detail: root.light-detail; items: root.light-items;
         activate(i) => {root.light-activate(i);}
         back => {root.light-back();}
     }

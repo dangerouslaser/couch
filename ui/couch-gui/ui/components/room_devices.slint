@@ -5,7 +5,6 @@ import { ChoiceItem } from "chooser.slint";
 // One flat list. State updates mutate model rows, preserving focus and scroll.
 export component RoomDevices inherits Rectangle {
     in property <bool> shown;
-    in property <string> title;
     in property <string> detail;
     in property <[ChoiceItem]> items;
     property <int> index: 0;
@@ -40,11 +39,10 @@ export component RoomDevices inherits Rectangle {
     }
     public function take-focus() { keys.focus(); }
     background: Theme.bg;
-    Text { x: 20px; y: 24px; width: parent.width - 40px; height: 42px; text: root.title; color: Theme.text; font-size: 28px; font-weight: 600; overflow: elide; }
     list := Rectangle {
-        x: Theme.pad-side - 6px; y: 82px;
+        x: Theme.pad-side - 6px; y: Theme.pad-top;
         width: parent.width - 2 * (Theme.pad-side - 6px);
-        height: parent.height - 150px; clip: true;
+        height: parent.height - Theme.pad-top - 68px; clip: true;
         Rectangle {
             x: 6px; y: 6px - root.scroll; width: parent.width - 12px;
             height: max(0px, root.items.length * root.pitch - 11px);

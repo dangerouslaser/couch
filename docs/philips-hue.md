@@ -74,7 +74,8 @@ real household-light command testing remains pending.
 ## Remote state cache and response time
 
 Room names and devices render from local configuration immediately. Device rows
-match the home room list’s cards, icons, typography and moving focus ring. OK
+match the home room list’s cards, icons, typography and moving focus ring. The room
+name appears in the status bar, with no duplicate heading above the devices. OK
 toggles the focused light; physical Back returns home with a 180 ms slide.
 
 The GUI starts a credential-scoped Hue session in the background. A pinned HTTPS
