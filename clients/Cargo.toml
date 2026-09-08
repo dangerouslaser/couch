@@ -4,7 +4,7 @@
 # nobody needs yet and costs a synchronised bump on every shared change.
 [workspace]
 resolver = "2"
-members = ["couch-kodi", "couch-voice", "couch-ir", "couch-ha"]
+members = ["couch-kodi", "couch-voice", "couch-ir", "couch-ha", "couch-hue"]
 
 [workspace.package]
 version = "0.1.0"

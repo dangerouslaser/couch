@@ -9,6 +9,7 @@ struct Entry {
     name: String,
     id: String,
     state: Option<Light>,
+    hue: bool,
 }
 enum Operation {
     List,
@@ -60,8 +61,15 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                     name: d.name.clone(),
                     id: entity_id.clone(),
                     state: None,
+                    hue: false,
                 })
             }
+            Integration::Hue { light_id } if d.kind == DeviceKind::Light => Some(Entry {
+                name: d.name.clone(),
+                id: format!("hue:{light_id}"),
+                state: None,
+                hue: true,
+            }),
             _ => None,
         })
         .collect())
@@ -71,33 +79,74 @@ fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {
     if matches!(operation, Operation::List) && entries.is_empty() {
         return Ok(Answer::List(entries));
     }
-    let client = Settings::load(&home::path("ha-connection.json"))
-        .and_then(|s| s.client())
-        .map_err(|_| "Set up Home Assistant under Connections in the web editor")?;
+    let ha = || {
+        Settings::load(&home::path("ha-connection.json"))
+            .and_then(|s| s.client())
+            .map_err(|_| "Set up Home Assistant under Connections in the web editor".to_string())
+    };
+    let hue = || {
+        couch_hue::settings::Settings::load(&home::path("hue-connection.json"))
+            .and_then(|s| s.client())
+            .map_err(|_| "Pair Philips Hue under Connections in the web editor".to_string())
+    };
     match operation {
         Operation::List => {
-            let states = client.lights().map_err(|e| e.to_string())?;
+            // One unavailable integration must not hide the other bridge's lights.
+            let ha_states = if entries.iter().any(|e| !e.hue) {
+                ha().and_then(|c| c.lights().map_err(|e| e.to_string()))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let hue_states = if entries.iter().any(|e| e.hue) {
+                hue()
+                    .and_then(|c| c.lights().map_err(|e| e.to_string()))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             for entry in &mut entries {
-                entry.state = states.iter().find(|s| s.entity_id == entry.id).cloned();
+                let states = if entry.hue { &hue_states } else { &ha_states };
+                let id = entry.id.strip_prefix("hue:").unwrap_or(&entry.id);
+                entry.state = states
+                    .iter()
+                    .find(|s| s.entity_id == id)
+                    .cloned()
+                    .map(|mut s| {
+                        s.entity_id = entry.id.clone();
+                        s
+                    });
             }
             Ok(Answer::List(entries))
         }
         Operation::State(id) | Operation::Send(id, _) if !entries.iter().any(|e| e.id == id) => {
             Err("This light was removed from the room".into())
         }
-        Operation::State(id) => client
-            .light(&id)
-            .map(|s| Answer::State(s, false))
-            .map_err(|e| e.to_string()),
-        Operation::Send(id, command) => {
-            client.command(&id, command).map_err(|e| e.to_string())?;
-            client
-                .light(&id)
-                .map(|s| Answer::State(s, true))
-                .map_err(|e| e.to_string())
+        op => {
+            let (id, command) = match op {
+                Operation::State(id) => (id, None),
+                Operation::Send(id, c) => (id, Some(c)),
+                _ => unreachable!(),
+            };
+            let mut state = if let Some(raw) = id.strip_prefix("hue:") {
+                let c = hue()?;
+                if let Some(cmd) = command {
+                    c.command(raw, cmd).map_err(|e| e.to_string())?;
+                }
+                c.light(raw).map_err(|e| e.to_string())?
+            } else {
+                let c = ha()?;
+                if let Some(cmd) = command {
+                    c.command(&id, cmd).map_err(|e| e.to_string())?;
+                }
+                c.light(&id).map_err(|e| e.to_string())?
+            };
+            state.entity_id = id;
+            Ok(Answer::State(state, command.is_some()))
         }
     }
 }
+
 impl Controller {
     pub fn install(app: &App) -> Self {
         let input = Rc::new(RefCell::new(VecDeque::new()));
@@ -178,7 +227,12 @@ impl Controller {
             );
             return;
         }
-        self.buttons(app, "Connecting", "Waiting for Home Assistant…", &["Back"]);
+        self.buttons(
+            app,
+            "Connecting",
+            "Waiting for the light connection…",
+            &["Back"],
+        );
     }
     fn list(&mut self, app: &App) {
         self.page = Page::List;
@@ -191,7 +245,7 @@ impl Controller {
                     e.state
                         .as_ref()
                         .map(description)
-                        .unwrap_or_else(|| "Missing from Home Assistant".into()),
+                        .unwrap_or_else(|| "Unavailable — select for details".into()),
                 )
             })
             .collect();
@@ -203,7 +257,7 @@ impl Controller {
             app,
             "Room lights",
             if self.entries.is_empty() {
-                "Add Home Assistant lights to this room in the web editor."
+                "Add Hue or Home Assistant lights to this room in the web editor."
             } else {
                 "Choose a light to control it."
             },

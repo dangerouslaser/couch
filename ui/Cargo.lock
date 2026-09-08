@@ -758,6 +758,7 @@ name = "couch-gui"
 version = "0.1.0"
 dependencies = [
  "couch-ha",
+ "couch-hue",
  "couch-model",
  "couch-voice",
  "libc",
@@ -772,6 +773,18 @@ dependencies = [
 name = "couch-ha"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "couch-hue"
+version = "0.1.0"
+dependencies = [
+ "couch-ha",
+ "rustls",
  "serde",
  "serde_json",
  "ureq",

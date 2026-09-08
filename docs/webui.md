@@ -532,3 +532,9 @@ To render a real config, `couch-gui` would:
 
 The counts in the seed are what make step 4 checkable: a first cut can be held
 against the screen it replaces.
+
+## Direct Philips Hue lights
+
+Connections now includes bridge pairing, discovery, test controls and room import
+for the Rust Hue API v2 client. See [Philips Hue setup](philips-hue.md) for pairing,
+private credential storage, certificate pinning and validation.

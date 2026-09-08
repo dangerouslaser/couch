@@ -21,6 +21,7 @@
 //! anybody's house.
 
 mod ha;
+mod hue;
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -271,6 +272,7 @@ impl Api {
             return Reply::error(401, "not paired - open the page and enter the PIN on your remote");
         }
 
+        if rest.first() == Some(&"hue") { return hue::route(&method, &rest[1..], &body); }
         if rest.first() == Some(&"ha") { return ha::route(&method, &rest[1..], &body); }
 
         match (method.as_str(), rest.as_slice()) {
@@ -533,7 +535,7 @@ impl Api {
                 "schema_version": SCHEMA_VERSION,
                 "icons": ALL_ICONS.iter().map(|i| i.name()).collect::<Vec<_>>(),
                 "device_kinds": ALL_DEVICE_KINDS.iter().map(|k| k.name()).collect::<Vec<_>>(),
-                "integrations": ["none", "kodi", "home-assistant", "ir"],
+                "integrations": ["none", "kodi", "home-assistant", "hue", "ir"],
                 "activity_kinds": ["audio", "video"],
             }),
         )

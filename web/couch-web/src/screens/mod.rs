@@ -247,3 +247,5 @@ mod tests {
         );
     }
 }
+
+mod hue;

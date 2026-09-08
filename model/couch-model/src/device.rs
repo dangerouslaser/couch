@@ -139,7 +139,7 @@ impl core::fmt::Display for DeviceKind {
 /// Only the transports this repo can actually drive today are listed: `couch-
 /// kodi` speaks the first, the remote is a Home Assistant device so the second
 /// is where most of it will end up, and `/dev/irtx` is the third. Adding a
-/// variant is a backwards-compatible change; removing one is not.
+/// variant requires updated readers before configurations use that variant.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(tag = "via", rename_all = "kebab-case")]
 pub enum Integration {
@@ -152,6 +152,7 @@ pub enum Integration {
         #[serde(default = "default_kodi_port")]
         port: u16,
     },
+    Hue { light_id: String },
     HomeAssistant {
         entity_id: String,
     },
@@ -172,6 +173,7 @@ impl Integration {
         match self {
             Integration::None => "none",
             Integration::Kodi { .. } => "kodi",
+            Integration::Hue { .. } => "hue",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",
         }

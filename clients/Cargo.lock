@@ -83,6 +83,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "couch-hue"
+version = "0.1.0"
+dependencies = [
+ "couch-ha",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "ureq",
+ "url",
+]
+
+[[package]]
 name = "couch-ir"
 version = "0.1.0"
 dependencies = [

@@ -59,6 +59,7 @@ pub fn connection_summary(integration: &Integration) -> String {
     match integration {
         Integration::None => "Not configured".into(),
         Integration::Kodi { host, port } => format!("Kodi · {host}:{port}"),
+        Integration::Hue { light_id } => format!("Philips Hue · {light_id}"),
         Integration::HomeAssistant { entity_id } => format!("Home Assistant · {entity_id}"),
         Integration::Ir { codeset } => format!("Infrared · {codeset}"),
     }
@@ -71,6 +72,7 @@ pub fn connections(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">
             <section class="card"><h2>"Kodi"</h2><p>"Use the player’s hostname or IP address and its JSON-RPC TCP port (usually 9090). Enable remote control in Kodi."</p></section>
             {super::home_assistant::setup(app)}
+            {super::hue::setup(app)}
             <section class="card"><h2>"Infrared"</h2><p>"Store a codeset name for your device. Code learning, codeset discovery and sending test commands are not available here yet."</p></section>
         </div>
         <h2 class="section">"Device connections"</h2>

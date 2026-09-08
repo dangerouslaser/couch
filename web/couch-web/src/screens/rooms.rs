@@ -117,7 +117,10 @@ fn device_form(app: App, room: &Id, device: Option<&Device>) -> AnyView {
             Some(Integration::Kodi { host, port }) => {
                 (host.clone(), port.to_string(), String::new(), String::new())
             }
-            Some(Integration::HomeAssistant { entity_id }) => (
+            Some(Integration::HomeAssistant { entity_id })
+            | Some(Integration::Hue {
+                light_id: entity_id,
+            }) => (
                 String::new(),
                 "9090".into(),
                 entity_id.clone(),
@@ -168,8 +171,9 @@ fn device_form(app: App, room: &Id, device: Option<&Device>) -> AnyView {
         <label class="field"><span class="label">"Device type"</span><select aria-label="Device type" prop:value=move || kind.get().name() on:change=move |e| kind.set(DeviceKind::from_name(&event_target_value(&e)).unwrap_or_default())>
         {ALL_DEVICE_KINDS.iter().map(|k| view! { <option value=k.name()>{k.name().replace('-', " ")}</option> }).collect_view()}</select></label>
         <label class="field"><span class="label">"Connection / client"</span><select aria-label="Connection / client" prop:value=move || via.get() on:change=move |e| via.set(event_target_value(&e))>
-        <option value="none">"Set up later"</option><option value="kodi">"Kodi"</option><option value="home-assistant">"Home Assistant"</option><option value="ir">"Infrared (IR)"</option></select></label>
+        <option value="none">"Set up later"</option><option value="kodi">"Kodi"</option><option value="home-assistant">"Home Assistant"</option><option value="hue">"Philips Hue"</option><option value="ir">"Infrared (IR)"</option></select></label>
         <Show when=move || via.get() == "kodi">{draft_field("Hostname or IP address", host, "192.168.1.20")}{draft_field("TCP port", port, "9090")}</Show>
+        <Show when=move || via.get() == "hue">{draft_field("Hue light ID", entity, "UUID from Connections → Philips Hue")}</Show>
         <Show when=move || via.get() == "home-assistant">{draft_field("Entity ID", entity, "light.living_room")}</Show>
         <Show when=move || via.get() == "ir">{draft_field("Codeset name", codeset, "lg-tv")}</Show>
         <Show when=move || editing && via.get() != original_via><p class="notice">"Saving replaces this device’s previous connection settings. Switching back before saving keeps them."</p></Show>
@@ -211,6 +215,21 @@ fn validated_connection(
                 port,
             })
         }
+        "hue"
+            if entity.len() == 36
+                && entity.bytes().enumerate().all(|(i, b)| {
+                    if [8, 13, 18, 23].contains(&i) {
+                        b == b'-'
+                    } else {
+                        b.is_ascii_hexdigit()
+                    }
+                }) =>
+        {
+            Ok(Integration::Hue {
+                light_id: entity.into(),
+            })
+        }
+        "hue" => Err("Choose a light from Connections → Philips Hue, or enter its UUID.".into()),
         "home-assistant" if !entity.trim().is_empty() => Ok(Integration::HomeAssistant {
             entity_id: entity.trim().into(),
         }),
