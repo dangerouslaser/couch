@@ -47,6 +47,14 @@ done
 [ -e /system/vendor ]      || $BB ln -s /vendor /system/vendor 2>/dev/null
 [ -e /system/etc/firmware ] || { $BB mkdir -p /system/etc 2>/dev/null
                                  $BB ln -s /vendor/firmware /system/etc/firmware 2>/dev/null; }
+# The gen2 wlan driver opens its RAM code by a hardcoded path,
+# /etc/firmware/WIFI_RAM_CODE_6580, which Android satisfies through its
+# /etc -> /system/etc link. Alpine has no /etc/firmware at all, and the kernel
+# thread resolves the path against this (initramfs) root. Without the link
+# wlanProbe fails inside kalFirmwareImageMapping and wmt reports only
+# "wlan probe fail(-1)".
+[ -e /etc/firmware ] || { $BB mkdir -p /etc 2>/dev/null
+                          $BB ln -s /vendor/firmware /etc/firmware 2>/dev/null; }
 echo "= nodes: ttyMT2 $([ -e /dev/ttyMT2 ] && echo ok || echo MISSING), /system/vendor $([ -e /system/vendor ] && echo ok || echo MISSING)"
 mark $((BASE+1)) "S1 vendor=$VSRC bundle=$BUNDLE mods=$($BB ls /vendor/lib/modules 2>/dev/null | $BB wc -l)"
 $BB mount -t tmpfs tmpfs /dev/__properties__ 2>/dev/null
@@ -157,10 +165,51 @@ if [ "$WIFI" = "1" ]; then
     done
     echo "= launcher $($BB pidof wmt_launcher >/dev/null && echo running || echo dead), stp after ${n}s"
     mark $((BASE+5)) "S5 launcher=$($BB pidof wmt_launcher >/dev/null && echo up || echo dead) stp=${n}s"
+    # The wlan driver logs through pr_debug, and the kernel has dynamic debug,
+    # so every one of its messages is compiled in but switched off: a failed
+    # probe says nothing at all. Open the tap for the probe and close it once
+    # wlan0 exists, so a failure lands in dmesg without the driver narrating
+    # every scan afterwards. Left open on failure, so a manual retry
+    # (echo 0 > /dev/wmtWifi; echo 1 > /dev/wmtWifi) is heard too.
+    $BB mount -t debugfs none /sys/kernel/debug 2>/dev/null
+    echo 'file *gen2* +p' > /sys/kernel/debug/dynamic_debug/control 2>/dev/null
+
+    # Without an NVRAM record the driver invents a MAC from 00:08:22 plus three
+    # bytes of jiffies, so the address, and with it the DHCP lease, changes on
+    # every boot. It refuses one from userspace (SIOCSIFHWADDR: Not supported).
+    # It does read /data/nvram/APCFG/APRDEB/WIFI, a 512-byte record whose bytes
+    # 4-9 are the MAC, so write one derived from the eMMC CID: locally
+    # administered (02:), unique per unit, the same on every boot. Everything
+    # else stays zero. The zero version words then fail the driver's NVRAM
+    # version check exactly as a missing record does, so on the firmware side
+    # (TX power, PHY parameters, domain) nothing changes from before.
+    NV=/data/nvram/APCFG/APRDEB/WIFI
+    ID=$($BB cat /sys/block/mmcblk0/device/cid 2>/dev/null)
+    [ -n "$ID" ] || ID=$($BB sed -n 's/.*androidboot\.serialno=\([^ ]*\).*/\1/p' /proc/cmdline)
+    if [ -n "$ID" ]; then
+        H=$($BB echo -n "couch-wlan0-$ID" | $BB md5sum | $BB cut -c1-10)
+        $BB mkdir -p "$(dirname $NV)"
+        $BB dd if=/dev/zero of=$NV bs=512 count=1 2>/dev/null
+        { $BB printf '\002'
+          for i in 1 3 5 7 9; do
+              $BB printf "\\$($BB printf '%03o' 0x$($BB echo "$H" | $BB cut -c$i-$((i+1))))"
+          done
+        } | $BB dd of=$NV bs=1 seek=4 conv=notrunc 2>/dev/null
+        echo "= wlan mac 02:$($BB echo "$H" | $BB sed 's/../&:/g; s/:$//') from id $($BB echo "$ID" | $BB cut -c1-8)..."
+    else
+        echo "= wlan mac: no device id, leaving the driver's random one"
+    fi
+
     $BB echo 1 > /dev/wmtWifi 2>/tmp/wifion.err
     $BB sleep 3; $BB mdev -s
     $BB ifconfig wlan0 up 2>/dev/null
-    echo "= wlan0 $([ -d /sys/class/net/wlan0 ] && echo UP || echo MISSING)  $($BB cat /tmp/wifion.err 2>/dev/null)"
+    if [ -d /sys/class/net/wlan0 ]; then
+        echo "= wlan0 UP $($BB cat /sys/class/net/wlan0/address)"
+        echo 'file *gen2* -p' > /sys/kernel/debug/dynamic_debug/control 2>/dev/null
+    else
+        echo "= wlan0 MISSING  $($BB cat /tmp/wifion.err 2>/dev/null)"
+        echo "= wlan probe log:"; $BB dmesg | $BB grep -E "wlan_gen2.*(ERROR|WARN)|WMT-FUNC" | $BB tail -6
+    fi
 
     # Credentials come from Android's own store, read on the device at runtime,
     # so they never live in this repo or the boot image. userdata is f2fs.
