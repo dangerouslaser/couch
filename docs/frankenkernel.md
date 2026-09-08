@@ -1,11 +1,24 @@
 # Building a kernel from source (the "frankenkernel")
 
-Couch runs the stock 3.18.79 kernel byte-for-byte because the three drivers that
-make this device a device - the ST7701s display, the tlsc6x touchscreen and the
-CONSYS WiFi - exist in no public source tree, and the vendor has not released
-theirs. This is the plan to build our own 3.18 kernel anyway, by assembling a
-MediaTek ALPS `alps-3.18.79` base with those drivers ported in from other public
-MTK trees. The prize is a kernel we can read, profile and change: fixing the
+> **Status, 2026-09-08.** Done through Phase 3's WiFi gate: `3.18.79 #4` boots
+> the device from the `boot` slot with display, keypad, USB serial and WiFi,
+> and runs all of Couch. Phase 0-2 went as planned except that serial, not the
+> panel, was the hard part (the panel came up before the console did, see
+> `kernel/README.md`). Still open: the `tlsc6x` touchscreen and `mt_irtx`
+> (Phase 3 touch, Phase 4 IR), then Phase 4 proper. Two things below are no
+> longer true and are corrected in place: Couch boots from `boot`, not
+> `recovery`, and Android is no longer on the device - the recovery slot holds
+> Couch's own rescue image (`tools/build-recovery.sh`), and that, not lk's
+> menu, is how a bad kernel is survived. The tree, its delta and the build are
+> described in `kernel/README.md`; the rest of this document is the plan as
+> written, kept because the reasoning still holds.
+
+When this was written Couch ran the stock 3.18.79 kernel byte-for-byte because
+the three drivers that make this device a device - the ST7701s display, the
+tlsc6x touchscreen and the CONSYS WiFi - exist in no public source tree, and
+the vendor has not released theirs. This is the plan to build our own 3.18
+kernel anyway, by assembling a MediaTek ALPS `alps-3.18.79` base with those
+drivers ported in from other public MTK trees. The prize is a kernel we can read, profile and change: fixing the
 46-62ms keypad interrupt handler, turning on real suspend, and owning the
 hotplug and display-pacing behaviour we currently fight from userspace.
 
@@ -17,7 +30,8 @@ is the map.
 
 **Goal:** a `build/kernel.bin` compiled from source that boots this device with
 display, touch, keypad and WiFi working, as a drop-in for the stock kernel in
-Couch's existing boot flow (recovery slot, our initramfs, Android untouched).
+Couch's existing boot flow (our initramfs; at the time the recovery slot with
+Android untouched, now the `boot` slot with Couch's recovery image on p9).
 
 **Non-goals:** a newer kernel (there is no 4.x/mainline path with working WiFi -
 see docs and the kernel-research notes), replacing the bootloader (lk/preloader
@@ -144,9 +158,11 @@ that already works.
 - **Never write `preloader_*` or `lk`.** They boot the device; a bad one drops
   you to BootROM recovery over USB (mtkclient), not a reboot. Everything here
   flashes only the recovery-slot boot image.
-- **Android stays on the other slot**, bootable from the lk menu (Volume keys).
-- Keep a known-good `linux-recovery.img` (the current stock-kernel build) to
-  flash back at any time.
+- **The other slot must always boot.** It was Android; it is now the Couch
+  recovery image, which by design never shares a kernel with the experiment.
+  init arms the BCB so a hung kernel is watchdog-reset into it unattended.
+- Keep a known-good `linux-recovery.img` (the stock-kernel Couch build) to
+  flash back at any time; it is also where the recovery image takes its kernel.
 - The dead-man reboot and `/tmp/stay` claim still apply during bring-up.
 
 ## Risk register

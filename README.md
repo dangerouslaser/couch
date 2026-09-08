@@ -5,11 +5,21 @@ control, the Sanytron Astrion HA100.
 
 ```
 couch:~# uname -a
-Linux couch 3.18.79 #7 SMP PREEMPT armv7l GNU/Linux
+Linux couch 3.18.79 #4 SMP PREEMPT armv7l GNU/Linux
 ```
 
-Alpine userland, WiFi, SSH, a framebuffer console, and a setup portal for
-configuring it without a cable.
+Alpine userland, WiFi, SSH, a framebuffer console, a Slint GUI, and a setup
+portal for configuring it without a cable. `#4` is our own kernel, built from
+source; the vendor's `#7` is the fallback.
+
+**Status, September 2026.** Couch owns the device. It boots from the `boot`
+slot on a kernel built from source (display, keypad, serial, WiFi), the
+recovery slot holds a Couch rescue image rather than Android, and Android is
+no longer installed on the device - its boot image lives only in the backup.
+Two things still need the vendor kernel: the touchscreen and the IR blaster,
+because those two drivers exist in no public source tree yet
+(`kernel/README.md`). The GUI, voice, IR client, settings and portal are all
+documented under `docs/`.
 
 The HA100 is a MediaTek MT6580 (quad Cortex-A7, ARMv7, 1GB RAM, 480x800 touchscreen)
 shipping Android 8.1. This boots a non-Android userland on it and gives you a root
@@ -22,11 +32,29 @@ in Torvalds' tree — but it is a 108-line skeleton: four CPUs, GIC, a timer, tw
 and *dummy* fixed clocks. No clock controller, no pinctrl, no MMC, no display. Every
 peripheral that matters here is out-of-tree vendor code: the display is `mtkfb`, WiFi
 is the in-SoC `CONSYS_MT6735` block, and the IR blaster is a `mt_irtx` char driver at
-major 243. So this uses the **stock 3.18.79 vendor kernel, byte-for-byte**, and
-replaces only the ramdisk.
+major 243. So this started on the **stock 3.18.79 vendor kernel, byte-for-byte**,
+replacing only the ramdisk - and once everything else worked, rebuilt that
+kernel from MediaTek's public ALPS sources so it could be read, profiled and
+changed. The stock kernel is still what the recovery image boots, and still
+the only one with touch and IR. `docs/frankenkernel.md` is the plan and
+`kernel/README.md` the working reference.
 
-It boots from the **recovery** slot, never `boot`. Android stays completely intact and
-bootable, which makes every experiment a power-cycle away from a working remote.
+The slot layout has been swapped since bring-up:
+
+| partition | holds |
+|---|---|
+| `boot` (p8) | Couch: our kernel + `initramfs/init` |
+| `recovery` (p9) | Couch recovery: stock kernel + `recovery/init` - USB shell, WiFi, sshd, no UI |
+| `para` (p10) | the BCB; `boot-recovery` in its first 512 bytes makes lk boot p9 |
+| `expdb` (p13) | MTK crash dumps; our boot markers and kernel-log snapshots from sector 13000 |
+| `system`, `vendor` (p21, p14) | Android's, still present, only a fallback source of blobs |
+| `userdata` (p23) | the Alpine rootfs, Couch itself under `/opt/couch` |
+
+init arms the BCB as its first act and clears it 90 seconds later, so a kernel
+that hangs is watchdog-reset into the recovery slot, which comes up with a
+shell on the cable and sshd on the LAN and waits. A bad build costs a reboot,
+not a walk to the device. Android is gone from the device; `android-p9-BACKUP.img`
+in the backup puts it back on p9 if it is ever wanted.
 
 Nothing is signed. The stock boot image has 8.7MB of trailing zeros where a signature
 block would be, so `lk` boots unsigned images and a plain `dd` from rooted Android is
@@ -35,23 +63,37 @@ enough — no bootloader unlock, no fastboot, no BootROM exploit.
 ## Usage
 
 ```sh
-tools/backup.sh    # FIRST. dumps all 23 partitions (~1.7GB) outside the repo
-tools/build.sh     # stock kernel + initramfs -> build/linux-recovery.img
-tools/flash.sh     # writes it to the recovery slot
-tools/boot.sh      # reboots into Linux and claims the serial shell
-tools/markers.sh   # offline debug: progress markers + kernel logs
-python3 tools/sercmd.py 'uname -a'    # run a command on the device
+tools/build.sh                 # stock kernel + initramfs -> build/linux-recovery.img
+kernel/build.sh                # our kernel, in Docker -> zImage (see kernel/README.md)
+python3 kernel/pack.py ...     # swap that zImage into a known-good image
+tools/build-recovery.sh        # stock kernel + recovery/init -> build/couch-recovery.img
+COUCH_IP=... tools/flash-linux.sh build/couch-test.img   # to p8, over ssh, verified
+tools/markers.sh               # offline debug: progress markers + kernel logs
+python3 tools/sercmd.py 'uname -a'                       # over the USB serial shell
 ```
 
-## Getting back to Android
+`stage2/stage2.sh` and everything under `/opt/couch` live on the rootfs and
+are pushed over ssh (`scp`, then check the md5) or, with no network, with
+`tools/push.py` over serial. Neither needs a reflash.
 
-* init clears the 512-byte BCB in `para` as its first action, so **the next reboot
-  returns to Android by itself**. Only the first 512 bytes are cleared — an `ENV_v1`
-  block lives at offset 128K and must survive.
-* Unclaimed sessions self-reboot after 15 minutes. `touch /tmp/stay` keeps one alive; `stage2.sh` does it once it reaches the GUI, so only a boot that fails before that falls back.
-* If a kernel panics before init runs, the recovery flag persists and it will retry.
-  Escape via lk's boot menu: hold Volume Up at power-on, **Volume Up moves the
-  selector, Volume Down selects**, choose `[Normal Boot]`.
+The adb-era tools (`tools/backup.sh`, `flash.sh`, `boot-android.sh`,
+`swap-slots.sh`, `provision-alpine.sh`) need Android running on the device
+and are kept for the record; `boot-android.sh` now refuses unless told
+Android has been put back on p9.
+
+## Recovering a bad boot
+
+* A kernel that hangs before init proves itself is watchdog-reset into the
+  recovery slot within a couple of minutes: `boot-recovery` is written to the
+  BCB first thing and cleared only after 90s. Only the first 512 bytes of
+  `para` are touched - an `ENV_v1` block lives at offset 128K and must survive.
+* Unclaimed sessions self-reboot after 15 minutes. `touch /tmp/stay` keeps one
+  alive; `stage2.sh` does it once it reaches the GUI, so only a boot that fails
+  before that falls back.
+* lk's boot menu still works: hold Volume Up at power-on, **Volume Up moves the
+  selector, Volume Down selects**; `[Recovery Mode]` is the Couch recovery.
+* If both slots are bad, MTK download mode over USB (mtkclient) rewrites a
+  partition from the backup. **Never write `preloader_*` or `lk`.**
 
 ## Getting anything onto the screen
 
@@ -109,16 +151,19 @@ this kernel offers.
 | RAM | 937MB of 979MB free (Android leaves far less) |
 | CPU | 4 cores, after onlining `cpu1-3` (only cpu0 comes up by default) |
 | Display | `mtkfb`, 480x800x32 at `/dev/fb0`, writable at 13MB/s |
-| Input | `mt_gpio_kpd`, `mtk-kpd` (buttons), `mtk-tpd` (touchscreen) |
-| IR | `/dev/irtx`, `mt_irtx` driver loaded |
+| Input | `mt_gpio_kpd`, `mtk-kpd` (buttons); `mtk-tpd` touchscreen on the stock kernel only |
+| IR | `/dev/irtx`, `mt_irtx` - stock kernel only, until it is ported |
 | Watchdog | kicked by kernel threads `wdtk-0..3`; userspace need not |
-| WiFi | **parked** — see below |
-| Userland | Alpine 3.21.7 armv7 on the cache partition, with working `apk` |
+| WiFi | works on both kernels; a lease ~19s after power-on on ours |
+| Userland | Alpine 3.21.7 armv7 on `userdata`, with working `apk` |
 
 ## The Alpine userland
 
-Alpine armv7 lives on the `cache` partition and is installed *from Android* over adb,
-which is far faster than pushing it down a serial line and needs no network at all:
+Alpine armv7 lives on `userdata` (p23), mounted at `/mnt/alpine`, with Couch
+under `/opt/couch`. It started life on the 112MB `cache` partition and was
+installed *from Android* over adb, which was far faster than pushing it down
+a serial line and needed no network. That route is gone with Android; today
+the rootfs is maintained in place over ssh. For the record, the install was:
 
 ```sh
 adb shell 'umount /cache; mke2fs -t ext4 -b 4096 -L alpine -F /dev/block/mmcblk0p22'
@@ -188,6 +233,16 @@ chip id handover works fine; `SET_CHIP_ID` with `0x6580` lands, as
 
 With the six context files in the bundle: `HIF info added`, `STP mode success!`,
 and `wlan0` appears. A clean boot reaches an address in ~35s.
+
+On our own kernel the connectivity stack is built in rather than loaded as the
+vendor's modules, and three more things had to be right, each of which failed
+with nothing in the log. They are handled in `stage2.sh` and written up in
+`kernel/README.md`: the wlan driver wants its RAM code at
+`/etc/firmware/WIFI_RAM_CODE_6580` and the wmt driver wants its patches by
+bare name in `/`; the driver logs only through `pr_debug`, so its errors are
+compiled in but switched off until dynamic debug is opened for it; and with
+no NVRAM record it invents a new MAC every boot, so stage2 writes one carrying
+a MAC derived from the eMMC CID. A clean boot now reaches an address in ~19s.
 
 Trap worth naming: the vendor `wmt_launcher` writes nothing to stdout and only
 logs to Android's logd, so it looks healthy while doing nothing. `strace` is
@@ -266,31 +321,34 @@ MT6580 defconfigs, and this device's exact config is in the backup as
 device nodes, while keeping the WiFi driver that only exists downstream. It
 needs a gcc-4.9-era ARM cross toolchain, which Docker can supply.
 
-### Why the rebuild is blocked
+### The rebuild, and what it still lacks
 
-Rebuilding from public source does not work for this board, and it is worth
-knowing before spending a day on a toolchain. Three drivers this device needs are
-absent from every public MT6580 tree checked
+The rebuild happened. `kernel/README.md` is the reference; in short: the
+`wiko_k300` `alps-3.18.79` tree is the base, the CONSYS_6580 connectivity
+driver is grafted in from another MT6580 tree and built in, the panel driver
+is adapted from wiko's ST7701s variant, and `config-stock.txt` is the config.
+It boots this device with the display, keypad, USB serial and WiFi, and runs
+the whole of Couch. Serial was the thing that made it possible to see anything
+at all; the display worked before the console did.
+
+Two drivers are still absent from every public MT6580 tree checked
 ([Mysteryagr](https://github.com/Mysteryagr/MT6580-Kernel-3.18),
 [parthibx24/k80](https://github.com/parthibx24/android_kernel_mediatek_k80),
 [LCM-MTK](https://github.com/LCM-MTK/android_kernel_mediatek_mt6580)):
 
 | needed | status |
 | --- | --- |
-| `CONFIG_MTK_IRTX_PWM_SUPPORT` (IR transmit) | `irtx/` has only Kconfig and Makefile in all three trees; the Makefile pulls `irtx/$(CONFIG_MTK_PLATFORM)/`, and `irtx/mt6580/` does not exist |
-| `st7701s_wvga_dsi_vdo_boe_tn_tianxian` (panel) | absent; 42 other panels present |
-| `tlsc6x` (touchscreen) | absent; ektf2k / ft5x0x / ft6336 present |
+| `tlsc6x` (touchscreen) | absent; `danascape/linux-daria-mt6877` carries it wired into `tpd` and is the porting source |
+| `CONFIG_MTK_IRTX_PWM_SUPPORT` (IR transmit) | `irtx/mt6580/` does not exist in any tree; `mt_irtx_pwm.c` from other MTK trees is the porting source |
 
-IR is compiled in rather than built as a module, so it cannot be lifted out of
-the stock kernel either. A kernel built from these trees would boot with no
-display, no touch and no IR - which is the entire device.
+So the stock kernel remains the one with touch and IR, and it is the kernel in
+the recovery image, which must never share a kernel with the experiment.
 
-The unblock is a GPL source request. A kernel panic leaked the vendor's build
-path, `/home/felix/ha100fw/alps/out/target/product/x15cm_s90_kr/...`, so
-Sanytron build from a full MediaTek ALPS tree and distribute a GPL-2.0 kernel;
-they are obliged to provide its source, which would be the exact tree including
-all three drivers. Ask for the kernel source corresponding to the shipped build
-(`3.18.79 #7`, `RS30_HAOS_HA100_V1.0.4`).
+The alternative unblock is still a GPL source request. A kernel panic leaked
+the vendor's build path, `/home/felix/ha100fw/alps/out/target/product/x15cm_s90_kr/...`,
+so Sanytron build from a full MediaTek ALPS tree and distribute a GPL-2.0
+kernel; they are obliged to provide its source. Ask for the source of the
+shipped build (`3.18.79 #7`, `RS30_HAOS_HA100_V1.0.4`).
 
 Mainline is a different road: [u-boot-mt6580](https://github.com/predefine-mt6580/u-boot-mt6580)
 has active MT6580 work (clocks, eMMC, display PWM), but `mt76` does not cover
@@ -473,23 +531,44 @@ leaves it with no password at all, so key auth works and password auth cannot.
 
 ## Roadmap
 
-1. ~~Alpine rootfs~~ — done.
-2. ~~WiFi~~ — done.
-3. ~~Captive portal~~ — done.
-4. **Move to the `boot` slot**, putting Android's boot image into `recovery` so
-   lk's menu still reaches it. Tooling exists (`tools/swap-slots.sh`), not applied.
+1. ~~Alpine rootfs~~ - done.
+2. ~~WiFi~~ - done.
+3. ~~Captive portal~~ - done.
+4. ~~Move to the `boot` slot~~ - done; the recovery slot is now Couch's own rescue image.
+5. ~~A kernel built from source~~ - boots with display, keypad, serial and WiFi.
+6. **Touch and IR on that kernel** (`tlsc6x`, `mt_irtx`), then the payoff: the
+   46-62ms keypad interrupt handler, real suspend, owning hotplug.
+7. Put the kernel branch on a remote and on a second machine.
 
-The remote's existing control app is Android/Kotlin, so replacing Android outright
-means rewriting that UI against the raw framebuffer and evdev.
+The remote's original control app was Android/Kotlin
+(`~/Projects/sanytron`, "Sanytron Remote"); the Slint GUI in `ui/couch-gui`
+replaced it against the raw framebuffer and evdev.
 
 ## Layout
 
+This repo:
+
 ```
-initramfs/init      what PID 1 does: markers, USB gadget, shell, heartbeat
-tools/bootimg.py    unpack/pack MediaTek boot images (header v0, 2048B pages)
-tools/mkcpio.py     newc cpio builder with real device nodes and root ownership
-tools/sercmd.py     run a command over the USB serial shell
+initramfs/init      what PID 1 does: markers, BCB arming, USB gadget, shell, heartbeat
+recovery/init       the recovery slot's PID 1: shell first, then stage2 without a UI
+stage2/             the pushable stage on the rootfs: vendor blobs, WiFi, DHCP, sshd, portal, GUI
+kernel/             building our kernel: Dockerfile, config, build and pack scripts, README
+ui/couch-gui        the Slint GUI (docs/slint-notes.md, keyboard.md, settings.md)
+clients/            couch-ir (IR transmit), couch-voice
+daemon/             couch-confd
+web/                the config web UI (docs/webui.md)
+src/fbcon.c         init's stdout on the panel, since the kernel has no console
+tools/              build, pack, flash, serial, markers, dtbpatch; the adb-era ones need Android
+docs/               design notes per subsystem; frankenkernel.md is the kernel plan
+build/              gitignored: images, extracted kernels, the known-good image
 ```
 
-The partition backup lives outside the repo and is gitignored: it is 1.7GB and
-contains per-unit calibration that should not be committed or shared.
+Outside it:
+
+```
+~/Projects/sanytron-device-backup   all 23 partitions of this unit (1.7GB): per-unit
+                                    calibration, never committed or shared; also
+                                    android-p9-BACKUP.img and config-stock.txt
+~/Projects/sanytron                 the original Android control app, superseded
+Ollie ~/couch-kernel/base           the kernel source tree, branch couch-ha100 (kernel/README.md)
+```

@@ -8,12 +8,15 @@ ADB="${ADB:-adb}"
 
 # Partition map, read off the device (by-name symlinks under
 # /dev/block/platform/mtk-msdc.0/11120000.msdc0/by-name/).
-# The slots were swapped at install time: Couch now boots from "boot" and
-# Android survives on "recovery", reachable from lk's boot menu. During
-# bring-up it was the other way round, so anything that still writes Couch to
-# PART_RECOVERY would now overwrite the Android fallback - check before using.
+# The slots were swapped at install time: Couch boots from "boot". "recovery"
+# held Android's boot image for a while; since the kernel work it holds the
+# Couch recovery image (tools/build-recovery.sh): stock kernel, USB shell,
+# WiFi and sshd, no UI - the thing a bad kernel resets into. Android's boot
+# image exists only in the backup now (android-p9-BACKUP.img).
+# Note these are Android's /dev/block paths, for the adb-era tools. Under
+# Couch the same partitions are /dev/mmcblk0pN.
 PART_BOOT=/dev/block/mmcblk0p8         # Couch
-PART_RECOVERY=/dev/block/mmcblk0p9     # Android, the fallback
+PART_RECOVERY=/dev/block/mmcblk0p9     # Couch recovery (was Android)
 PART_PARA=/dev/block/mmcblk0p10        # BCB / misc
 PART_CACHE=/dev/block/mmcblk0p22       # 112MB, expendable
 PART_ROOTFS=/dev/block/mmcblk0p23      # 5.5GB userdata: where Couch lives

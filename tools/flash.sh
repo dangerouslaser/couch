@@ -1,6 +1,10 @@
 #!/bin/sh
 # Write the built image to the slot Couch boots from - PART_BOOT.
 #
+# This is the adb route and needs Android running on the device, which since
+# the kernel work it no longer does. tools/flash-linux.sh does the same job
+# over ssh from a running Couch or its recovery.
+#
 # This used to say "the RECOVERY slot", and wrote $PART_RECOVERY. That was true
 # before the slots were swapped; it is now exactly backwards. Since the swap,
 # PART_BOOT (p8) is Couch and PART_RECOVERY (p9) holds stock Android, the
