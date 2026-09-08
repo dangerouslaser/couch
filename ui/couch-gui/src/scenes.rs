@@ -99,7 +99,7 @@ impl Controller {
         app.set_scene_feedback_status(status.into());
         app.set_scene_feedback_shown(true);
         app.set_brightness_shown(false);
-        self.until = Some(Instant::now() + Duration::from_secs(3));
+        self.until = Some(Instant::now() + Duration::from_millis(1500));
     }
     pub fn poll(&mut self, app: &App) {
         if self.until.is_some_and(|until| Instant::now() >= until) {
@@ -158,7 +158,7 @@ impl Controller {
                         app.set_scene_feedback_name(error.into());
                     }
                 }
-                self.until = Some(Instant::now() + Duration::from_secs(3));
+                self.until = Some(Instant::now() + Duration::from_millis(1500));
             }
         }
         if !self.busy {

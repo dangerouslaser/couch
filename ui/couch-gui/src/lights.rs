@@ -339,7 +339,7 @@ impl Controller {
                 app.set_light_brightness_percent(percent as i32);
                 app.set_brightness_shown(true);
                 app.set_light_detail("".into());
-                self.brightness_until = Some(Instant::now() + Duration::from_secs(2));
+                self.brightness_until = Some(Instant::now() + Duration::from_secs(1));
             }
             Err(error) => {
                 app.set_light_detail(error.into());

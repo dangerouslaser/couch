@@ -162,7 +162,7 @@ Read-only discovery on the paired BSB002 returned 14 Hue rooms and 181 scenes.
 
 With a dimmable light selected in a room, Volume Up/Down changes brightness by
 5 percentage points. Holding a button repeats. A transient brightness meter
-shows the light name and requested percentage, then fades after two seconds.
+shows the light name and requested percentage, then dismisses after one second.
 Zero switches the light off; increasing an off light starts at 5%.
 
 Hue uses the same fresh cache and command connection as instant toggles, without
@@ -195,4 +195,5 @@ Only scenes assigned to that room participate.
 
 Brightness and scene feedback share a large card with 22px labels, 26px names,
 and a 30px brightness percentage. Cards slide in and out over 200ms without
-moving focus. Scene feedback distinguishes applying, activated and failed.
+moving focus. Brightness feedback dwells for one second; scene feedback dwells
+for 1.5 seconds. Scene feedback distinguishes applying, activated and failed.
