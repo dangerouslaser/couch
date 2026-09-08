@@ -31,3 +31,25 @@ Full unplugged suspend, battery/thermal behavior, IR reception by a target, and
 long-duration GPU/allocator stability are separate outstanding hardware tests.
 Existing workspace formatting differences mean `cargo fmt --check` is not yet
 clean; this work does not claim a repository-wide formatting pass.
+
+## Dim-touch reset conflict
+
+The failed dim-tap capture contained zero bytes and IRQ261 stayed at 41. GPIO4
+was low, while the live DT's `rstoutput1` assigns GPIO4 to touchscreen reset.
+The legacy GPIO LED fallback interpreted `button-backlight` data=4 as GPIO4;
+the GUI's normal dim operation writes zero to this LED, holding touch in reset.
+This also explains the failed I2C read and why a physical key restored touch.
+
+Kernel `30c130c8adb586eb5802a0c79070cde4ea67fa5b` prevents that LED fallback
+from driving GPIO4 when the HA100 TLSC6x driver is enabled. Reset remains owned
+by the touchscreen driver; full panel powerdown still intentionally suspends it.
+Actual button-light control needs the vendor-specific implementation and must
+not be inferred from this DT value. The normal LCD brightness path is unchanged.
+
+The replacement image is `couch-dim-touch.img`, SHA-256
+`af24106bc951215e7979c0933c21a1e93530f857935be01d16d5aa1fd94d7f9d`.
+
+Post-reboot validation passed: button-backlight requests 0, 255, and 0 each
+left GPIO4 high. The GUI then dimmed naturally and the user confirmed tap wake.
+The GUI logged `wake from dim on touch` with 1ms panel check and 2ms backlight
+work. This supersedes the pending dim-touch confirmation above.
