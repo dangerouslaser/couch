@@ -32,13 +32,34 @@ mark() { $BB echo "$2" | $BB dd of=$LOG bs=512 seek=$1 count=1 conv=notrunc 2>/d
 main() {
     trap '' PIPE
 
-    # Whatever happens below, the next reboot returns to Android. relinux.sh
-    # sets the flag again deliberately to come straight back here instead.
-    $BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
+    # Arm the way back before doing anything that can hang. With the BCB set,
+    # lk boots the recovery slot, so a kernel that dies takes the watchdog reset
+    # into recovery instead of looping on a bad image forever - which is what
+    # made every failed experiment need a person to power cycle the device.
+    # A full 512-byte block, so no stale bytes trail the command string.
+    { $BB printf "boot-recovery"; $BB dd if=/dev/zero bs=499 count=1 2>/dev/null; } \
+        | $BB dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
+
+    # ... and disarm it once this boot has proven itself, so a good build stays
+    # put. Ninety seconds is well past where every failure so far has landed.
+    ( $BB sleep 90
+      $BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
+      mark $((BASE+10)) "S10 boot proven, bcb cleared" ) &
 
     for c in 1 2 3; do $BB echo 1 > /sys/devices/system/cpu/cpu$c/online 2>/dev/null; done
     echo "= cpus $($BB nproc)  mem $($BB free | $BB awk '/Mem:/{print int($4/1024)}')MB free"
     mark $((BASE+1)) "S1 core up"
+
+    # Heartbeat: one sector, rewritten each second with the uptime. USB staying
+    # enumerated is not evidence the kernel is alive - the gadget can stay up
+    # through a hang - so this is what separates "hung early" from "ran to the
+    # watchdog timeout and was reset". Bounded, like the snapshots below.
+    ( h=0
+      while [ $h -lt 60 ]; do
+          h=$((h+1))
+          mark $((BASE+9)) "alive ${h} at $($BB cut -d" " -f1 /proc/uptime)s"
+          $BB sleep 1
+      done ) &
 
     # Snapshot the kernel log where a reset cannot erase it. A kernel that dies
     # mid-boot leaves nothing on the serial gadget (it is not up yet) and
@@ -46,12 +67,16 @@ main() {
     # RAM console does not survive the power cycle a recovery flash needs), so
     # this is the only log that outlives the failure. Bounded to the first
     # minute: it is a bring-up aid, not something worth writing to eMMC forever.
+    # Rotate over four slots, one a second: a single slot only ever holds the
+    # last completed write, and when the system dies mid-boot that is several
+    # seconds stale - exactly the seconds worth reading. Four slots of 256KB
+    # each sit between DMESG_SECTOR and DMESG2_SECTOR.
     ( n=0
-      while [ $n -lt 20 ]; do
+      while [ $n -lt 60 ]; do
           n=$((n+1))
           { $BB echo "== snapshot $n at $($BB cut -d" " -f1 /proc/uptime)s =="; $BB dmesg; } \
-              | $BB dd of=$LOG bs=512 seek=$DMESG_SECTOR conv=notrunc 2>/dev/null
-          $BB sleep 3
+              | $BB dd of=$LOG bs=512 seek=$((DMESG_SECTOR + (n % 4) * 512)) conv=notrunc 2>/dev/null
+          $BB sleep 1
       done ) &
 
     ( $BB sleep 900; [ -f /tmp/stay ] || $BB reboot -f ) &

@@ -210,6 +210,17 @@ else
     echo "= wifi parked"
 fi
 
+# Recovery runs this script for its connectivity alone. It has no UI to start,
+# and stopping here leaves the USB serial shell and sshd in charge - which is
+# the whole point of that image: a way back in when the slot under test does not
+# boot. Everything above (vendor blobs, wmt modules, wifi, dhcp, sshd) is shared
+# with a normal boot rather than duplicated into a second script that would rot.
+if [ "${COUCH_NO_UI:-0}" = "1" ]; then
+    mark $((BASE+4)) "S4 stage2 done (recovery, no ui)"
+    echo "= recovery: ${IP:+network up on $IP}${IP:+, }${IP:-no network, }UI skipped"
+    exit 0
+fi
+
 # --- the UI ------------------------------------------------------------------
 # Start it last, so anything above still reports to the screen through fbcon.
 # couch-gui takes the panel over when it starts and shows its own splash.
