@@ -14,6 +14,7 @@ export component RoomDevices inherits Rectangle {
     callback brightness(int, int);
     callback back();
     callback open-scenes();
+    callback scene-step(int);
     in property <int> scene-count;
     in property <string> scene-label;
     // Reserve the footer and focus outline, then fill the window with whole cards.
@@ -77,7 +78,7 @@ export component RoomDevices inherits Rectangle {
                         border-width: 1px; border-color: item.power-known && !item.active ? Theme.border-icon-idle : Theme.border-icon;
                         Image {
                             x: 14px; y: 14px; width: 24px; height: 24px;
-                            source: item.light ? @image-url("../../assets/icon-lightbulb.png") : @image-url("../../assets/icon-monitor.png");
+                            source: item.icon;
                             colorize: item.active ? Theme.accent : item.power-known ? Theme.text-quaternary : Theme.text-secondary;
                             animate colorize { duration: 180ms; easing: ease-out; }
                         }
@@ -109,6 +110,10 @@ export component RoomDevices inherits Rectangle {
     keys := FocusScope {
         enabled: root.shown;
         key-pressed(e) => {
+            if (e.text == Key.F21 || e.text == Key.F22) {
+                root.scene-step(e.text == Key.F21 ? 1 : -1);
+                return accept;
+            }
             if (e.text == Key.F23 || e.text == Key.F24) {
                 if (root.index < root.items.length && root.items[root.index].light) {
                     root.brightness(root.index, e.text == Key.F23 ? 5 : -5);

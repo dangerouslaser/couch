@@ -29,7 +29,7 @@ pub fn overview(app: App, config: &Config) -> AnyView {
             {destination(app, Route::Connections, "01 · Connections".into(), "Add your Kodi players, Home Assistant server, Hue bridge or infrared connection.".into())}
             {destination(app, Route::Rooms, "02 · Rooms & devices".into(), format!("Create a room, then choose devices from saved connections. {} rooms · {} devices", config.rooms.len(), config.devices().count()))}
             {destination(app, Route::Activities, "03 · Activities & scenes".into(), "Activities describe what you do, such as Watch TV. Scenes collect commands, such as Movie night.".into())}
-            {destination(app, Route::Areas, "04 · Remote screens".into(), format!("An area is a screen. Choose its rooms, activity strip and scene shortcuts. {} screens", config.areas.len()))}
+            {destination(app, Route::Areas, "04 · Areas".into(), format!("An area is a screen. Choose its rooms, activity strip and scene shortcuts. {} areas", config.areas.len()))}
         </div>
         {(unconnected > 0 || hidden_rooms > 0).then(|| view! { <h2 class="section">"Finish setting up"</h2> })}
         <div class="destination-grid">
@@ -45,12 +45,12 @@ pub fn rooms(app: App, config: &Config) -> AnyView {
     view! {
         {ui::page_header(app, "Rooms & devices".into(), None)}
         <p class="lead">"Create rooms, then add devices from your saved connections. Set up servers and bridges in Connections."</p>
-        <section class="creation"><h2>"Add a room"</h2><p class="dim">"Start with a place, such as Living room or Kitchen. Add it to a remote screen when you’re ready."</p>
+        <section class="creation"><h2>"Add a room"</h2><p class="dim">"Start with a place, such as Living room or Kitchen. Add it to an area when you’re ready."</p>
         {ui::add_row("Room name", "Create room", move |name| app.run(api::post("/api/rooms", json!({"name":name}))))}</section>
         {config.rooms.is_empty().then(|| ui::empty("No rooms yet. Create your first room above, then open it to add a device."))}
         <div class="destination-grid">{config.rooms.iter().map(|room| {
             let areas: Vec<_> = config.areas.iter().filter(|a| a.rooms.contains(&room.id)).map(|a| a.name.as_str()).collect();
-            let shown = if areas.is_empty() { "Not on a remote screen yet".into() } else { format!("Screens: {}", areas.join(", ")) };
+            let shown = if areas.is_empty() { "Not on an area yet".into() } else { format!("Areas: {}", areas.join(", ")) };
             destination(app, Route::Room(room.id.clone()), room.name.clone(), format!("{} · {shown}", room.device_summary()))
         }).collect_view()}</div>
     }.into_any()

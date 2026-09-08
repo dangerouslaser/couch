@@ -119,6 +119,10 @@ export component App inherits Window {
     in-out property <string> brightness-target;
     callback light-back();
     callback room-scenes();
+    callback room-scene-step(int);
+    in-out property <bool> scene-feedback-shown: false;
+    in-out property <string> scene-feedback-name;
+    in-out property <string> scene-feedback-status;
     in-out property <int> light-scene-count;
     in-out property <string> light-scene-label;
     in-out property <string> light-room-id;
@@ -321,6 +325,7 @@ export component App inherits Window {
         scene-count: root.light-scene-count;
         scene-label: root.light-scene-label;
         open-scenes => {root.room-scenes();}
+        scene-step(delta) => {root.room-scene-step(delta);}
         activate(i) => {root.light-activate(i);}
         brightness(i, delta) => {root.light-brightness(i, delta);}
         back => {root.light-back();}
@@ -420,7 +425,17 @@ export component App inherits Window {
         x: 36px;
         width: parent.width - 72px;
         y: parent.height - self.height - 36px;
-        target: "Brightness · " + root.brightness-target;
+        target: root.scene-feedback-name;
+        caption: root.scene-feedback-status;
+        meter: false;
+        shown: root.scene-feedback-shown && !root.brightness-shown;
+    }
+    VolumeOverlay {
+        x: 36px;
+        width: parent.width - 72px;
+        y: parent.height - self.height - 36px;
+        target: root.brightness-target;
+        caption: "Brightness";
         value: root.light-brightness-percent;
         percentage: true;
         shown: root.brightness-shown && root.light-shown && !root.chooser-shown;

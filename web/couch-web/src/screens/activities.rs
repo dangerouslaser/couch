@@ -63,7 +63,7 @@ pub fn list(app: App, config: &Config) -> AnyView {
     view! {
         {ui::page_header(app, "Activities".to_string(), None)}
         <p class="dim pad-x">
-            "An activity is something you do in a room, such as Watch TV or Listen to music. Choose its source device and startup commands, then add it to a remote screen."
+            "An activity is something you do in a room, such as Watch TV or Listen to music. Choose its source device and startup commands, then add it to an area."
         </p>
 
         <ul class="rows">{rows}</ul>
@@ -258,7 +258,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
             </div>
         })}
 
-        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Choose a remote screen for this activity →"</button></div>
+        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Choose an area for this activity →"</button></div>
         <div class="pad">
             {ui::danger_button("Delete this activity", move || {
                 app.go(Route::Activities);

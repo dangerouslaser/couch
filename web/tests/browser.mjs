@@ -68,7 +68,7 @@ try {
   await retryEditor.getByRole('button',{name:'Discard changes'}).click();
   await noOverflow();
   await page.screenshot({path:'build/webui-review/devices-mobile.png',fullPage:true});
-  await navigate('Remote screens');
+  await navigate('Areas');
   const appearance=page.locator('.appearance');
   await appearance.getByRole('button',{name:'Purple accent',exact:true}).click();
   assert.equal((await config()).appearance.accent,'#E8703A');
@@ -83,12 +83,12 @@ try {
   await appearance.getByRole('button',{name:'Discard color changes',exact:true}).click();
   await appearance.getByLabel('Hex color',{exact:true}).fill('#4fd1c5');
   await saved(()=>appearance.getByRole('button',{name:'Save appearance',exact:true}).click());
-  await page.reload();await page.getByRole('heading',{name:'Remote screens',exact:true}).waitFor();
+  await page.reload();await page.getByRole('heading',{name:'Areas',exact:true}).waitFor();
   assert.equal(await page.getByLabel('Hex color',{exact:true}).inputValue(),'#4FD1C5');
   await page.getByRole('button',{name:'Purple accent',exact:true}).click();await saved(()=>page.getByRole('button',{name:'Save appearance',exact:true}).click());
   await page.screenshot({path:'build/webui-review/appearance-mobile.png',fullPage:true});
-  await page.getByRole('textbox',{name:'Screen / area name'}).fill('Whole home');
-  await saved(() => page.getByRole('button',{name:'Create screen'}).click());
+  await page.getByRole('textbox',{name:'Area name'}).fill('Whole home');
+  await saved(() => page.getByRole('button',{name:'Create area'}).click());
   await page.getByRole('button',{name:/Whole home/}).click();
   await saved(() => page.locator('select').filter({has:page.locator('option',{hasText:'Add an existing room'})}).selectOption('living-room'));
   await page.locator('.remote-outline').getByText('Living room',{exact:true}).waitFor();
@@ -109,7 +109,7 @@ try {
   const deviceId = (await config()).rooms[0].devices[0].id;
   await saved(() => page.getByLabel(/^Source device/).selectOption(deviceId));
   assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Scenes',exact:true}).count(),0);
-  await navigate('Remote screens');
+  await navigate('Areas');
   await page.getByRole('button',{name:/Whole home/}).click();
   await page.getByRole('button',{name:/Movie night/}).click();
   await saved(() => page.locator('.add-row select').selectOption(deviceId));
@@ -153,12 +153,12 @@ try {
   await page.locator('.screen-preview').waitFor();
   await noOverflow();
   await page.screenshot({path:'build/webui-review/screen-seed-desktop.png',fullPage:true});
-  await navigate('Remote screens');
+  await navigate('Areas');
   const beforeOrder = (await config()).areas.map(a=>a.id);
   await saved(() => page.getByRole('button',{name:'Move down',exact:true}).first().click());
   assert.deepEqual((await config()).areas.map(a=>a.id),[beforeOrder[1],beforeOrder[0],...beforeOrder.slice(2)]);
   await page.setViewportSize({width:360,height:800});
-  for (const label of ['Overview','Rooms & devices','Connections','Remote screens','Activities']) {
+  for (const label of ['Overview','Rooms & devices','Connections','Areas','Activities']) {
     await navigate(label); await noOverflow();
   }
   assert.deepEqual(errors,[]);

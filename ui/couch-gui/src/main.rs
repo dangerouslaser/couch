@@ -22,6 +22,7 @@ mod network_ui;
 mod home;
 mod lights;
 mod scenes;
+mod icons;
 use home::Area;
 
 use std::cell::{Cell, RefCell};
@@ -175,6 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             detail: detail.into(),
             active_count: on,
             power_state: if on > 0 { 1 } else { 0 },
+            icon: icons::image(couch_model::Icon::House),
             status_known: true,
             idle: on == 0,
             offline: false,
@@ -292,7 +294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some((raw, saved, accent)) = home::read(&loaded_home) { home::apply_accent(&app,accent); loaded_home = raw; areas = saved; }
     let mut light_controls = lights::Controller::install(&app);
     let mut room_monitor = home::RoomMonitor::new(light_controls.hue_live());
-    let scene_controls = scenes::Controller::new();
+    let mut scene_controls = scenes::Controller::new(&app);
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -388,6 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     active: false,
                     light: false,
                     power_known: false,
+                    icon: slint::Image::default(),
                 })
                 .collect();
             app.set_chooser_title("NOW PLAYING".into());
@@ -419,6 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         active: false,
                         light: false,
                         power_known: false,
+                        icon: slint::Image::default(),
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -457,6 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         active: false,
                         light: false,
                         power_known: false,
+                        icon: slint::Image::default(),
                     })
                     .collect::<Vec<_>>(),
             )));
@@ -986,7 +991,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_toast("".into());
         }
 
-        if let Some(message)=scene_controls.poll() { toast(message, 4); }
+        scene_controls.poll(&app);
         network_setup.poll(&app);
         // Capture only navigation, then slide framebuffer snapshots so the
         // room animation does not rasterize the entire Slint scene every frame.

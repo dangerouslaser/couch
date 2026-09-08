@@ -29,6 +29,7 @@ impl StateCache {
 }
 #[derive(Clone)]
 struct Entry {
+    icon: couch_model::Icon,
     name: String,
     id: String,
     state: Option<Light>,
@@ -82,6 +83,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                 Some(Integration::HomeAssistant { entity_id }) if d.kind == DeviceKind::Light => {
                     Some(Entry {
                         name: d.name.clone(),
+                        icon: d.effective_icon(),
                         id: entity_id.clone(),
                         state: None,
                         hue: false,
@@ -90,6 +92,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                 Some(Integration::Hue { light_id }) if !light_id.starts_with("scene:") => {
                     Some(Entry {
                         name: d.name.clone(),
+                        icon: d.effective_icon(),
                         id: format!("hue:{light_id}"),
                         state: None,
                         hue: true,
@@ -97,6 +100,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                 }
                 _ => Some(Entry {
                     name: d.name.clone(),
+                    icon: d.effective_icon(),
                     id: format!("device:{}", d.id),
                     state: None,
                     hue: false,
@@ -270,6 +274,7 @@ impl Controller {
             })
         };
         ChoiceItem {
+            icon: crate::icons::image(e.icon),
             title: e.name.clone().into(),
             detail: detail.into(),
             light: !e.id.starts_with("device:"),

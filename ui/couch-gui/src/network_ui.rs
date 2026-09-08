@@ -71,6 +71,7 @@ impl Controller {
                     active: false,
                     light: false,
                     power_known: false,
+                    icon: slint::Image::default(),
                 })
                 .collect::<Vec<_>>(),
         )));

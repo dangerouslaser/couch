@@ -17,6 +17,7 @@ export struct RoomRow {
     devices: string,    // "5 devices"
     detail: string,     // "Kodi, Hue, LG C3" - may be empty
 
+    icon: image,
     power-state: int,   // -1 unknown, 0 all off, 1 any on
     active-count: int,
     status-known: bool,
@@ -33,42 +34,7 @@ export struct SceneCell {
     active: bool,
 }
 
-// Room icons are Lucide, rasterised to alpha masks by tools/mkuiicons.sh and
-// tinted at runtime so the colour still comes from the theme.
-//
-// lucide-slint would draw these as real vector paths and was tried: it works,
-// but it costs 186KB, about 10% more per frame, and two direct dependencies
-// that exist only to switch on a feature flag. The design is authored so that
-// every glyph is a rectangle, a circle or a triangle, so the vector capability
-// had nothing else to pay for itself with. See docs/slint-notes.md.
-component RoomIcon inherits Rectangle {
-    in property <int> shape;
-    in property <color> ink;
-    width: 24px;
-    height: 24px;
-
-    if root.shape == 0: Image { source: @image-url("../../assets/icon-sofa.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 1: Image { source: @image-url("../../assets/icon-bed.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 2: Image { source: @image-url("../../assets/icon-cooking-pot.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 3: Image { source: @image-url("../../assets/icon-book-open.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 4: Image { source: @image-url("../../assets/icon-door-open.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 5: Image { source: @image-url("../../assets/icon-car.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 6: Image { source: @image-url("../../assets/icon-trees.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 7: Image { source: @image-url("../../assets/icon-lamp.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape == 8: Image { source: @image-url("../../assets/icon-tv.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-    if root.shape >= 9: Image { source: @image-url("../../assets/icon-house.png");
-        width: 100%; height: 100%; colorize: root.ink; }
-}
-
+// Room icons use the pre-rasterized Lucide catalog and theme tinting.
 component AreaPane inherits Rectangle {
     in property <[LiveActivity]> activities;
     in property <[RoomRow]> rooms;
@@ -368,10 +334,11 @@ component AreaPane inherits Rectangle {
                                     background: area.power-state == 0 ? Theme.surface-icon-idle : Theme.surface-icon;
                                     border-width: 1px;
                                     border-color: area.power-state == 0 ? Theme.border-icon-idle : Theme.border-icon;
-                                    RoomIcon {
-                                        shape: area.glyph;
-                                        ink: area.power-state > 0 ? Theme.accent : area.power-state == 0 ? Theme.text-quaternary : Theme.text-secondary;
-                                        animate ink { duration: 180ms; easing: ease-out; }
+                                    Image {
+                                        source: area.icon;
+                                        width: 24px; height: 24px;
+                                        colorize: area.power-state > 0 ? Theme.accent : area.power-state == 0 ? Theme.text-quaternary : Theme.text-secondary;
+                                        animate colorize { duration: 180ms; easing: ease-out; }
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
                                     }

@@ -129,7 +129,7 @@ assignment. The picker keeps its selected category and search after adding items
 
 Scenes are managed from **Rooms & devices**; there is no standalone Scenes tab.
 Open a scene in a room to rename it or edit its assignments. Older /scenes
-bookmarks open the rooms list. **Remote screens** controls scene membership on
+bookmarks open the rooms list. **Areas** controls scene membership on
 custom home pages; ALL ROOMS exposes every saved scene.
 
 The home and room views each have a bottom **Scenes** button. The room picker
@@ -183,3 +183,16 @@ The room observer shares the existing Hue push cache and samples it every 500ms;
 Home Assistant light status is polled every five seconds. Network work stays off
 the GUI thread, and individual model rows update without resetting focus or
 scroll position. Integrations without power feedback are treated as unknown.
+
+## Room scene shortcuts and feedback
+
+In a room, Channel Up recalls the next assigned scene and Channel Down recalls
+the previous one, wrapping at either end. The first forward press starts with
+the first scene; the first backward press starts with the last. The cursor
+remembers scenes chosen on the remote, including selections from the scene
+picker. Rapid presses retain the latest unsent scene while a recall completes.
+Only scenes assigned to that room participate.
+
+Brightness and scene feedback share a large card with 22px labels, 26px names,
+and a 30px brightness percentage. Cards slide in and out over 200ms without
+moving focus. Scene feedback distinguishes applying, activated and failed.

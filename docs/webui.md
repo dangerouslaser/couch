@@ -2,7 +2,7 @@
 ## Configuration editor (September 2026)
 
 The editor starts with **Overview**, then offers **Rooms & devices**,
-**Connections**, **Remote screens**, **Scenes**, and **Activities**. Existing
+**Connections**, **Areas**, **Scenes**, and **Activities**. Existing
 `/areas/...`, `/rooms/...`, `/scenes/...`, and `/activities/...` links still work.
 The configuration now includes saved connections; legacy inline device definitions remain readable.
 
@@ -15,7 +15,7 @@ The configuration now includes saved connections; legacy inline device definitio
    **Add to this room**. Infrared devices carry a codeset name.
 3. Open **Activities** or **Scenes** to arrange device commands. Saving a command
    does not execute it; execution remains pending.
-4. Open **Remote screens** to choose which rooms, activities and scenes appear
+4. Open **Areas** to choose which rooms, activities and scenes appear
    together. Rooms always remain accessible in All rooms on the physical remote.
 
 Rooms remain discoverable even when no area includes them. A room or scene can
@@ -556,7 +556,7 @@ removal protection, drafts, screen ordering and stale edits. See
 
 ## Remote accent color
 
-Open **Remote screens → Appearance**. Choose Purple, Teal, Blue, Rose or Orange,
+Open **Areas → Appearance**. Choose Purple, Teal, Blue, Rose or Orange,
 or use the custom picker / `#RRGGBB` field. The dark preview is local until
 **Save appearance**; **Discard color changes** restores the saved value. The
 remote updates its shared accent and recessed tint within the next configuration
@@ -569,3 +569,24 @@ Room lists on the physical remote render saved device names before querying
 Home Assistant or Hue. Status refreshes run in the worker and update rows in
 place without resetting D-pad focus. A short navigation cache does not replace
 live validation before commands.
+
+## Icon catalog and room activities
+
+The Icon control opens a searchable visual grid of all 2,077 icons from the
+pinned Lucide 1.43.0 catalog. It renders 60 choices at a time; Show more loads
+another page. Room, area and scene choices save immediately. Device icons are
+part of the Edit device draft and use Save device / Discard changes. Automatic
+restores the device or room default. All SVG previews are served locally.
+
+The remote renders the same selected room/device icons from a compiled 24px
+alpha atlas; no runtime SVG decoder or React dependency is needed. Attribution,
+version and regeneration instructions are in assets/lucide/README.md.
+
+The navigation label is Areas. Rooms now include an Activities section to
+create an activity in that room, edit it, or move an existing activity there.
+An activity has one owning room; moving it preserves its existing area
+shortcuts. Activity execution on the physical remote remains a separate,
+unimplemented integration; these controls configure ownership/source/steps.
+
+Regression: node web/tests/icons.mjs tests icon previews, search, persistence,
+mobile layout and room activity ownership with an isolated local daemon.

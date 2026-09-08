@@ -1,0 +1,55 @@
+// Disposable local daemon only; verifies the full catalog and saved icon names.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import http from 'node:http';
+import {chromium} from '../../build/webui-review/node_modules/playwright/index.mjs';
+const dir=await mkdtemp(resolve('build/icons-test-'));
+const reserve=http.createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r));
+const base=`http://127.0.0.1:${port}`;
+const daemon=spawn('daemon/target/release/couch-confd',['--addr',`127.0.0.1:${port}`,'--no-auth','--config',`${dir}/config.json`,'--www','web/couch-web/dist'],{stdio:'ignore'});
+let browser;
+try {
+ for(let i=0;i<60;i++){try{if((await fetch(base+'/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+ const config={schema_version:1,rooms:[{id:'office',name:'Office',devices:[{id:'lamp',name:'Lamp',kind:'light'}]}],areas:[],scenes:[],activities:[]};
+ assert((await fetch(base+'/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)})).ok);
+ browser=await chromium.launch();const page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(base+'/rooms/office');
+ const picker=page.locator('.icon-picker').first();await picker.locator('summary').click();
+ assert.equal(await picker.locator('.icon-option').count(),60);
+ await picker.getByRole('button',{name:'Show more icons'}).click();assert.equal(await picker.locator('.icon-option').count(),120);
+ await picker.getByRole('searchbox',{name:'Search icons'}).fill('air-vent');
+ const preview=picker.getByRole('button',{name:'Use air-vent icon'}).locator('img');await preview.evaluate(img=>img.decode());
+ await picker.getByRole('button',{name:'Use air-vent icon'}).click();
+ await page.getByRole('status').filter({hasText:/^Saved$/}).waitFor();
+ assert.equal((await (await fetch(base+'/api/config')).json()).rooms[0].icon,'air-vent');
+ await page.reload();await page.locator('.icon-picker').first().locator('summary').getByText('air vent',{exact:true}).waitFor();
+ await page.getByText('Edit device',{exact:true}).click();
+ const devicePicker=page.locator('.device .icon-picker');await devicePicker.locator('summary').click();
+ await devicePicker.getByRole('searchbox',{name:'Search icons'}).fill('rocket');
+ await devicePicker.getByRole('button',{name:'Use rocket icon',exact:true}).click();
+ await page.getByRole('button',{name:'Save device',exact:true}).click();await page.getByRole('status').filter({hasText:/^Saved$/}).waitFor();
+ assert.equal((await (await fetch(base+'/api/config')).json()).rooms[0].devices[0].icon,'rocket');
+ await page.locator('.room-activities').getByRole('textbox',{name:'New room activity name'}).fill('Reading');
+ await page.getByRole('button',{name:'Create activity in this room'}).click();
+ await page.locator('.room-activities').getByText('Reading',{exact:true}).waitFor();
+ assert.equal((await (await fetch(base+'/api/config')).json()).activities[0].room,'office');
+ await fetch(base+'/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Study'})});
+ await fetch(base+'/api/areas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Upstairs'})});
+ await fetch(base+'/api/areas/upstairs/activities',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activity:'reading'})});
+ await page.goto(base+'/rooms/study');
+ await page.locator('.room-activities select').selectOption('reading');
+ await page.locator('.room-activities').getByText('Reading',{exact:true}).waitFor();
+ const moved=await (await fetch(base+'/api/config')).json();
+ assert.equal(moved.activities[0].room,'study');
+ assert.deepEqual(moved.areas[0].activities,['reading']);
+ assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Areas',exact:true}).count(),1);
+ await page.goto(base+'/rooms/office');
+ await page.locator('.icon-picker').first().locator('summary').click();
+ await page.locator('.icon-picker').first().getByRole('searchbox').fill('lamp');
+ await page.screenshot({path:'build/lucide-icon-picker-mobile.png',fullPage:true});
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ assert.deepEqual(errors,[]);
+ console.log('PASS: visual icon previews, bounded pagination, search, room/device icon persistence mobile layout, Areas navigation and room activity creation/movement without losing area membership.');
+} finally { if(browser)await browser.close();daemon.kill();await rm(dir,{recursive:true,force:true}); }

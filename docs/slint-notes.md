@@ -360,3 +360,12 @@ The focus outline follows the same curve; page slides are unchanged.
 On-device framebuffer checks with nine rooms, eight devices and twelve scenes
 verified full cards at the top and after scrolling. Use an isolated configuration
 for these checks so household devices and saved configuration remain untouched.
+
+
+### Full Lucide catalog
+
+The saved icon name resolves through the generated model catalog. The GUI
+embeds a 1,196,352-byte alpha atlas (2,077 × 24 × 24); icons.rs expands only
+requested icons into cached RGBA images. Selection never downloads images or
+parses SVG on the remote. tools/build-icon-catalog.py regenerates both the
+catalog and atlas from the pinned, licensed SVGs under assets/lucide.

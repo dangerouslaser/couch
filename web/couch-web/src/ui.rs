@@ -72,37 +72,53 @@ pub fn text_field(
     .into_any()
 }
 
-/// Icons by name.
-///
-/// The device draws these as rasterised Lucide PNGs, which this page
-/// deliberately does not carry: the remote serves the config UI on a LAN that
-/// may have no route to the internet, so anything shown here has to be in the
-/// bundle, and fifteen icons is a sprite sheet to keep in step with
-/// `tools/mkuiicons.sh` for a picker used once per room. The list comes from
-/// `couch-model`, so it cannot drift from what the device can actually render.
+/// A visual Lucide picker. Render a small page at a time, even for broad searches.
 pub fn icon_select(current: Option<Icon>, commit: impl Fn(Option<Icon>) + 'static) -> AnyView {
-    let selected = current.map(|i| i.name().to_string()).unwrap_or_default();
+    icon_select_signal(RwSignal::new(current), commit)
+}
+pub fn icon_select_signal(
+    selected: RwSignal<Option<Icon>>,
+    commit: impl Fn(Option<Icon>) + 'static,
+) -> AnyView {
+    let search = RwSignal::new(String::new());
+    let limit = RwSignal::new(60usize);
+    let commit = StoredValue::new_local(commit);
+    let automatic = commit;
+    let matches = move || {
+        let query = search.get().to_lowercase();
+        ALL_ICONS
+            .iter()
+            .copied()
+            .filter(|icon| {
+                query
+                    .split_whitespace()
+                    .all(|word| icon.name().contains(word))
+            })
+            .collect::<Vec<_>>()
+    };
     view! {
-        <label class="field">
-            <span class="label">"Icon"</span>
-            <select on:change=move |ev| {
-                let name = event_target_value(&ev);
-                commit(Icon::from_name(&name));
-            }>
-                <option value="" selected=selected.is_empty()>"Automatic"</option>
-                {ALL_ICONS
-                    .iter()
-                    .map(|icon| {
-                        let name = icon.name();
-                        view! {
-                            <option value=name selected=selected == name>{name}</option>
-                        }
-                    })
-                    .collect_view()}
-            </select>
-        </label>
-    }
-    .into_any()
+        <details class="icon-picker">
+            <summary><span class="label">"Icon"</span>
+                <img class="icon-preview" src=move ||format!("/lucide/{}.svg", selected.get().unwrap_or_default().name()) alt=""/>
+                <span>{move ||selected.get().map(|i|i.name().replace('-'," ")).unwrap_or("Automatic".into())}</span>
+                <span class="dim">"Change"</span>
+            </summary>
+            <label class="field">"Search icons"<input type="search" placeholder="Search 2,077 Lucide icons" prop:value=move ||search.get()
+                on:input=move |e|{search.set(event_target_value(&e));limit.set(60);}/></label>
+            <button type="button" class="ghost" on:click=move |_|{selected.set(None);automatic.with_value(|f| f(None));}>"Use automatic icon"</button>
+            <p class="dim" role="status">{move ||format!("{} icons", matches().len())}</p>
+            <div class="icon-grid">{move ||matches().into_iter().take(limit.get()).map(|icon|{
+                let choose=commit;let name=icon.name();
+                view!{<button type="button" class="icon-option" title=name aria-label=format!("Use {name} icon")
+                    aria-pressed=move ||(selected.get()==Some(icon)).to_string()
+                    on:click=move |_|{selected.set(Some(icon));choose.with_value(|f| f(Some(icon)));}>
+                    <img class="icon-preview" loading="lazy" src=format!("/lucide/{name}.svg") alt=""/>
+                    <span>{name.replace('-'," ")}</span>
+                </button>}
+            }).collect_view()}</div>
+            {move ||(matches().len()>limit.get()).then(||view!{<button type="button" class="ghost" on:click=move |_|limit.update(|n|*n+=60)>"Show more icons"</button>})}
+        </details>
+    }.into_any()
 }
 
 /// A destructive button that asks first.

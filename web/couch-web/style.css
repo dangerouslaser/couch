@@ -660,3 +660,14 @@ input[type=color] { width:100%; height:48px; padding:4px; border:1px solid var(-
 
 .room-assignment { display: flex; align-items: center; gap: .75rem; padding: .6rem 0; }
 .room-assignment input[type="checkbox"] { width: 1.1rem; height: 1.1rem; margin: 0; }
+
+/* Lucide catalog: bounded grids keep mobile configuration responsive. */
+.icon-picker { margin: 14px 0; min-width: 0; }
+.icon-picker > summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.icon-preview { width: 28px; height: 28px; flex: 0 0 28px; filter: none; }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; max-height: 380px; overflow-y: auto; margin: 12px 0; }
+.icon-option { background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: start; gap: 8px; min-width: 0; padding: 12px 6px; }
+.icon-option span { font-size: 12px; overflow-wrap: anywhere; }
+.icon-option[aria-pressed="true"] { border-color: var(--accent); background: #e4eee8; }
+
+.icon-picker input[type="search"] { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); }

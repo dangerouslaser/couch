@@ -56,6 +56,7 @@ fn project(config: &Config) -> Vec<Area> {
                     detail: r.device_detail().into(),
                     active_count: 0,
                     power_state: -1,
+                    icon: crate::icons::image(r.effective_icon()),
                     status_known: false,
                     idle: true,
                     offline: false,

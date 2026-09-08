@@ -1,4 +1,4 @@
-//! Scene details opened from rooms or remote screens.
+//! Scene details opened from rooms or areas.
 
 use couch_model::{Action, Config, Icon, Id, Scene};
 use leptos::prelude::*;
@@ -79,7 +79,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
         })}
 
         </div>
-        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Add this scene to a remote screen →"</button></div>
+        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Add this scene to an area →"</button></div>
         <div class="pad">
             {ui::danger_button("Delete this scene", move || {
                 app.go(after_delete.clone());
@@ -144,7 +144,7 @@ fn add_step(config: &Config, commit: impl Fn(Action) + 'static) -> AnyView {
 
 fn room_assignment(app: App, config: &Config, scene: &Scene) -> AnyView {
     let scene = scene.clone();
-    view!{<section class="card"><h2>"Show in rooms"</h2><p>"Selected rooms get this scene in their bottom Scenes button. Home screen scene selection stays in Remote screens."</p>
+    view!{<section class="card"><h2>"Show in rooms"</h2><p>"Selected rooms get this scene in their bottom Scenes button. Home screen scene selection stays in Areas."</p>
         {config.rooms.iter().map(|r|{let id=r.id.clone();let name=r.name.clone();let base=scene.clone();let checked=scene.rooms.contains(&id);view!{<label class="room-assignment"><input type="checkbox" checked=checked on:change=move |e|{let mut next=base.clone();if event_target_checked(&e){if !next.rooms.contains(&id){next.rooms.push(id.clone());}}else{next.rooms.retain(|r|r!=&id);}app.run(api::put(format!("/api/scenes/{}",next.id),next));}/>{name}</label>}}).collect_view()}
     </section>}.into_any()
 }

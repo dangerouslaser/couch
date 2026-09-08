@@ -299,6 +299,9 @@ fn map_key(code: u16) -> Option<Key> {
         1 | 158 => Some(Key::Escape),   // KEY_ESC / KEY_BACK
         // Slint has no volume key variants; reserve F23/F24 as internal
         // volume-up/down tokens. They follow normal hold-to-repeat handling.
+        // The remote advertises page keys; also accept standard channel codes.
+        104 | 402 => Some(Key::F21),   // PAGEUP / CHANNELUP
+        109 | 403 => Some(Key::F22),   // PAGEDOWN / CHANNELDOWN
         115 => Some(Key::F23),         // KEY_VOLUMEUP
         114 => Some(Key::F24),         // KEY_VOLUMEDOWN
         172 => Some(Key::Home),         // KEY_HOMEPAGE
@@ -380,6 +383,12 @@ mod tests {
 
     /// The bug this guards: the microphone edge used to return from the middle
     /// of the batch, and everything decoded beside it went in the bin.
+    #[test]
+    fn channel_keys_accept_page_and_channel_codes() {
+        for code in [104, 402] { assert_eq!(map_key(code).map(char::from), Some(char::from(Key::F21))); }
+        for code in [109, 403] { assert_eq!(map_key(code).map(char::from), Some(char::from(Key::F22))); }
+    }
+
     #[test]
     fn volume_keys_map_to_repeatable_brightness_inputs() {
         assert_eq!(map_key(115).map(char::from), Some(char::from(Key::F23)));

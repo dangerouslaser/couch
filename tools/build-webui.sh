@@ -52,6 +52,7 @@ fi
 # is worth seeing at the end of every run.
 echo
 for f in web/couch-web/dist/*; do
+    [ -f "$f" ] || continue
     printf "  %-46s %7s  %7s gz\n" "$(basename "$f")" \
         "$(wc -c < "$f" | tr -d ' ')" "$(gzip -9 -c "$f" | wc -c | tr -d ' ')"
 done
