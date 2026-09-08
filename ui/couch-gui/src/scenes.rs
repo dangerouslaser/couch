@@ -94,7 +94,14 @@ impl Controller {
         let input = self.input.clone();
         move |id| input.borrow_mut().push_back(Input::Recall(id))
     }
+    pub fn dismiss_feedback(&mut self, app: &App) {
+        // Commands may finish, but their feedback belongs to the page we left.
+        self.sequence += 1;
+        self.until = None;
+        app.set_scene_feedback_shown(false);
+    }
     fn feedback(&mut self, app: &App, name: &str, status: &str) {
+        app.set_feedback_enabled(true);
         app.set_scene_feedback_name(name.into());
         app.set_scene_feedback_status(status.into());
         app.set_scene_feedback_shown(true);
@@ -173,6 +180,38 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_discards_late_feedback_but_allows_new_scene_feedback() {
+        struct Platform;
+        impl slint::platform::Platform for Platform {
+            fn duration_since_start(&self) -> Duration { Duration::ZERO }
+            fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(slint::platform::software_renderer::MinimalSoftwareWindow::new(
+                    slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
+                ))
+            }
+        }
+        slint::platform::set_platform(Box::new(Platform)).unwrap();
+        let app = App::new().unwrap();
+        let mut controller = Controller::new(&app);
+        let (reply, rx) = mpsc::channel();
+        controller.rx = rx;
+        controller.sequence = 1;
+        controller.busy = true;
+        controller.feedback(&app, "Relax", "Applying scene…");
+        assert!(app.get_scene_feedback_shown());
+        controller.dismiss_feedback(&app);
+        reply.send((1, Ok(()))).unwrap();
+        controller.poll(&app);
+        assert!(!app.get_scene_feedback_shown());
+        assert!(!controller.busy);
+        assert!(controller.until.is_none());
+        controller.feedback(&app, "Bright", "Applying scene…");
+        reply.send((controller.sequence, Ok(()))).unwrap();
+        controller.poll(&app);
+        assert!(app.get_scene_feedback_shown());
+        assert_eq!(app.get_scene_feedback_status(), "Scene activated");
+    }
     #[test]
     fn cycling_wraps_and_handles_empty_or_removed_selections() {
         let ids = vec![Id::new("relax"), Id::new("bright"), Id::new("night")];

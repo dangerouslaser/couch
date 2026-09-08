@@ -157,6 +157,7 @@ export component App inherits Window {
     in-out property <bool> ssh-available: false;
     // A brief message, e.g. Wi-Fi progress. Non-empty shows it; the host clears it.
     in-out property <string> toast: "";
+    in-out property <bool> feedback-enabled: true;
     callback setting-brightness-changed(int);
     callback setting-dim-changed(int);
     callback setting-off-changed(int);
@@ -422,6 +423,7 @@ export component App inherits Window {
     }
 
     VolumeOverlay {
+        visible: root.feedback-enabled;
         x: 36px;
         width: parent.width - 72px;
         y: parent.height - self.height - 36px;
@@ -431,6 +433,7 @@ export component App inherits Window {
         shown: root.scene-feedback-shown && !root.brightness-shown;
     }
     VolumeOverlay {
+        visible: root.feedback-enabled;
         x: 36px;
         width: parent.width - 72px;
         y: parent.height - self.height - 36px;
@@ -441,6 +444,7 @@ export component App inherits Window {
         shown: root.brightness-shown && root.light-shown && !root.chooser-shown;
     }
     VolumeOverlay {
+        visible: root.feedback-enabled;
         x: 36px;
         width: parent.width - 72px;
         y: parent.height - self.height - 36px;

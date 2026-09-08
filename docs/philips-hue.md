@@ -204,3 +204,10 @@ after a successful command, older bridge power/brightness snapshots cannot undo
 that target. Background reconciliation continues; unavailable/deleted devices
 remain authoritative, and external changes are accepted after this settling
 window. Failed commands invalidate the cache for a fresh read.
+
+Toast feedback is scoped to the current screen. Navigation dismisses brightness,
+scene and system toasts immediately; delayed scene acknowledgements cannot reopen
+feedback on a different screen. Normal timed dismissal still slides out.
+Device regression check: Back during brightness and scene feedback leaves the
+home screen clear, including after a simulated 2.5-second scene reply; selecting
+a new scene from the chooser still displays its feedback.

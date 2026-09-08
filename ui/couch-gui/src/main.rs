@@ -700,6 +700,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (weak, until) = (app.as_weak(), toast_until.clone());
         move |msg: String, secs: u64| {
             if let Some(app) = weak.upgrade() {
+                app.set_feedback_enabled(true);
                 app.set_toast(msg.into());
                 until.set(Some(now_monotonic_us() + secs * 1_000_000));
             }
@@ -831,6 +832,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rendered_once = false;
     let mut last_health = 0;
     let _ = std::fs::remove_file("/tmp/couch-gui.health");
+    let feedback_page = |app: &App| (
+        (app.get_light_shown(), app.get_chooser_shown(), app.get_settings_shown(),
+         app.get_keyboard_shown(), app.get_wifi_setup_shown(), app.get_pair_shown(),
+         app.get_setup_mode(), app.get_recording()),
+        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(),
+    );
+    let mut last_feedback_page = feedback_page(&app);
+    let dismiss_feedback = |app: &App, scenes: &mut scenes::Controller, lights: &mut lights::Controller| {
+        scenes.dismiss_feedback(app);
+        lights.clear_brightness(app);
+        toast_until.set(None);
+        app.set_toast("".into());
+        app.set_volume_shown(false);
+        // Hide even a card whose exit animation is still running.
+        app.set_feedback_enabled(false);
+    };
 
     loop {
         if let Some(press) = pad.poll() {
@@ -991,7 +1008,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_toast("".into());
         }
 
-        scene_controls.poll(&app);
         network_setup.poll(&app);
         // Capture only navigation, then slide framebuffer snapshots so the
         // room animation does not rasterize the entire Slint scene every frame.
@@ -1001,6 +1017,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             screen.snapshot();
         }
         light_controls.poll(&app);
+        if feedback_page(&app) != last_feedback_page {
+            dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
+            last_feedback_page = feedback_page(&app);
+        }
         room_monitor.poll(&app, &mut areas.borrow_mut(), current.get());
         if room_navigation && was_room != app.get_light_shown() {
             slint::platform::update_timers_and_animations();
@@ -1138,7 +1158,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // for the slide's duration: keys pressed meanwhile queue in the
         // keypad and are taken one per frame afterwards, so a second Left or
         // Right simply slides again.
+        if feedback_page(&app) != last_feedback_page {
+            dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
+        }
         if let Some(what) = intent.take() {
+            dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
             if let Some(cost) = transition(&mut screen, &window, &app, what) {
                 frames += cost.frames;
                 render_us += cost.work_us;
@@ -1147,6 +1171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        last_feedback_page = feedback_page(&app);
+        // A scene picked in a chooser reports on the destination page. Older
+        // in-flight replies were invalidated before navigation above.
+        scene_controls.poll(&app);
         slint::platform::update_timers_and_animations();
 
         // A drawn frame comes back paced to the panel's refresh, so an

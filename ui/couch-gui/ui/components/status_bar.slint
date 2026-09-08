@@ -74,7 +74,7 @@ export component StatusBar inherits Rectangle {
     }
 
     mode-text := Text {
-        text: root.charging ? "CHG" : "HUB";
+        text: root.charging ? "CHG" : "";
         font-size: 15px;
         color: Theme.text-secondary;
         x: battery-shell.x - self.width - 8px;
@@ -90,7 +90,7 @@ export component StatusBar inherits Rectangle {
     wifi := Rectangle {
         width: 18px;
         height: 14px;
-        x: mode-text.x - self.width - 10px;
+        x: (root.charging ? mode-text.x : battery-shell.x) - self.width - 10px;
         y: (parent.height - self.height) / 2;
         for bar[i] in [5px, 8px, 11px, 14px]: Rectangle {
             width: 3px;

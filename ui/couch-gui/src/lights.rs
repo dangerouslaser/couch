@@ -308,7 +308,7 @@ impl Controller {
             .try_send((self.generation, room, Operation::List))
             .is_ok();
     }
-    fn clear_brightness(&mut self, app: &App) {
+    pub fn clear_brightness(&mut self, app: &App) {
         self.brightness_pending.clear();
         self.brightness_flight = None;
         self.brightness_until = None;
@@ -337,6 +337,7 @@ impl Controller {
                 queue_brightness(&mut self.brightness_pending, entry.id.clone(), percent);
                 app.set_brightness_target(entry.name.clone().into());
                 app.set_light_brightness_percent(percent as i32);
+                app.set_feedback_enabled(true);
                 app.set_brightness_shown(true);
                 app.set_light_detail("".into());
                 self.brightness_until = Some(Instant::now() + Duration::from_secs(1));
