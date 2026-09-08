@@ -183,8 +183,6 @@ fn read_trimmed(path: &str) -> Option<String> {
 /// The wpa_supplicant control socket stage2 opens, and the tools that talk to
 /// it. Absolute, because couch-gui's PATH at boot is not guaranteed to carry
 /// /sbin.
-const WPA_CLI: &str = "/sbin/wpa_cli";
-const WPA_CTRL: &str = "/tmp/wpa";
 const SSHD: &str = "/usr/sbin/sshd";
 
 // --- user settings ----------------------------------------------------------
@@ -347,81 +345,4 @@ pub fn ssh_stop() -> bool {
         }
     }
     !ssh_running()
-}
-
-// --- Wi-Fi reconfiguration --------------------------------------------------
-//
-// Add a network to the running wpa_supplicant and select it, then persist it so
-// it survives a reboot. Association is asynchronous - wpa_supplicant takes a few
-// seconds - so this only fires the commands; the caller polls `wifi_ssid` to see
-// whether it took.
-
-fn wpa(args: &[&str]) -> Option<String> {
-    let out = Command::new(WPA_CLI)
-        .args(["-p", WPA_CTRL, "-i", "wlan0"])
-        .args(args)
-        .output()
-        .ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Configure and select a network. An empty passphrase means an open network.
-/// Returns false if wpa_supplicant is not reachable at all.
-pub fn wifi_connect(ssid: &str, passphrase: &str) -> bool {
-    // wpa_cli quoting: the value is wrapped in literal double quotes, and an
-    // SSID or passphrase containing a quote would break it - reject rather than
-    // build a broken config. The keyboard can produce quotes, so this matters.
-    if ssid.is_empty() || ssid.contains('"') || passphrase.contains('"') {
-        return false;
-    }
-    // COUCH_WIFI_DRYRUN prints the plan and changes nothing: selecting a new
-    // network drops the current association, which cannot be tested over the
-    // very link it would drop. The password is not printed.
-    if std::env::var_os("COUCH_WIFI_DRYRUN").is_some() {
-        println!("couch-gui: wifi_connect DRYRUN ssid={ssid:?} open={}", passphrase.is_empty());
-        println!("couch-gui:   add_network; set ssid; set {}; enable; select; save; udhcpc",
-                 if passphrase.is_empty() { "key_mgmt NONE" } else { "psk ***" });
-        return true;
-    }
-    let Some(id) = wpa(&["add_network"]) else { return false };
-    let id = id.lines().last().unwrap_or("").trim();
-    if id.is_empty() || id == "FAIL" {
-        return false;
-    }
-    let _ = wpa(&["set_network", id, "ssid", &format!("\"{ssid}\"")]);
-    if passphrase.is_empty() {
-        let _ = wpa(&["set_network", id, "key_mgmt", "NONE"]);
-    } else {
-        let _ = wpa(&["set_network", id, "psk", &format!("\"{passphrase}\"")]);
-    }
-    let _ = wpa(&["enable_network", id]);
-    let _ = wpa(&["select_network", id]);
-    let _ = wpa(&["save_config"]);
-    persist_network(ssid, passphrase);
-    // A fresh association needs a fresh lease; run udhcpc detached so it does
-    // not block the UI. -n gives up if no server answers rather than looping.
-    let _ = Command::new("/sbin/udhcpc")
-        .args(["-i", "wlan0", "-n", "-q", "-t", "10", "-b"])
-        .spawn();
-    true
-}
-
-/// Append the network to /opt/couch/networks.conf, which stage2 merges at boot.
-/// Two lines, `ssid` and `psk`, the format wifi-conf.sh already reads.
-fn persist_network(ssid: &str, passphrase: &str) {
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/opt/couch/networks.conf")
-    {
-        let _ = writeln!(f, "ssid={ssid}");
-        let _ = writeln!(f, "psk={passphrase}");
-    }
-}
-
-/// wpa_supplicant's association state, e.g. "COMPLETED", "SCANNING",
-/// "4WAY_HANDSHAKE". "" if it cannot be read.
-pub fn wifi_state() -> String {
-    crate::wifi::status().state
 }

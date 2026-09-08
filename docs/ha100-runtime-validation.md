@@ -65,3 +65,23 @@ A native ARM probe run from the GUI's root reported COMPLETED and a nonempty
 SSID, and the user confirmed the network name is visible. Settings now show
 actual RSSI in dBm instead of a bar-count fraction. Socket permissions/cleanup,
 status parsing and invalid RSSI values have regression tests.
+
+## Wi-Fi scan, test and save flow (September 8)
+
+Settings → Wi-Fi → Change network now scans first, lists RSSI in dBm, and
+supports manual hidden-SSID entry. Secured networks open the password keyboard;
+open networks proceed to review. Test temporarily selects a separate supplicant
+network, checks its network ID and SSID, and acquires an IP address. Only explicit
+Save writes network blocks to Alpine's persistent `networks.conf`. The password
+is passed to `wpa_passphrase` on stdin; only its derived key is persisted.
+Cancellation, a failed test or the 60-second save deadline restores the previous
+network and enabled flags. A private `/tmp` journal supports GUI-restart recovery.
+The test proves association and DHCP, not Internet connectivity.
+
+The remote displayed the scan list and accepted D-pad input into both the
+selected-network password screen and hidden-network name screen. Screenshots:
+ignored `build/wifi-{scan,password,hidden}-device.png`. Saved Wi-Fi and house
+configuration checksums stayed unchanged. The MTK driver emits a zero-RSSI
+diagnostic scan entry; invalid RSSI values are excluded from the list. Twenty-eight
+GUI tests pass, including six network regressions. No candidate connection was
+selected during device review; a real network change awaits physical validation.

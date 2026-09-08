@@ -726,6 +726,7 @@ dependencies = [
  "libc",
  "mimalloc",
  "qrcodegen",
+ "serde_json",
  "slint",
  "slint-build",
 ]

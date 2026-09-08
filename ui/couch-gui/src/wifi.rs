@@ -16,7 +16,7 @@ pub struct Status {
 }
 
 impl Status {
-    fn parse(reply: &str) -> Self {
+    pub(crate) fn parse(reply: &str) -> Self {
         let mut status = Self::default();
         for line in reply.lines() {
             if let Some(value) = line.strip_prefix("wpa_state=") {
@@ -114,6 +114,12 @@ fn request_at(server: &Path, command: &str, timeout: Duration) -> io::Result<Str
         ));
     }
     Ok(String::from_utf8_lossy(&reply[..count]).into_owned())
+}
+
+pub fn command(command: &str) -> Result<String, String> {
+    request_at(Path::new("/tmp/wpa/wlan0"), command, Duration::from_secs(1))
+        .map(|reply| reply.trim_end().to_owned())
+        .map_err(|_| "Wi-Fi service is not responding".to_owned())
 }
 
 pub fn status() -> Status {

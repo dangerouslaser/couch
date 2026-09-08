@@ -8,6 +8,7 @@ import { HomeHub, LiveActivity, RoomRow, SceneCell } from "screens/home_hub.slin
 import { Setup } from "screens/setup.slint";
 import { Keyboard } from "components/keyboard.slint";
 import { Settings } from "components/settings.slint";
+import { WifiSetup } from "components/wifi_setup.slint";
 
 export { LiveActivity, RoomRow, SceneCell }
 
@@ -134,6 +135,13 @@ export component App inherits Window {
     callback setting-brightness-changed(int);
     callback setting-dim-changed(int);
     callback setting-off-changed(int);
+    in-out property <bool> wifi-setup-shown: false;
+    in-out property <string> wifi-setup-title;
+    in-out property <string> wifi-setup-detail;
+    in-out property <[ChoiceItem]> wifi-setup-items;
+    callback wifi-setup-activate(int);
+    callback wifi-setup-back();
+    public function focus-wifi-setup() { wifi-setup.take-focus(); }
     callback setting-change-wifi();
     callback setting-toggle-ssh();
     // Which tier the settings menu shows (0 root, 1 display, 2 wifi, 3 ssh),
@@ -211,7 +219,8 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.settings-shown ? "SETTINGS"
+        title: root.wifi-setup-shown && !root.keyboard-shown ? "WI-FI"
+             : root.settings-shown ? "SETTINGS"
              : root.keyboard-shown ? root.keyboard-title
              : root.chooser-shown ? root.chooser-title : root.area-name;
         battery: root.battery;
@@ -281,6 +290,19 @@ export component App inherits Window {
         }
     }
 
+
+    wifi-setup := WifiSetup {
+        x: root.wifi-setup-shown && !root.keyboard-shown ? 0px : root.width;
+        y: root.status-h;
+        width: root.width;
+        height: root.height - root.status-h;
+        shown: root.wifi-setup-shown && !root.keyboard-shown;
+        title: root.wifi-setup-title;
+        detail: root.wifi-setup-detail;
+        items: root.wifi-setup-items;
+        activate(i) => { root.wifi-setup-activate(i); }
+        back => { root.wifi-setup-back(); }
+    }
 
     if root.keyboard-shown: Keyboard {
         x: 0px;

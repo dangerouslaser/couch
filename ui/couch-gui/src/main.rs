@@ -17,6 +17,8 @@ mod qr;
 mod system;
 mod touch;
 mod wifi;
+mod network;
+mod network_ui;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -42,16 +44,6 @@ const BACKGROUND: u32 = 0x09090b;
 /// callback - so a callback only ever says what it wants, and the ways the
 /// chooser closes from inside app.slint are callbacks too, for the same
 /// reason.
-/// Where the keyboard's next result goes during Wi-Fi setup: nowhere (the
-/// keyboard is doing something else, or nothing), the SSID step, or the
-/// passphrase step for the SSID it carries.
-#[derive(Clone, PartialEq)]
-enum WifiFlow {
-    Idle,
-    Ssid,
-    Pass(String),
-}
-
 #[derive(Copy, Clone, Debug)]
 enum Intent {
     /// Step the area by this many, wrapping; the sign is the direction.
@@ -637,19 +629,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .is_ok()
         .then(|| now_monotonic_us() + 1_500_000);
     let mut settings_opened = false;
-    // The Wi-Fi setup flow drives the keyboard twice (SSID, then passphrase);
-    // the keyboard's one accepted/cancelled pair is routed by this state. A
-    // deadline the tick watches turns "fired the connect" into "connected" or
-    // "could not", since association is asynchronous.
-    let wifi_flow = Rc::new(std::cell::RefCell::new(WifiFlow::Idle));
-    // The passphrase keyboard is opened a frame after the SSID one closes, not
-    // from inside its accept callback: reopening the keyboard from within its
-    // own accepted handler leaves focus on the shell, not the new keyboard, so
-    // the passphrase field takes no input. Deferring one iteration lets the
-    // first keyboard fully close first.
-    let open_pass_kb: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let wifi_check: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
-    let wifi_target = Rc::new(std::cell::RefCell::new(String::new()));
+    let mut network_setup = network_ui::Controller::install(&app);
+    if std::env::var_os("COUCH_WIFI_SETUP").is_some() { app.invoke_setting_change_wifi(); }
     let toast_until: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
     let toast = {
         let (weak, until) = (app.as_weak(), toast_until.clone());
@@ -660,53 +641,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
-    {
-        let weak = app.as_weak();
-        let (flow, check, target, toast, open_pass_kb) = (
-            wifi_flow.clone(),
-            wifi_check.clone(),
-            wifi_target.clone(),
-            toast.clone(),
-            open_pass_kb.clone(),
-        );
-        app.on_keyboard_accepted(move |t| {
-            if weak.upgrade().is_none() {
-                return;
-            }
-            let cur = flow.borrow().clone();
-            match cur {
-                WifiFlow::Ssid => {
-                    let ssid = t.to_string();
-                    if ssid.is_empty() {
-                        *flow.borrow_mut() = WifiFlow::Idle;
-                        return;
-                    }
-                    *flow.borrow_mut() = WifiFlow::Pass(ssid);
-                    // Opened next iteration, once this keyboard has closed.
-                    open_pass_kb.set(true);
-                }
-                WifiFlow::Pass(ssid) => {
-                    *flow.borrow_mut() = WifiFlow::Idle;
-                    if system::wifi_connect(&ssid, &t.to_string()) {
-                        *target.borrow_mut() = ssid.clone();
-                        check.set(Some(now_monotonic_us() + 20_000_000));
-                        toast(format!("Connecting to {ssid}"), 25);
-                    } else {
-                        toast("Could not start Wi-Fi setup".into(), 4);
-                    }
-                }
-                WifiFlow::Idle => println!("couch-gui: keyboard accepted '{t}'"),
-            }
-        });
-    }
-    {
-        let flow = wifi_flow.clone();
-        app.on_keyboard_cancelled(move || {
-            *flow.borrow_mut() = WifiFlow::Idle;
-            println!("couch-gui: keyboard cancelled");
-        });
-    }
-
     let mut last_tick = 0u64;
     let mut last_setup: Option<bool> = None;
     // COUCH_NAV walks the focus ring on a timer, so its repaint behaviour is
@@ -786,20 +720,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             oa.set(system::OFF_SECS[i as usize] * 1_000_000);
             sett.borrow_mut().off_index = i;
             system::save_settings(&sett.borrow());
-        });
-    }
-    {
-        let (weak, flow) = (app.as_weak(), wifi_flow.clone());
-        app.on_setting_change_wifi(move || {
-            let Some(app) = weak.upgrade() else { return };
-            // Close settings and take the SSID on the keyboard; the accepted
-            // handler carries it on to the passphrase and the connect.
-            *flow.borrow_mut() = WifiFlow::Ssid;
-            app.set_settings_shown(false);
-            app.set_keyboard_title("WI-FI NETWORK".into());
-            app.set_keyboard_placeholder("Network name".into());
-            app.set_keyboard_password(false);
-            app.invoke_open_keyboard();
         });
     }
     {
@@ -984,7 +904,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // over. The state it shows - the SSID, whether SSH is up - is read here,
         // once, at open time rather than on the tick.
         if let Some(t) = menu_down_at {
-            let on_home = !app.get_settings_shown()
+            let on_home = !app.get_wifi_setup_shown() && !app.get_settings_shown()
                 && !app.get_keyboard_shown()
                 && !app.get_chooser_shown()
                 && !app.get_pair_shown()
@@ -1002,14 +922,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_toast("".into());
         }
 
-        // Open the passphrase keyboard the frame after the SSID one closed.
-        if open_pass_kb.get() {
-            open_pass_kb.set(false);
-            app.set_keyboard_title("PASSWORD".into());
-            app.set_keyboard_placeholder("Leave blank for an open network".into());
-            app.set_keyboard_password(true);
-            app.invoke_open_keyboard();
-        }
+        network_setup.poll(&app);
 
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {
@@ -1041,20 +954,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.set_wifi_ssid(system::wifi_ssid().into());
             app.set_wifi_signal(system::wifi_dbm().map(|dbm| format!("{dbm} dBm")).unwrap_or_else(|| "—".into()).into());
 
-            // A Wi-Fi connection is pending: report it once associated, or give
-            // up at the deadline. Inside this once-a-second block, because
-            // the status worker refreshes once per second.
-            if let Some(deadline) = wifi_check.get() {
-                let target = wifi_target.borrow().clone();
-                if system::wifi_state() == "COMPLETED" && system::wifi_ssid() == target {
-                    wifi_check.set(None);
-                    toast(format!("Connected to {target}"), 4);
-                } else if now >= deadline {
-                    wifi_check.set(None);
-                    toast("Could not connect - check the password".into(), 6);
-                }
-            }
-
             let setup = system::in_setup_mode();
             if last_setup != Some(setup) {
                 last_setup = Some(setup);
@@ -1077,7 +976,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Standby. Anything a person is looking at or waiting on holds
             // the panel awake and restarts the clock; otherwise it dims, then
             // powers down, on the two idle timers.
-            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode();
+            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown();
             let idle = now.saturating_sub(last_input);
             // The panel is meant to be showing something in every state but
             // Off. If the driver says it is asleep anyway - it has happened,
