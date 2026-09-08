@@ -57,13 +57,22 @@ impl Hue {
                     .iter()
                     .find(|s| s["type"] == "grouped_light" && s["id"] == id);
                 let on = state.and_then(|s| s["on"]["on"].as_bool());
+                let dimmable = state.is_some_and(|s| s["dimming"].is_object());
+                let brightness_percent = match on {
+                    Some(false) => Some(0),
+                    Some(true) => state
+                        .and_then(|s| s["dimming"]["brightness"].as_f64())
+                        .filter(|p| p.is_finite() && (0.0..=100.0).contains(p))
+                        .map(|p| p.round() as u8),
+                    None => None,
+                };
                 result.push(Resource {
                     state: Light {
                         entity_id: format!("room:{id}"),
                         name: name.into(),
                         on,
-                        brightness_percent: None,
-                        dimmable: false,
+                        brightness_percent,
+                        dimmable,
                     },
                     resource_kind: "room".into(),
                     room_name: name.into(),
@@ -109,6 +118,26 @@ impl Hue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn room_brightness_comes_from_its_grouped_light_service() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        for (on, dimming, expected, supported) in [
+            (json!(true), json!({"brightness":42.4}), Some(42), true),
+            (json!(false), json!({"brightness":42.4}), Some(0), true),
+            (Value::Null, json!({"brightness":42.4}), None, true),
+            (json!(true), json!({"brightness":101}), None, true),
+            (json!(true), Value::Null, None, false),
+        ] {
+            let resources = Hue::parse_resources(&[
+                json!({"id":"room","type":"room","metadata":{"name":"Server Room"},
+                    "services":[{"rtype":"grouped_light","rid":id}]}),
+                json!({"id":id,"type":"grouped_light","on":{"on":on},"dimming":dimming}),
+            ]).unwrap();
+            assert_eq!(resources[0].state.entity_id, format!("room:{id}"));
+            assert_eq!(resources[0].state.brightness_percent, expected);
+            assert_eq!(resources[0].state.dimmable, supported);
+        }
+    }
     #[test]
     fn grouped_power_and_scene_recall_use_distinct_resources() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();

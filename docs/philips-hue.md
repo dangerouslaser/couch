@@ -2,7 +2,7 @@
 
 `clients/couch-hue` is a Rust client for direct local Hue API v2 control. It does
 not require Home Assistant, a Hue cloud account, or a kernel change. Start with
-light on/off and brightness, grouped room on/off, and recall of scenes saved on
+light on/off and brightness, grouped room on/off and brightness, and recall of scenes saved on
 the bridge. Color editing, scene creation and Hue zones as controls are deferred.
 One bridge connection is supported per remote.
 
@@ -113,8 +113,10 @@ were preserved. No household lights were changed by automated fixture tests.
 
 In **Rooms & devices**, open a Couch room and choose the Hue connection. The
 **Hue controls** selector switches between individual lights and **Hue rooms**.
-Adding a Hue room creates one grouped on/off control; OK toggles its grouped-light
-service with the same push-maintained cache as individual lights. It does not
+Adding a Hue room creates one grouped control; OK toggles its grouped-light
+service, and Volume Up/Down adjusts its brightness in 5% steps. Brightness support
+and the current level come from the bridge’s grouped-light dimming state, using
+the same push-maintained cache as individual lights. It does not
 create or rename Couch rooms or duplicate all the bridge room's lights.
 
 In **Rooms & devices**, open a Couch room, select the Hue connection, and choose

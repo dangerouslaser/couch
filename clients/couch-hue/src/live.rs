@@ -360,6 +360,50 @@ mod tests {
         remote.join().unwrap();
     }
     #[test]
+    fn grouped_dimming_uses_cached_state_and_grouped_light_endpoint() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr();
+        let uuid = "00000000-0000-0000-0000-000000000001";
+        let id = "room:00000000-0000-0000-0000-000000000001";
+        let remote = thread::spawn(move || {
+            for expected in [
+                serde_json::json!({"on":{"on":true},"dimming":{"brightness":55}}),
+                serde_json::json!({"on":{"on":false}}),
+            ] {
+                let mut request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+                assert_eq!(request.method(), &tiny_http::Method::Put);
+                assert_eq!(request.url(), format!("/clip/v2/resource/grouped_light/{uuid}"));
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), expected);
+                request.respond(tiny_http::Response::from_string(
+                    serde_json::json!({"errors":[],"data":[{"rid":uuid,"rtype":"grouped_light"}]}).to_string()
+                )).unwrap();
+            }
+        });
+        let mut cache = Cache::default();
+        cache.updated = Some(Instant::now());
+        cache.lights.insert(id.into(), Light {
+            entity_id: id.into(), name: "Test".into(), on: Some(true),
+            brightness_percent: Some(50), dimmable: true,
+        });
+        let session = Session {
+            client: Arc::new(Hue {
+                base: format!("http://{address}"), key: "fixture".into(),
+                agent: ureq::Agent::new_with_defaults(),
+            }),
+            cache: Mutex::new(cache), refresh_lock: Mutex::new(()),
+        };
+        assert!(matches!(session.command(id, Some(101)), Err(Error::Brightness)));
+        let state = session.command(id, Some(55)).unwrap();
+        assert_eq!(state.brightness_percent, Some(55));
+        assert_eq!(session.cache.lock().unwrap().lights[id].brightness_percent, Some(55));
+        assert_eq!(session.command(id, Some(0)).unwrap().on, Some(false));
+        session.cache.lock().unwrap().lights.get_mut(id).unwrap().dimmable = false;
+        assert!(matches!(session.command(id, Some(5)), Err(Error::Brightness)));
+        remote.join().unwrap();
+    }
+    #[test]
     fn old_snapshot_cannot_undo_an_acknowledged_command() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let address = server.server_addr();
