@@ -73,6 +73,7 @@ export component Settings inherits Rectangle {
     // Wi-Fi.
     in property <string> wifi-ssid;            // "" when not connected
     in property <int> wifi-level;
+    in property <string> wifi-signal;
     // SSH.
     in property <bool> ssh-on;
     in property <bool> ssh-available;          // a key or password is enrolled
@@ -220,8 +221,8 @@ export component Settings inherits Rectangle {
             if root.panel == 2: VerticalLayout {
                 spacing: root.gap;
                 SettingsRow {
-                    title: root.wifi-ssid == "" ? "Not connected" : root.wifi-ssid;
-                    value: root.wifi-ssid == "" ? "" : (root.wifi-level + "/4");
+                    title: root.wifi-ssid == "" ? (root.wifi-level > 0 ? "Connected" : "Not connected") : root.wifi-ssid;
+                    value: root.wifi-level == 0 ? "" : root.wifi-signal;
                     stepper: false;
                 }
                 SettingsRow { title: "Change network"; value: ">"; stepper: false; }

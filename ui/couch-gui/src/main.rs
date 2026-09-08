@@ -16,6 +16,7 @@ mod panel;
 mod qr;
 mod system;
 mod touch;
+mod wifi;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -522,8 +523,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if app.get_settings_shown() {
                         return None;
                     }
-                    // The state it shows is read once, at open time.
+                    // Prime settings; Wi-Fi status also refreshes on the service tick.
                     app.set_wifi_ssid(system::wifi_ssid().into());
+            app.set_wifi_signal(system::wifi_dbm().map(|dbm| format!("{dbm} dBm")).unwrap_or_else(|| "—".into()).into());
                     app.set_ssh_available(system::ssh_available());
                     app.set_ssh_on(system::ssh_running());
                     screen.snapshot();
@@ -1036,10 +1038,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => app.set_battery(0),
             }
             app.set_wifi_level(system::wifi_level());
+            app.set_wifi_ssid(system::wifi_ssid().into());
+            app.set_wifi_signal(system::wifi_dbm().map(|dbm| format!("{dbm} dBm")).unwrap_or_else(|| "—".into()).into());
 
             // A Wi-Fi connection is pending: report it once associated, or give
             // up at the deadline. Inside this once-a-second block, because
-            // reading the state spawns wpa_cli.
+            // the status worker refreshes once per second.
             if let Some(deadline) = wifi_check.get() {
                 let target = wifi_target.borrow().clone();
                 if system::wifi_state() == "COMPLETED" && system::wifi_ssid() == target {

@@ -21,6 +21,7 @@ export component App inherits Window {
     in-out property <int> battery: 0;
     in-out property <bool> charging: false;
     in-out property <int> wifi-level: 0;
+    in-out property <string> wifi-signal: "—";
 
     // --- hub data -------------------------------------------------------------
     in-out property <[LiveActivity]> activities;
@@ -306,6 +307,7 @@ export component App inherits Window {
         off-choices: root.off-choices;
         off-index: root.off-index;
         wifi-ssid: root.wifi-ssid;
+        wifi-signal: root.wifi-signal;
         wifi-level: root.wifi-level;
         ssh-on: root.ssh-on;
         ssh-available: root.ssh-available;

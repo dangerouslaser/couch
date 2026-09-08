@@ -53,3 +53,15 @@ Post-reboot validation passed: button-backlight requests 0, 255, and 0 each
 left GPIO4 high. The GUI then dimmed naturally and the user confirmed tap wake.
 The GUI logged `wake from dim on touch` with 1ms panel check and 2ms backlight
 work. This supersedes the pending dim-touch confirmation above.
+
+## Wi-Fi status reporting
+
+The GUI runs outside Alpine, where `/sbin/wpa_cli` is absent. Signal/carrier
+were correct, but the failed executable lookup produced an empty SSID and a
+false disconnected label. A bounded background Unix-datagram client now reads
+`STATUS` from the shared `/tmp/wpa/wlan0` socket. The settings name refreshes
+once per second; a missing name alone no longer means a disconnected link.
+A native ARM probe run from the GUI's root reported COMPLETED and a nonempty
+SSID, and the user confirmed the network name is visible. Settings now show
+actual RSSI in dBm instead of a bar-count fraction. Socket permissions/cleanup,
+status parsing and invalid RSSI values have regression tests.

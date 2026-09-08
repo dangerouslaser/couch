@@ -52,22 +52,23 @@ pub fn wifi_level() -> i32 {
     if read_trimmed("/sys/class/net/wlan0/operstate").as_deref() != Some("up") {
         return 0;
     }
-    let dbm = std::fs::read_to_string("/proc/net/wireless").ok().and_then(|s| {
-        s.lines()
-            .find(|l| l.trim_start().starts_with("wlan0:"))
-            .and_then(|l| l.split_whitespace().nth(3))
-            .map(|t| t.trim_end_matches('.').to_string())
-            .and_then(|t| t.parse::<f32>().ok())
-    });
+    let dbm = wifi_dbm();
     match dbm {
-        Some(d) if d >= -55.0 => 4,
-        Some(d) if d >= -67.0 => 3,
-        Some(d) if d >= -78.0 => 2,
+        Some(d) if d >= -55 => 4,
+        Some(d) if d >= -67 => 3,
+        Some(d) if d >= -78 => 2,
         // Associated but weak, or associated with no readable level: still
         // connected, so never 0 here - 0 means down, and down is the one
         // state a person needs to see at a glance.
         Some(_) | None => 1,
     }
+}
+
+/// RSSI from the MT6580 driver's wireless statistics, not a guessed bar count.
+pub fn wifi_dbm() -> Option<i32> {
+    std::fs::read_to_string("/proc/net/wireless")
+        .ok()
+        .and_then(|text| crate::wifi::signal_dbm(&text))
 }
 
 /// Local time as "H:MM AM/PM".
@@ -271,27 +272,10 @@ pub fn brightness_level(percent: i32) -> u8 {
     (30 + (p - 10) * (255 - 30) / 90) as u8
 }
 
-/// The SSID the radio is on, or "" if it is not associated. A process spawn -
-/// only called when the settings menu opens, never on the tick.
+/// Cached supplicant status, refreshed in a worker without spawning tools or
+/// blocking rendering. An unreadable network name does not imply link loss.
 pub fn wifi_ssid() -> String {
-    if let Ok(out) = Command::new("iwgetid").args(["-r", "wlan0"]).output() {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !s.is_empty() {
-            return s;
-        }
-    }
-    // Fallback: wpa_cli against the socket stage2 opens.
-    if let Ok(out) = Command::new(WPA_CLI)
-        .args(["-p", WPA_CTRL, "-i", "wlan0", "status"])
-        .output()
-    {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if let Some(v) = line.strip_prefix("ssid=") {
-                return v.trim().to_string();
-            }
-        }
-    }
-    String::new()
+    crate::wifi::status().ssid
 }
 
 /// Whether sshd is listening.
@@ -439,10 +423,5 @@ fn persist_network(ssid: &str, passphrase: &str) {
 /// wpa_supplicant's association state, e.g. "COMPLETED", "SCANNING",
 /// "4WAY_HANDSHAKE". "" if it cannot be read.
 pub fn wifi_state() -> String {
-    wpa(&["status"])
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("wpa_state=").map(str::to_string))
-        })
-        .unwrap_or_default()
+    crate::wifi::status().state
 }
