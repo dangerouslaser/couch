@@ -85,12 +85,19 @@ echo "= chroot props: $($BB ls $A/dev/__properties__ | $BB wc -l)"
 # STP mode success". Probe once here so a from-source kernel still boots to a
 # usable Couch, without a radio, instead of stalling in this block.
 $BB insmod /vendor/lib/modules/wmt_drv.ko 2>/tmp/wmt_drv.err
-if $BB grep -q "^wmt_drv " /proc/modules; then
+# Either the vendor module loaded, or the driver is built into the kernel. A
+# from-source kernel takes the second path: the vendor blobs are pinned to
+# Sanytron's build and cannot load, so the connectivity driver is compiled in
+# instead, and a built-in driver never appears in /proc/modules. It does
+# register its character devices, so look for those too.
+if $BB grep -q "^wmt_drv " /proc/modules ||
+   $BB grep -qE "mtk_wcn_detect|wmtdetect|stpwmt|wmtWifi" /proc/devices; then
     WIFI=1
+    echo "= wmt: $($BB grep -q "^wmt_drv " /proc/modules && echo module || echo built-in)"
 else
     WIFI=0
     echo "= wifi SKIPPED: $($BB head -1 /tmp/wmt_drv.err 2>/dev/null)"
-    mark $((BASE+2)) "S2 wifi skipped: wmt_drv did not load"
+    mark $((BASE+2)) "S2 wifi skipped: no wmt driver (module or built-in)"
 fi
 
 if [ "$WIFI" = "1" ]; then
@@ -101,6 +108,18 @@ if [ "$WIFI" = "1" ]; then
     # The wlan driver logs an NVRAM warning without it and works regardless.
 
     $BB sleep 1; $BB mdev -s
+
+    # The connectivity driver loads its patches with filp_open() on a bare
+    # filename ("ROMv2_lm_patch_1_1_hdr.bin"), not request_firmware, so
+    # firmware_class.path does not apply and a kernel thread resolves it
+    # against /. The vendor's wmt_launcher is supposed to hand the driver a
+    # folder over an ioctl, but our built-in driver never receives it and falls
+    # back to "use default patch name". Link the firmware into / so the bare
+    # names resolve; without this the chip powers up, fails patch download and
+    # WiFi never comes on.
+    for f in /vendor/firmware/*; do
+        [ -e "$f" ] && $BB ln -sf "$f" / 2>/dev/null
+    done
     LD_LIBRARY_PATH=/system/lib:/vendor/lib /vendor/bin/wmt_loader >/tmp/wmt.log 2>&1
     echo "= wmt_loader rc=$? chip=$($BB grep -oE '190 mtk_stp_wmt' /proc/devices || echo NOT-DETECTED)"
 

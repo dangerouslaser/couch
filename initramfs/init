@@ -21,7 +21,10 @@ LOG=/dev/mmcblk0p13      # expdb: scratch for markers and logs
 # over the first sectors of expdb, so the one boot whose markers we most want
 # to read is exactly the boot that destroys them. MTK's own sections end around
 # 6.3MB, so everything of ours now lives above sector 13000. Keep in step with
-# MARKER_SECTOR / DMESG_SECTOR in tools/env.sh.
+# MARKER_SECTOR / DMESG_SECTOR in tools/env.sh. init owns BASE+0..5 and
+# BASE+39..41; stage2 owns BASE+6..12 (its own BASE is 13006). Keep out of
+# each other's range - markers that collide silently overwrite each other,
+# and the one you lose is the one you added to answer the current question.
 BASE=13000
 DMESG_SECTOR=13064
 AUSB=/sys/class/android_usb/android0
@@ -44,7 +47,7 @@ main() {
     # put. Ninety seconds is well past where every failure so far has landed.
     ( $BB sleep 90
       $BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
-      mark $((BASE+10)) "S10 boot proven, bcb cleared" ) &
+      mark $((BASE+40)) "S10 boot proven, bcb cleared" ) &
 
     for c in 1 2 3; do $BB echo 1 > /sys/devices/system/cpu/cpu$c/online 2>/dev/null; done
     echo "= cpus $($BB nproc)  mem $($BB free | $BB awk '/Mem:/{print int($4/1024)}')MB free"
@@ -57,7 +60,7 @@ main() {
     ( h=0
       while [ $h -lt 60 ]; do
           h=$((h+1))
-          mark $((BASE+9)) "alive ${h} at $($BB cut -d" " -f1 /proc/uptime)s"
+          mark $((BASE+39)) "alive ${h} at $($BB cut -d" " -f1 /proc/uptime)s"
           $BB sleep 1
       done ) &
 
@@ -104,13 +107,38 @@ main() {
     $BB echo 201c > $AUSB/idProduct 2>/dev/null
     $BB echo acm > $AUSB/functions 2>/dev/null
     $BB echo 1 > $AUSB/enable 2>/dev/null
-    if [ "$HAVE_ALPINE" = yes ]; then
-        ( while true; do $BB chroot $ALPINE /bin/sh -l </dev/ttyGS0 >/dev/ttyGS0 2>&1; $BB sleep 1; done ) &
-        echo "= shell: alpine on usb serial"
-    else
-        ( while true; do $BB sh </dev/ttyGS0 >/dev/ttyGS0 2>&1; $BB sleep 1; done ) &
-        echo "= shell: busybox on usb serial (fallback)"
+    # ttyGS0's major is allocated dynamically when the gadget serial driver
+    # registers, so the 233 baked into the initramfs (read once off the running
+    # Android) is only right by luck. A kernel built with a different set of
+    # drivers gets a different number, and then the node points at nothing: the
+    # gadget still enumerates, so the host sees a port, but every open fails and
+    # the shell dies instantly - which looks exactly like a hung kernel and
+    # costs a power cycle to escape. Read the real major and remake the node.
+    GSMAJ=$($BB awk '$2 == "ttyGS" { print $1 }' /proc/devices | $BB head -1)
+    if [ -n "$GSMAJ" ]; then
+        $BB rm -f /dev/ttyGS0
+        $BB mknod /dev/ttyGS0 c "$GSMAJ" 0
     fi
+    mark $((BASE+41)) "S11 ttyGS major=${GSMAJ:-none}"
+    echo "= ttyGS0 major ${GSMAJ:-NOT FOUND}"
+
+    # The serial shell is the way back in when nothing else works, so it runs the
+    # initramfs busybox rather than the Alpine chroot. The chroot needs the
+    # rootfs mounted and /dev and /proc bound inside it, and any of that failing
+    # left the gadget enumerated with nothing answering - which from the host is
+    # indistinguishable from a hung kernel, and cost a physical power cycle to
+    # get out of. Busybox here depends on nothing but the initramfs. Alpine is
+    # one `chroot /mnt/alpine /bin/sh` away once you are in.
+    #
+    # Two independent respawn loops, because a single one that dies takes the
+    # only way in with it.
+    ( while true; do $BB sh </dev/ttyGS0 >/dev/ttyGS0 2>&1; $BB sleep 1; done ) &
+    ( while true; do
+          $BB sleep 20
+          $BB pgrep -f "busybox sh" >/dev/null 2>&1 && continue
+          $BB sh </dev/ttyGS0 >/dev/ttyGS0 2>&1
+      done ) &
+    echo "= shell: busybox on usb serial (alpine at /mnt/alpine)"
     mark $((BASE+3)) "S3 shell up"
 
     # --- hand off to the pushable stage -----------------------------------------
