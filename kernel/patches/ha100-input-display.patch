@@ -1,0 +1,394 @@
+From fc3d0e69e827d6af46047adb0d1fd78f2c15662c Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:19:59 -0400
+Subject: [PATCH 1/2] pinctrl: select the EINT mux when mapping GPIO interrupts
+
+---
+ drivers/pinctrl/mediatek/pinctrl-mtk-common.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/drivers/pinctrl/mediatek/pinctrl-mtk-common.c b/drivers/pinctrl/mediatek/pinctrl-mtk-common.c
+index ef16b03b..a118ba69 100644
+--- a/drivers/pinctrl/mediatek/pinctrl-mtk-common.c
++++ b/drivers/pinctrl/mediatek/pinctrl-mtk-common.c
+@@ -953,6 +953,24 @@ static int mtk_gpio_get(struct gpio_chip *chip, unsigned offset)
+ static int mtk_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
+ {
+ #ifdef CONFIG_MTK_EIC
++	struct mtk_pinctrl *pctl = dev_get_drvdata(chip->dev);
++	const struct mtk_desc_function *func = pctl->devdata->pins[offset].functions;
++	int ret;
++
++	/* gpio_request() selects GPIO mode. On MT6580 the interrupt input is
++	 * a separate mux function (EINT6, EINT9, ...), so merely mapping the
++	 * IRQ leaves matrix keypad rows disconnected from the controller.
++	 * Use the pin's advertised function rather than a board-wide mode.
++	 * Pins without a separate EINT function retain their builtin routing.
++	 */
++	for (; func && func->name; func++) {
++		if (!strncmp(func->name, "EINT", 4)) {
++			ret = mtk_pmx_set_mode(pctl->pctl_dev, offset, func->muxval);
++			if (ret)
++				return ret;
++			break;
++		}
++	}
+ 	return mt_gpio_to_irq(offset);
+ #else
+ 	const struct mtk_desc_pin *pin;
+-- 
+2.43.0
+
+
+From f332af050922151e7a0c50b9123a0567bbdf4824 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:23:26 -0400
+Subject: [PATCH 2/2] lcm: restore HA100 production panel commands and timing
+
+---
+ .../st7701s_wvga_dsi_vdo_boe_tn_tianxian.c    | 294 +++++-------------
+ 1 file changed, 73 insertions(+), 221 deletions(-)
+
+diff --git a/drivers/misc/mediatek/lcm/st7701s_wvga_dsi_vdo_boe_tn_tianxian/st7701s_wvga_dsi_vdo_boe_tn_tianxian.c b/drivers/misc/mediatek/lcm/st7701s_wvga_dsi_vdo_boe_tn_tianxian/st7701s_wvga_dsi_vdo_boe_tn_tianxian.c
+index 373443dd..eddf4c81 100644
+--- a/drivers/misc/mediatek/lcm/st7701s_wvga_dsi_vdo_boe_tn_tianxian/st7701s_wvga_dsi_vdo_boe_tn_tianxian.c
++++ b/drivers/misc/mediatek/lcm/st7701s_wvga_dsi_vdo_boe_tn_tianxian/st7701s_wvga_dsi_vdo_boe_tn_tianxian.c
+@@ -97,158 +97,58 @@ static unsigned int lcm_compare_id(void);
+     unsigned char para_list[64];
+ };
+ 
+-static struct LCM_setting_table lcm_initialization_setting[] =
+-{
+-// PacketSize(1, 
+-{0x11,0,{0x00}},
+-{REGFLAG_DELAY, 120, {}},
+-//---------------------------------------Bank0 Setting-------------------------------------------------//
+-//------------------------------------Display Control setting----------------------------------------------//
+-// PacketSize(6, 
+-{0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x10}},
+-
+-// PacketSize(3, 
+-{0xC0, 2, {0x63, 0x00}}, 
+-
+-// PacketSize(3, 
+-{0xC1, 2, {0x0A, 0x02}}, 
+-
+-// PacketSize(3, 
+-{0xC2, 2, {0x31, 0x08}}, 
+-
+-// PacketSize(2, 
+-{0xCC, 1, {0x10}}, 
+-
+-//-------------------------------------Gamma Cluster Setting-------------------------------------------//
+-// PacketSize(17, 
+-{0xB0, 16, {0x40, 0x05, 0x12, 0x13, 0x19, 0x0C, 0x11, 0x0A, 0x0A, 0x23, 0x09, 0x13, 0x0E, 0x12, 0x16, 0x19}}, 
+-
+-// PacketSize(17, 
+-{0xB1, 16, {0x40, 0x05, 0xD1, 0x13, 0x18, 0x0B, 0x13, 0x09, 0x09, 0x2A, 0x09, 0x17, 0x15, 0x9E, 0x22, 0x19}}, 
+-
+-//---------------------------------------End Gamma Setting----------------------------------------------//
+-//------------------------------------End Display Control setting----------------------------------------//
+-//-----------------------------------------Bank0 Setting End---------------------------------------------//
+-//-------------------------------------------Bank1 Setting---------------------------------------------------//
+-
+-//-------------------------------- Power Control Registers Initial --------------------------------------//
+-// PacketSize(6, 
+-{0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x11}}, 
+-
+-// PacketSize(2, 
+-{0xB0, 1, {0x4D}}, 
+-//-------------------------------------------Vcom Setting---------------------------------------------------//
+-// PacketSize(2, 
+-{0xB1, 1, {0x5A}}, 
+-//-----------------------------------------End Vcom Setting-----------------------------------------------//
+-// PacketSize(2, 
+-{0xB2, 1, {0x07}}, 
+-
+-// PacketSize(2, 
+-{0xB3, 1, {0x80}}, 
+-
+-// PacketSize(2, 
+-{0xB5, 1, {0x47}}, 
+-
+-// PacketSize(2, 
+-{0xB7, 1, {0x85}}, 
+-
+-// PacketSize(2, 
+-{0xB8, 1, {0x21}}, 
+-
+-// PacketSize(2, 
+-{0xB9, 1, {0x10}}, 
+-
+-// PacketSize(2, 
+-{0xC0, 1, {0x09}}, 
+-
+-// PacketSize(2, 
+-{0xC1, 1, {0x78}}, 
+-
+-// PacketSize(2, 
+-{0xC2, 1, {0x78}}, 
+-
+-// PacketSize(2, 
+-{0xD0, 1, {0x88}}, 
+-
+-//---------------------------------End Power Control Registers Initial -------------------------------//
+-//Delayms (100, 
+-//---------------------------------------------GIP Setting----------------------------------------------------//
+-// PacketSize(4, 
+-{0xE0, 3, {0x00, 0x00, 0x02}}, 
+-
+-// PacketSize(12, 
+-{0xE1, 11, {0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x20, 0x20}}, 
+-
+-// PacketSize(14, 
+-{0xE2, 13, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, 
+-
+-// PacketSize(5, 
+-{0xE3, 4, {0x00, 0x00, 0x33, 0x00}}, 
+-
+-// PacketSize(3, 
+-{0xE4, 2, {0x22, 0x00}}, 
+-
+-// PacketSize(17, 
+-{0xE5, 16, {0x04, 0x34, 0xAA, 0xAA, 0x06, 0x34, 0xAA, 0xAA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, 
+-
+-// PacketSize(5, 
+-{0xE6, 4, {0x00, 0x00, 0x33, 0x00}}, 
+-
+-// PacketSize(3, 
+-{0xE7, 2, {0x22, 0x00}}, 
+-
+-// PacketSize(17, 
+-{0xE8, 16, {0x05, 0x34, 0xAA, 0xAA, 0x07, 0x34, 0xAA, 0xAA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, 
+-
+-// PacketSize(17, 
+-// {0xEA, 16, {0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00, 0x10, 0x00}}, // Jiangde, coe 
+-
+-// PacketSize(8, 
+-{0xEB, 7, {0x02, 0x00, 0x40, 0x40, 0x00, 0x00, 0x00}}, 
+-
+-// PacketSize(3, 
+-{0xEC, 2, {0x00, 0x00}}, 
+-
+-// PacketSize(17, 
+-{0xED, 16, {0xFA, 0x45, 0x0B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xB0, 0x54, 0xAF}}, 
+-
+-// PacketSize(13, 
+-// {0xEF, 12, {0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}}, // Jiangde, coe
+-//---------------------------------------------End GIP Setting-----------------------------------------------//
+-//------------------------------ Power Control Registers Initial End-----------------------------------//
+-//------------------------------------------Bank1 Setting----------------------------------------------------//
+-
+-// PacketSize(6, 
+-{0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x00}}, 
+-
+-
+-// PacketSize(1, 
+-{0x29,0,{0x00}},
+-    
+-{REGFLAG_DELAY, 20, {}},
+-{REGFLAG_END_OF_TABLE, 0x00, {}}
+-};
+-
+-
+-static struct LCM_setting_table lcm_set_window[] = {
+-
+-};
+-
+-
+-static struct LCM_setting_table lcm_sleep_out_setting[] = {
+-
+-    // Sleep Out
++/* HA100 production initialization, identical in the device's stock kernel
++ * (uncompressed offset 0x115efe8) and lk (offset 0x4673c), 45 x 66-byte
++ * records. Keep panel-specific analog/GIP values and delays intact.
++ * Original packed table SHA256: a4f796d22f4f7d66932a864ab29f516649f811eb5dde4de55a5a191a15cf1564 */
++static struct LCM_setting_table lcm_initialization_setting[] = {
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x13}},
++    {0xEF, 1, {0x08}},
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x10}},
++    {0xC0, 2, {0x63, 0x00}},
++    {0xC1, 2, {0x09, 0x0C}},
++    {0xC2, 2, {0x07, 0x08}},
++    {0xB0, 16, {0x00, 0x0D, 0x14, 0x0D, 0x11, 0x07, 0x04, 0x08, 0x08, 0x20, 0x05, 0x14, 0x12, 0x25, 0x2D, 0x1C}},
++    {0xB1, 16, {0x00, 0x0C, 0x14, 0x0D, 0x11, 0x06, 0x03, 0x08, 0x08, 0x1F, 0x05, 0x14, 0x12, 0x25, 0x2E, 0x1C}},
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x11}},
++    {0xB0, 1, {0x68}},
++    {0xB1, 1, {0x49}},
++    {0xB2, 1, {0x80}},
++    {0xB3, 1, {0x80}},
++    {0xB5, 1, {0x40}},
++    {0xB7, 1, {0x8A}},
++    {0xB8, 1, {0x21}},
++    {0xC0, 1, {0x03}},
++    {0xC1, 1, {0x78}},
++    {0xC2, 1, {0x78}},
++    {0xD0, 1, {0x88}},
++    {0xE0, 3, {0x00, 0x00, 0x02}},
++    {0xE1, 11, {0x01, 0xA0, 0x03, 0xA0, 0x02, 0xA0, 0x04, 0xA0, 0x00, 0x44, 0x44}},
++    {0xE2, 12, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
++    {0xE3, 4, {0x00, 0x00, 0x33, 0x33}},
++    {0xE4, 2, {0x44, 0x44}},
++    {0xE5, 16, {0x01, 0x26, 0xA0, 0xA0, 0x03, 0x28, 0xA0, 0xA0, 0x05, 0x2A, 0xA0, 0xA0, 0x07, 0x2C, 0xA0, 0xA0}},
++    {0xE6, 4, {0x00, 0x00, 0x33, 0x33}},
++    {0xE7, 2, {0x44, 0x44}},
++    {0xE8, 16, {0x02, 0x26, 0xA0, 0xA0, 0x04, 0x28, 0xA0, 0xA0, 0x06, 0x2A, 0xA0, 0xA0, 0x08, 0x2C, 0xA0, 0xA0}},
++    {0xEB, 7, {0x00, 0x00, 0xE4, 0xE4, 0x44, 0x00, 0x40}},
++    {0xED, 16, {0xFF, 0xF7, 0x65, 0x4F, 0x0B, 0xA1, 0xCF, 0xFF, 0xFF, 0xFC, 0x1A, 0xB0, 0xF4, 0x56, 0x7F, 0xFF}},
++    {0xEF, 6, {0x08, 0x08, 0x08, 0x80, 0x3F, 0x64}},
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x13}},
++    {0xE8, 2, {0x00, 0x0E}},
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x00}},
+     {0x11, 1, {0x00}},
+     {REGFLAG_DELAY, 120, {}},
+-
+-    // Display ON
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x13}},
++    {0xE8, 2, {0x00, 0x0C}},
++    {REGFLAG_DELAY, 20, {}},
++    {0xE8, 2, {0x00, 0x00}},
++    {0xFF, 5, {0x77, 0x01, 0x00, 0x00, 0x00}},
+     {0x29, 1, {0x00}},
+-     {REGFLAG_DELAY, 20, {}},
+-    {REGFLAG_END_OF_TABLE, 0x00, {}}
++    {REGFLAG_DELAY, 20, {}},
++    {REGFLAG_END_OF_TABLE, 0, {}},
+ };
+ 
+-
+ static struct LCM_setting_table lcm_deep_sleep_mode_in_setting[] = {
+ 
+     // Display off sequence
+@@ -313,95 +213,47 @@ static void lcm_set_util_funcs(const LCM_UTIL_FUNCS *util)
+ }
+ 
+ 
++/* Parameters recovered from stock lcm_get_params at 0xc057bf6c;
++ * this tree's LCM_PARAMS layout matches the vendor's 0x400-byte layout. */
+ static void lcm_get_params(LCM_PARAMS *params)
+ {
+-    memset(params, 0, sizeof(LCM_PARAMS));
+-
+-    params->type   = LCM_TYPE_DSI;
+-    params->width  = FRAME_WIDTH;
++    memset(params, 0, sizeof(*params));
++    params->type = LCM_TYPE_DSI;
++    params->width = FRAME_WIDTH;
+     params->height = FRAME_HEIGHT;
+-
+-    
+-    // enable tearing-free
+-    // params->dbi.te_mode                 = LCM_DBI_TE_MODE_VSYNC_ONLY;
+-    params->dbi.te_mode                 = LCM_DBI_TE_MODE_DISABLED;
+-    //  params->dbi.te_edge_polarity        = LCM_POLARITY_RISING;
+-
+-    params->dsi.mode   = SYNC_PULSE_VDO_MODE;
+-
+-
+-    // DSI
+-    /* Command mode setting */
+-    params->dsi.LANE_NUM                = LCM_TWO_LANE;
+-    //The following defined the fomat for data coming from LCD engine.
++    params->dbi.te_mode = LCM_DBI_TE_MODE_DISABLED;
++    params->dsi.mode = SYNC_PULSE_VDO_MODE;
++    params->dsi.LANE_NUM = LCM_TWO_LANE;
+     params->dsi.data_format.color_order = LCM_COLOR_ORDER_RGB;
+-    params->dsi.data_format.trans_seq   = LCM_DSI_TRANS_SEQ_MSB_FIRST;
+-    params->dsi.data_format.padding     = LCM_DSI_PADDING_ON_LSB;
+-    params->dsi.data_format.format      = LCM_DSI_FORMAT_RGB888;
+-
+-    // Highly depends on LCD driver capability.
+-    // Not support in MT6573
+-    params->dsi.packet_size=256;
+-
+-    // Video mode setting        
++    params->dsi.data_format.trans_seq = LCM_DSI_TRANS_SEQ_MSB_FIRST;
++    params->dsi.data_format.padding = LCM_DSI_PADDING_ON_LSB;
++    params->dsi.data_format.format = LCM_DSI_FORMAT_RGB888;
++    params->dsi.packet_size = 256;
+     params->dsi.intermediat_buffer_num = 2;
+-
+-    params->dsi.PS=LCM_PACKED_PS_24BIT_RGB888;
+-    params->dsi.word_count=480*3;
+-
+-    //edit by Magnum 2013-7-25 , solve esd read id error
+-    //     cycle_time = (4 * 1000 * div2 * div1 * pre_div * post_div)/ (fbk_sel * (fbk_div+0x01) * 26) + 
+-    // 1 = 
+-    // ui = (1000 * div2 * div1 * pre_div * post_div)/ (fbk_sel * (fbk_div+0x01) * 26 * 2) + 1;
+-
+-    params->dsi.vertical_sync_active    = 10;
+-    params->dsi.vertical_backporch      = 20;
+-    params->dsi.vertical_frontporch     = 18;
+-    params->dsi.vertical_active_line    = FRAME_HEIGHT;
+-
+-    params->dsi.horizontal_sync_active  = 10;
+-    params->dsi.horizontal_backporch    = 70;
+-    params->dsi.horizontal_frontporch   = 80;
++    params->dsi.PS = LCM_PACKED_PS_24BIT_RGB888;
++    params->dsi.word_count = FRAME_WIDTH * 3;
++    params->dsi.vertical_sync_active = 8;
++    params->dsi.vertical_backporch = 20;
++    params->dsi.vertical_frontporch = 20;
++    params->dsi.vertical_active_line = FRAME_HEIGHT;
++    params->dsi.horizontal_sync_active = 8;
++    params->dsi.horizontal_backporch = 20;
++    params->dsi.horizontal_frontporch = 20;
+     params->dsi.horizontal_active_pixel = FRAME_WIDTH;
+-    params->dsi.compatibility_for_nvk   = 0;    
+-    params->dsi.ssc_disable             = 1; // 1==close ssc?
+-    params->dsi.ssc_range               = 2;
+-    params->dsi.PLL_CLOCK               = 200; // 200;224
+-
+-    params->dsi.esd_check_enable                    = 0;
+-    params->dsi.customization_esd_check_enable      = 1;
+-    params->dsi.lcm_esd_check_table[0].cmd          = 0x0A;
+-    params->dsi.lcm_esd_check_table[0].count        = 1;
+-    params->dsi.lcm_esd_check_table[0].para_list[0] = 0x9C;
+-
+-    /* ESD or noise interference recovery For video mode LCM only. */
+-    // Send TE packet to LCM in a period of n frames and check the response.
+-    /*    params->dsi.lcm_int_te_monitor = FALSE;
+-    params->dsi.lcm_int_te_period = 1;        // Unit : frames
+-
+-    // Need longer FP for more opportunity to do int. TE monitor applicably.
+-    if(params->dsi.lcm_int_te_monitor)
+-    params->dsi.vertical_frontporch *= 2;
+-
+-    // Monitor external TE (or named VSYNC) from LCM once per 2 sec. (LCM VSYNC must be wired to baseband TE pin.)
+-    params->dsi.lcm_ext_te_monitor = FALSE;
+-    // Non-continuous clock
+-    params->dsi.noncont_clock = TRUE;
+-    params->dsi.noncont_clock_period = 2;    // Unit : frames  */
++    params->dsi.PLL_CLOCK = 162;
+ }
+ 
+-
+ static void lcm_init(void)
+ {
+     LCM_PRINT("[lcm st7701 coe]: lcm_init. \n");
+     // LcmPowerOnPMIC(); // for debug purpose, VGP3
+ 
+     SET_RESET_PIN(1);
+-    MDELAY(10);
++    MDELAY(20);
+     SET_RESET_PIN(0);
+-    MDELAY(25);
++    MDELAY(40);
+     SET_RESET_PIN(1);
+-    MDELAY(120);
++    MDELAY(180);
+ 	push_table(lcm_initialization_setting, sizeof(lcm_initialization_setting) / sizeof(struct LCM_setting_table), 1);
+ }
+ 
+@@ -410,7 +262,7 @@ static void lcm_suspend(void)
+ {
+ 
+ 	push_table(lcm_deep_sleep_mode_in_setting, sizeof(lcm_deep_sleep_mode_in_setting) / sizeof(struct LCM_setting_table), 1);
+-	MDELAY(50);
++	SET_RESET_PIN(0);
+ 
+ }
+ 
+-- 
+2.43.0
+

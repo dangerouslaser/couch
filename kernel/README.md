@@ -6,6 +6,12 @@ vendor's own `#7` build is kept as the known-good fallback and is the kernel
 in the recovery slot. The plan and its history are in `docs/frankenkernel.md`;
 this is the working reference.
 
+The September 8 input/display fixes are on `couch-ha100` at `f332af05`
+(following `fc3d0e69`). The user confirmed the screen and D-pad work after
+booting the diagnostic build. See `../docs/ha100-input-display-validation.md`
+for the hardware findings and validation limits. The original `#4` status
+below describes the earlier bring-up, not a complete regression test.
+
 ## Where the tree is
 
 The source tree is not in this repo - it is a 1GB kernel checkout and belongs
@@ -19,8 +25,9 @@ in its own git history. It lives on the build box (Ollie, `~/couch-kernel/`):
 ~/couch-kernel/out      build output (O=), disposable
 ```
 
-The branch has no remote yet. It should get one before anything else happens
-to that machine.
+The branch has no publishing remote. A full Git bundle is backed up outside
+this repository; `patches/ha100-input-display.patch` also preserves the input
+and display fixes after `7a0e5e8f`. Apply it with `git am` to that baseline.
 
 What the delta on top of wiko_k300 is (one commit, 541 files, ~19MB):
 
@@ -38,11 +45,27 @@ built in.
 
 ## Building
 
+**All kernel compilation runs on Ollie**, an i9-14900K Linux server. From the
+Mac, `kernel/build.sh` transfers the recipe and invokes the build over
+`ssh ollie`; it never starts a local Docker VM. The kernel source remains in
+Ollie's independent Git repository. Transfer and commit source edits there
+before building; the wrapper transfers only this repository's build recipe.
+
 ```sh
-docker build -t couch-kbuild kernel/         # once; amd64 image with arm-eabi-4.9
-KTREE=~/couch-kernel/base kernel/build.sh     # -> out/arch/arm/boot/zImage
-python3 kernel/pack.py build/linux-recovery-KNOWNGOOD.img out/arch/arm/boot/zImage build/couch-test.img
+kernel/build.sh diagnostic  # tracing enabled; Ollie ~/couch-kernel/out-diagnostic
+kernel/build.sh normal      # reduced debug overhead; Ollie ~/couch-kernel/out-normal
+scp ollie:couch-kernel/out-normal/arch/arm/boot/zImage build/zImage-normal
+python3 kernel/pack.py build/linux-recovery-KNOWNGOOD.img build/zImage-normal build/couch-test.img
+python3 -m unittest discover -s kernel -p 'test_*.py'
 ```
+
+For initial container setup, run `docker build -t couch-kbuild kernel/` on
+Ollie from a checkout of this recipe. The Dockerfile pins the compiler commit.
+Both profiles regenerate `.config` from the tracked baseline and fragment on
+every invocation, then verify the requested fragment survived `olddefconfig`.
+Outputs are separate. `manifest.json` records source commit/status, effective
+configuration, container/compiler identity, and artifact SHA-256 hashes.
+`KTREE`, `KOUT`, `KIMAGE`, and `JOBS` overrides refer to paths/settings on Ollie.
 
 `pack.py` swaps only the zImage into the known-good image: the appended DTB,
 ramdisk, load addresses, page size and cmdline are carried over verbatim, so
@@ -62,10 +85,12 @@ readback. It refuses anything that is not a boot image and anything that is
 not a block device: an earlier flash "succeeded" by writing a regular file
 named `/dev/block/mmcblk0p8` into RAM.
 
-The image protects itself. init writes `boot-recovery` into the BCB as its
-first act and clears it 90 seconds later, so a kernel that hangs is reset by
-the watchdog into the recovery slot, which brings up WiFi and sshd and waits.
-No power cycle, no cable.
+Init writes `boot-recovery` into the BCB and clears it 90 seconds later. This
+can direct a subsequent reboot into recovery after a failure that occurs
+**after init arms it**; it does not protect failures before init or prove GUI
+health. Preserve a verified p8 backup and the independent p9 recovery image,
+and verify serial access through Ollie before flashing. Do not modify the
+shared vendor overlay or bootloader partitions for kernel experiments.
 
 Boot markers land in `expdb` (p13) from sector 13000; `tools/markers.sh` reads
 them. The serial shell on `/dev/ttyGS0` is the debug channel when there is no

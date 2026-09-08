@@ -1,8 +1,8 @@
 # Build environment for the MT6580 alps-3.18.79 kernel.
 #
 # amd64 because the AOSP arm-eabi-4.9 prebuilt (the toolchain config-stock.txt
-# names via CROSS_COMPILE="arm-eabi-") is an x86_64 Linux binary; on Apple
-# silicon this runs under Docker's amd64 emulation.
+# names via CROSS_COMPILE="arm-eabi-") is an x86_64 Linux binary.
+# Build and run this container on Ollie, the native Linux build server.
 #
 # ubuntu:20.04 because MediaTek's DrvGen.py - the DCT code generator the ALPS
 # Makefiles run to produce the cust GPIO/EINT headers - is Python 2, which
@@ -19,7 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # The era-correct cross compiler this kernel was built with (AOSP prebuilt,
 # mirrored on GitHub since Google dropped the old GCC prebuilts from AOSP).
-RUN git clone --depth 1 https://github.com/crdroidandroid/android_prebuilts_gcc_linux-x86_arm_arm-eabi-4.9.git /opt/arm-eabi-4.9 && \
+ARG TOOLCHAIN_COMMIT=031cb28febb0bb3f6a94a2a27141954a23e93eda
+RUN git init /opt/arm-eabi-4.9 && \
+    git -C /opt/arm-eabi-4.9 remote add origin https://github.com/crdroidandroid/android_prebuilts_gcc_linux-x86_arm_arm-eabi-4.9.git && \
+    git -C /opt/arm-eabi-4.9 fetch --depth 1 origin "$TOOLCHAIN_COMMIT" && \
+    git -C /opt/arm-eabi-4.9 checkout --detach FETCH_HEAD && \
     rm -rf /opt/arm-eabi-4.9/.git && \
     /opt/arm-eabi-4.9/bin/arm-eabi-gcc --version | head -1
 
