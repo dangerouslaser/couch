@@ -790,6 +790,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let swallow = standby == Standby::Off && press.mic != Some(true);
             if standby != Standby::Active {
                 println!("couch-gui: standby: wake on key ({:?})", standby);
+                if standby == Standby::Off { light_controls.wake(); }
                 wake(&mut screen, active_level.get());
                 standby = Standby::Active;
                 verify_at = Some(now_monotonic_us() + 1_000_000);

@@ -76,7 +76,7 @@ impl ServerCertVerifier for Pin {
     }
 }
 #[derive(Debug)]
-struct PinnedConnector(Arc<ClientConfig>);
+struct PinnedConnector(Arc<ClientConfig>, bool);
 impl<In: Transport> Connector<In> for PinnedConnector {
     type Out = PinnedTransport;
     fn connect(
@@ -99,12 +99,14 @@ impl<In: Transport> Connector<In> for PinnedConnector {
         Ok(Some(PinnedTransport {
             stream: StreamOwned::new(conn, sock),
             buffers: LazyBuffers::new(8192, 8192),
+            stream_timeout: self.1,
         }))
     }
 }
 struct PinnedTransport {
     stream: StreamOwned<ClientConnection, TransportAdapter>,
     buffers: LazyBuffers,
+    stream_timeout: bool,
 }
 impl Transport for PinnedTransport {
     fn buffers(&mut self) -> &mut dyn Buffers {
@@ -115,8 +117,13 @@ impl Transport for PinnedTransport {
         self.stream.write_all(&self.buffers.output()[..n])?;
         Ok(())
     }
-    fn await_input(&mut self, t: NextTimeout) -> Result<bool, ureq::Error> {
+    fn await_input(&mut self, mut t: NextTimeout) -> Result<bool, ureq::Error> {
         self.stream.sock.set_timeout(t);
+        // Bound each idle read, not the lifetime of an active SSE response.
+        if self.stream_timeout {
+            t.after = t.after.min(std::time::Duration::from_secs(45).into());
+            self.stream.sock.set_timeout(t);
+        }
         let n = self.stream.read(self.buffers.input_append_buf())?;
         self.buffers.input_appended(n);
         Ok(n > 0)
@@ -129,6 +136,12 @@ impl Transport for PinnedTransport {
     }
 }
 pub fn agent(certificate: Arc<Mutex<Vec<u8>>>) -> ureq::Agent {
+    make_agent(certificate, false)
+}
+pub fn stream_agent(certificate: Arc<Mutex<Vec<u8>>>) -> ureq::Agent {
+    make_agent(certificate, true)
+}
+fn make_agent(certificate: Arc<Mutex<Vec<u8>>>, stream: bool) -> ureq::Agent {
     let tls =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -137,13 +150,19 @@ pub fn agent(certificate: Arc<Mutex<Vec<u8>>>) -> ureq::Agent {
             .with_custom_certificate_verifier(Arc::new(Pin { certificate }))
             .with_no_client_auth();
     let cfg = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .timeout_global(if stream {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(5))
+        })
+        .timeout_connect(Some(std::time::Duration::from_secs(5)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(5)))
         .max_redirects(0)
         .proxy(None)
         .build();
     ureq::Agent::with_parts(
         cfg,
-        TcpConnector::default().chain(PinnedConnector(Arc::new(tls))),
+        TcpConnector::default().chain(PinnedConnector(Arc::new(tls), stream)),
         DefaultResolver::default(),
     )
 }

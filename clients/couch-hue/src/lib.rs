@@ -1,4 +1,5 @@
 //! Direct local Hue API v2 light control. Use from a worker thread.
+pub mod live;
 pub mod settings;
 mod tls;
 pub use couch_ha::{Command, Light};
@@ -229,6 +230,17 @@ impl Hue {
                 json!({"on":{"on":true},"dimming":{"brightness":p}})
             }
         };
+        self.write_light(id, body)
+    }
+    /// Send an explicit power target without a preflight GET. The caller owns
+    /// state freshness and reachability checks (see live::Live).
+    pub fn set_power(&self, id: &str, on: bool) -> Result<()> {
+        if !valid_id(id) {
+            return Err(Error::Configuration);
+        }
+        self.write_light(id, json!({"on":{"on":on}}))
+    }
+    fn write_light(&self, id: &str, body: Value) -> Result<()> {
         let updated = data(response(
             self.agent
                 .put(format!("{}/clip/v2/resource/light/{id}", self.base))

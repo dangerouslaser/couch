@@ -7,7 +7,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
     rc::Rc,
-    sync::mpsc,
+    sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
 /// Short-lived observations speed up navigation, never authorize commands.
@@ -55,6 +55,7 @@ pub struct Controller {
     room: Option<Id>,
     entries: Vec<Entry>,
     cache: StateCache,
+    hue: Arc<couch_hue::live::Live>,
     busy: Option<String>,
     refreshing: bool,
     last_refresh: Instant,
@@ -103,15 +104,10 @@ fn toggle_command(state: &Light) -> Result<Command, String> {
         None => Err("This light is unavailable".into()),
     }
 }
-fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {
+fn perform(room: &Id, operation: Operation, hue: &couch_hue::live::Live) -> Result<Answer, String> {
     let mut entries = configured(room)?;
     let ha = || {
         Settings::load(&home::path("ha-connection.json"))
-            .and_then(|s| s.client())
-            .map_err(|e| e.to_string())
-    };
-    let hue = || {
-        couch_hue::settings::Settings::load(&home::path("hue-connection.json"))
             .and_then(|s| s.client())
             .map_err(|e| e.to_string())
     };
@@ -127,9 +123,7 @@ fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {
                 Vec::new()
             };
             let hue_states = if entries.iter().any(|e| e.hue) {
-                hue()
-                    .and_then(|c| c.lights().map_err(|e| e.to_string()))
-                    .unwrap_or_default()
+                hue.lights().unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -151,12 +145,10 @@ fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {
             if !entries.iter().any(|e| e.id == id) {
                 return Err("This device was removed from the room".into());
             }
-            // Always decide from live state, never the navigation cache. This
-            // also handles a light changed from another app since opening the room.
+            // Hue uses its push-maintained cache; HA still reads before toggling.
             let mut state = if let Some(raw) = id.strip_prefix("hue:") {
-                let c = hue()?;
                 let started = Instant::now();
-                let result = c.toggle(raw).map_err(|e| e.to_string());
+                let result = hue.toggle(raw).map_err(|e| e.to_string());
                 println!(
                     "couch-gui: Hue toggle acknowledged in {} ms (success={})",
                     started.elapsed().as_millis(),
@@ -191,9 +183,14 @@ impl Controller {
         app.on_light_back(move || q.borrow_mut().push_back(Input::Back));
         let (tx, requests) = mpsc::sync_channel::<(u64, Id, Operation)>(1);
         let (events, rx) = mpsc::channel();
+        let hue = Arc::new(couch_hue::live::Live::new(home::path(
+            "hue-connection.json",
+        )));
+        let worker_hue = hue.clone();
         std::thread::spawn(move || {
+            let _ = worker_hue.lights(); // Warm the cache without delaying GUI startup.
             while let Ok((generation, room, op)) = requests.recv() {
-                let _ = events.send((generation, perform(&room, op)));
+                let _ = events.send((generation, perform(&room, op, &worker_hue)));
             }
         });
         Self {
@@ -204,10 +201,16 @@ impl Controller {
             room: None,
             entries: Vec::new(),
             cache: StateCache::default(),
+            hue,
             busy: None,
             refreshing: false,
             last_refresh: Instant::now(),
         }
+    }
+    pub fn wake(&mut self) {
+        self.hue.reset();
+        self.cache.0.retain(|id, _| !id.starts_with("hue:"));
+        self.last_refresh = Instant::now() - Duration::from_secs(5);
     }
     pub fn opener(&self) -> impl Fn(Id) + 'static {
         let input = self.input.clone();
@@ -398,7 +401,12 @@ impl Controller {
         if self.room.is_some()
             && self.busy.is_none()
             && !self.refreshing
-            && self.last_refresh.elapsed() > Duration::from_secs(5)
+            && self.last_refresh.elapsed()
+                > Duration::from_millis(if self.entries.iter().all(|e| e.hue) {
+                    500
+                } else {
+                    5000
+                })
         {
             self.refresh();
         }

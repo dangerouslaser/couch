@@ -2,7 +2,7 @@
 
 `clients/couch-hue` is a Rust client for direct local Hue API v2 control. It does
 not require Home Assistant, a Hue cloud account, or a kernel change. Start with
-on/off and brightness; color, scenes, grouped lights and event streaming are not
+on/off and brightness; color, scenes and grouped lights are not
 implemented yet. One bridge connection is supported per remote.
 
 ## Connect and add lights
@@ -71,32 +71,38 @@ restored afterward. The real BSB002 at `192.168.1.157` responds over HTTPS with
 48 discovered lights (42 reachable). Pairing and read-only discovery succeeded;
 real household-light command testing remains pending.
 
-Room navigation uses saved device names immediately, then refreshes bridge state
-in the background. Background updates preserve D-pad focus. A five-second cache
-provides recent display state while the worker refreshes it. Status refreshes
-automatically every five seconds; OK reads live state before toggling. Holding OK
-does not repeatedly toggle. Entering and leaving rooms uses a 180 ms framebuffer
-slide, keeping the status bar stationary. There are no Refresh or Back rows.
+## Remote state cache and response time
 
-Physical validation: with a deliberately three-second HTTPS response delay, the
-saved one-light list was ready in 582 microseconds (local preparation, excluding
-frame presentation) and visible before status arrived. Background refresh preserved
-the selected D-pad row. The same test verified the configured purple accent.
+Room names and devices render from local configuration immediately. Device rows
+match the home room list’s cards, icons, typography and moving focus ring. OK
+toggles the focused light; physical Back returns home with a 180 ms slide.
 
-Flat-room validation: on-device HTTPS fixture testing verified direct OK on/off,
-live-state toggle after an external state change, and one toggle when OK is held.
-Both entry and exit slides rendered 11 frames. All 32 GUI unit tests passed.
+The GUI starts a credential-scoped Hue session in the background. A pinned HTTPS
+connection subscribes to `/eventstream/clip/v2`. Add/update/delete events trigger
+background state snapshots, preserving connectivity information as well as light
+state. This version refreshes snapshots on events rather than merging partial
+resource payloads. Commands use a separate, reusable HTTPS connection.
 
-Device rows use the home room list’s 90 px rounded cards, icon discs, typography,
-and shared focus ring with 160 ms focus/scroll motion. The list stays ungrouped.
-Hue toggles use one live-state GET and one PUT instead of three GETs and a PUT.
-After acknowledgement, the row displays the accepted target; the next periodic
-refresh reconciles observed state and brightness. Failed commands retain the
-previous state and show an error. This reduces requests without toggling from
-a stale cache; bridge acknowledgement is not proof the bulb has finished fading.
+With a valid cached state, OK sends only a PUT. The row adopts the target after
+bridge acknowledgement; this does not prove the bulb has finished fading. Missing
+or expired state falls back to a fresh read; known-unavailable lights are refused.
+Failures invalidate the cache. Snapshot generations prevent an older response from
+overwriting a command, and overlapping updates schedule another refresh.
 
-Validation: 32 GUI tests and five Hue client tests pass, including the exact
-two-request toggle sequence, unavailable-state refusal, and rejected-command
-handling. An eight-device fixture on the physical remote verified scrolling,
-wraparound, focus styling, toggles and both slide directions. Fixture toggle
-acknowledgements took 71–263 ms; these are not real-bridge/bulb latency measurements.
+Streaming connections reconcile every 60 seconds. On stream failure, cache validity
+is revoked, snapshots poll every five seconds, and stream reconnects back off from
+one to 30 seconds. An idle stream has a 45-second read timeout so dead connections
+recover. Reconnect, credential replacement, and wake from full standby refresh state.
+The GUI checks the local cache every 500 ms in Hue-only rooms (five seconds in mixed
+rooms); these checks do not normally query the bridge. A short race remains if
+another controller changes a light before its push-triggered snapshot completes.
+
+Validation: 32 GUI tests and eight Hue tests pass, including SSE framing/limits,
+cache expiry, disconnected state, and stale snapshot/command ordering. On the
+physical remote, an isolated HTTPS/SSE fixture verified one-PUT cached toggles,
+external changes via push, stream failure with polling, and reconnect recovery.
+Fixture cached acknowledgements took 34–55 ms while streaming; these are not
+real-bridge/bulb latency measurements. Production credentials and configuration
+were preserved. No household lights were changed by automated fixture tests.
+
+[Hue v2 push support](https://developers.meethue.com/new-hue-api/).
