@@ -21,6 +21,17 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include "gralloc_abi.h"
+
+/* The probe retains this object until EGL releases its last reference. */
+static int native_refs;
+static void native_ref(struct native_base *p) { (void)p; __atomic_add_fetch(&native_refs, 1, __ATOMIC_RELAXED); }
+static void native_unref(struct native_base *p) { (void)p; __atomic_sub_fetch(&native_refs, 1, __ATOMIC_RELAXED); }
 
 typedef void *EGLDisplay, *EGLConfig, *EGLContext, *EGLSurface;
 typedef unsigned EGLenum, EGLBoolean;
@@ -82,6 +93,8 @@ int main(int argc, char **argv)
 {
     const char *so = argc > 1 ? argv[1] : "/vendor/lib/egl/libGLES_mali.so";
 
+    setbuf(stdout, NULL);
+    int shared = argc > 2 && strcmp(argv[2], "--shared") == 0;
     lib = dlopen(so, RTLD_NOW | RTLD_GLOBAL);
     if (!lib) { printf("FAIL dlopen %s: %s\n", so, dlerror()); return 1; }
     printf("ok   dlopen %s\n", so);
@@ -191,7 +204,45 @@ int main(int argc, char **argv)
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    gralloc_module_t *gralloc = NULL;
+    alloc_device_t *allocator = NULL;
+    struct native_buffer native = {0};
+    void *image = NULL;
+    EGLBoolean (*eglDestroyImageKHR)(EGLDisplay, void *) = NULL;
+    if (shared) {
+        void *hal = dlopen("/vendor/lib/hw/gralloc.mt6580.so", RTLD_NOW);
+        if (!hal || !(gralloc = dlsym(hal, "HMI"))) {
+            printf("FAIL gralloc: %s\n", dlerror()); return 4;
+        }
+        hw_device_t *device = NULL;
+        int rc = gralloc->common.methods->open(&gralloc->common, "gpu0", &device);
+        if (rc || !device) { printf("FAIL allocator open %d\n", rc); return 4; }
+        allocator = (alloc_device_t *)device;
+        /* CPU read + GPU texture/render target. No invented physical addresses. */
+        int usage = GRALLOC_USAGE_SW_READ_OFTEN | 0x100 | 0x200;
+        rc = allocator->alloc(allocator, W, H, HAL_PIXEL_FORMAT_RGBA_8888,
+                              usage, &native.handle, &native.stride);
+        if (rc) { printf("FAIL allocation %d\n", rc); return 4; }
+        native.common.magic = 0x5f626672;
+        native.common.version = sizeof(native);
+        native.common.incRef = native_ref;
+        native.common.decRef = native_unref;
+        native.width = W; native.height = H;
+        native.format = HAL_PIXEL_FORMAT_RGBA_8888;
+        native.usage_deprecated = usage; native.usage = usage;
+        native.layerCount = 1;
+        void *(*eglCreateImageKHR)(EGLDisplay, EGLContext, unsigned, void *, const EGLint *);
+        void (*glEGLImageTargetTexture2DOES)(unsigned, void *);
+        SYM(eglCreateImageKHR); SYM(eglDestroyImageKHR);
+        SYM(glEGLImageTargetTexture2DOES);
+        const EGLint attrs[] = {EGL_NONE};
+        image = eglCreateImageKHR(dpy, EGL_NO_CONTEXT, 0x3140, &native, attrs);
+        printf("%s EGLImage stride=%d err=0x%x\n", image ? "ok" : "FAIL", native.stride, eglGetError());
+        if (!image) return 4;
+        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    }
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
@@ -208,6 +259,64 @@ int main(int argc, char **argv)
     glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glFinish();
+
+    if (shared) {
+        unsigned failures = 0;
+        for (int n = 0; n < native.handle->numFds; ++n) {
+            char path[64], target[128] = {0};
+            snprintf(path, sizeof(path), "/proc/self/fd/%d", native.handle->data[n]);
+            readlink(path, target, sizeof(target)-1);
+            printf("buffer fd[%d]=%d %s\n", n, native.handle->data[n], target);
+        }
+        int sync_requested = argc > 3 && !strcmp(argv[3], "--ion-sync");
+        int ion = sync_requested ? open("/dev/ion", O_RDWR) : -1;
+        if (sync_requested && ion < 0) { perror("open ion"); return 5; }
+        if (native.handle->numFds < 1) return 5;
+        double start = now_s();
+        for (int i = 0; i < iters; ++i) {
+            glClearColor((i & 1) ? 1.0f : 0.0f, 0.25f, 0.75f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glFinish(); /* GPU completion before CPU ownership/cache transition. */
+            void *mapped = NULL;
+            int rc = gralloc->lock(gralloc, native.handle, GRALLOC_USAGE_SW_READ_OFTEN,
+                                   0, 0, W, H, &mapped);
+            if (rc || !mapped) { printf("FAIL lock %d\n", rc); return 5; }
+            /* Legacy ION's SYNC takes an exported dma-buf fd, not a handle
+             * or physical address. This probe only reads the CPU mapping. */
+            int synced = 0;
+            if (ion >= 0) {
+            for (int fd = 0; fd < native.handle->numFds; ++fd) {
+                struct { int handle, fd; } sync = {0, native.handle->data[fd]};
+                if (!ioctl(ion, _IOWR('I', 7, typeof(sync)), &sync)) ++synced;
+                else if (errno != EINVAL) { perror("ION_IOC_SYNC"); return 5; }
+            }
+            if (!synced) { printf("FAIL no ION dma-buf in native handle\n"); return 5; }
+            }
+            for (int y = 0; y < H; ++y)
+                memcpy(pixels + y * W * 4, (uint8_t *)mapped + y * native.stride * 4, W * 4);
+            rc = gralloc->unlock(gralloc, native.handle);
+            if (rc) { printf("FAIL unlock %d\n", rc); return 5; }
+            for (int p = 0; p < W * H; ++p)
+                if (pixels[p*4] != ((i & 1) ? 255 : 0) || pixels[p*4+1] != 64 ||
+                    pixels[p*4+2] != 191 || pixels[p*4+3] != 255) {
+                    if (failures < 8) printf("mismatch frame=%d pixel=%d rgba=%02x%02x%02x%02x\n", i, p, pixels[p*4], pixels[p*4+1], pixels[p*4+2], pixels[p*4+3]);
+                    ++failures;
+                }
+        }
+        printf("shared clear + finish + lock + RAM copy + pixel verification: %.2f ms/frame, mismatched pixels=%u\n",
+               (now_s() - start) * 1000 / iters, failures);
+        void (*glDeleteTextures)(int, const unsigned *);
+        void (*glDeleteFramebuffers)(int, const unsigned *);
+        SYM(glDeleteTextures); SYM(glDeleteFramebuffers);
+        glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &tex);
+        eglDestroyImageKHR(dpy, image);
+        int refs = __atomic_load_n(&native_refs, __ATOMIC_RELAXED);
+        if (refs) { printf("FAIL outstanding EGL refs=%d\n", refs); return 5; }
+        close(ion);
+        allocator->free(allocator, native.handle);
+        allocator->common.close(&allocator->common);
+        return failures ? 5 : 0;
+    }
 
     double t = now_s();
     for (int i = 0; i < iters; i++) {

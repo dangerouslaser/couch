@@ -1,11 +1,11 @@
 # GPU acceleration on the HA100
 
-> **Status: tabled.** The media scene looks fine in practice - the crossfade is
-> brief and nobody watching it is counting frames - and getting EGL up needs
-> enough of Android's runtime (linker namespaces at minimum) that it is a
-> project rather than a bridge. This is kept because the survey and the probes
-> are the expensive part, and they are done: if the animation requirement ever
-> hardens, start from the "Unknowns" section rather than from scratch.
+> **Status (2026-09-08): active investigation.** A headless vendor EGL/GLES2
+> context and an EGLImage-backed gralloc render target now work on the custom
+> kernel. Full-frame `glReadPixels` measured 204ms. Shared-buffer clear,
+> completion, CPU lock, copy and pixel verification measured 9.6–10.6ms, but
+> verification found stale pixels. Explicit legacy ION sync did not fix them.
+> This is a diagnostic probe, not a production Slint GPU backend.
 
 The panel work that hurts is full-screen image compositing: a crossfade between
 two 480x800 backdrops costs **44-57ms per frame** on the CPU, in both LVGL and
@@ -21,9 +21,12 @@ about that one workload.
 | binder | `/dev/binder`, `/dev/hwbinder` present |
 | DRM/KMS | **absent** - no `/dev/dri`, so Mesa/Lima is not an option |
 
-Lima (the open Mali-400 driver in Mesa) needs DRM/KMS. This kernel has none, and
-rebuilding it is blocked - see the notes on the vendor tree. That leaves the
-proprietary blobs, which means libhybris.
+[Lima](https://docs.mesa3d.org/drivers/lima.html) supports Mali-400, with its
+kernel driver upstream since Linux 5.2. Kernel builds now work on Ollie, but
+our 3.18 vendor tree lacks that DRM interface. Backporting Lima plus its
+infrastructure is substantially larger than enabling a configuration option.
+The working experiment uses the existing proprietary driver in a separate
+bionic process; the musl Slint process still needs an integration bridge.
 
 ## What the stock firmware ships
 
@@ -125,3 +128,30 @@ writing intrinsics) is a day of work against libhybris's weeks, and a 3-4x blend
 speedup would bring the 50ms crossfade close to budget on its own.
 
 Worth trying before committing to the Android graphics stack.
+
+## Reproducing the shared-buffer probe
+
+Build `src/eglprobe.c` with the Android ARMv7 NDK compiler (`-O3 -Wall -Wextra
+-ldl`). Its `gralloc_abi.h` records the Android 8.1 32-bit ABI and asserts its
+size. Run inside an isolated root with the original p21 mounted read-only at
+`/system`, p14 read-only at `/vendor`, and `/dev`, `/proc`, `/sys` bind-mounted.
+This avoids mixing the reduced Couch connectivity bundle with graphics blobs.
+Do not replace the live system/vendor mounts. Unmount the probe root afterwards.
+
+```
+/probe /vendor/lib/egl/libGLES_mali.so --shared
+/probe /vendor/lib/egl/libGLES_mali.so --shared --ion-sync
+```
+
+The probe allocates through gralloc, imports an
+[EGL_ANDROID_image_native_buffer](https://registry.khronos.org/EGL/extensions/ANDROID/EGL_ANDROID_image_native_buffer.txt),
+renders alternating colours, waits for GPU completion, locks for CPU reading,
+and verifies every pixel across 30 frames. It never writes the display or
+invents physical addresses. The handle contains a gralloc metadata fd and an
+ION dma-buf fd; these are distinct. Any pixel mismatch returns failure.
+
+Clear-only throughput is not a textured Slint benchmark. The original batched
+clear timing can coalesce work and must not be reported as actual GUI frame
+latency. Resolve cache ownership/completion correctness, then benchmark textured
+compositing and presentation before integrating a GPU renderer. The existing
+software renderer remains the production path.
