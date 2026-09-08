@@ -31,7 +31,15 @@ if [ "$TARGET" = host ]; then
     ( cd daemon && cargo build --release )
     BIN=daemon/target/release/couch-confd
 else
-    # rust-lld, not a cross-gcc: see daemon/.cargo/config.toml.
+    # rust-lld links the final binary. Home Assistant HTTPS also builds ring's
+    # crypto primitives, for which macOS needs an ARM musl C compiler.
+    if [ "$(uname -s)" = Darwin ] && [ -z "${CC_armv7_unknown_linux_musleabihf:-}" ]; then
+        ZIG=${ZIG:-$(pwd)/build/toolchains/zig-aarch64-macos-0.15.2/zig}
+        [ -x "$ZIG" ] || ZIG=$(command -v zig || true)
+        [ -n "$ZIG" ] || { echo "Install Zig for the ARM HTTPS crypto build (or set CC_armv7_unknown_linux_musleabihf)."; exit 1; }
+        export ZIG
+        export CC_armv7_unknown_linux_musleabihf="$(pwd)/tools/arm-musl-cc.py"
+    fi
     rustup target list --installed | grep -qx "$TARGET" || {
         echo "no $TARGET toolchain: rustup target add $TARGET"; exit 1; }
     echo "= daemon/couch-confd -> $TARGET"
@@ -49,4 +57,3 @@ for f in web/couch-web/dist/*; do
 done
 printf "  %-46s %7s\n" "couch-confd ($TARGET)" "$(wc -c < "$BIN" | tr -d ' ')"
 echo "  $BIN"
-

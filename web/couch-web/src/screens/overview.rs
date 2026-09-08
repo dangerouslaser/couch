@@ -70,7 +70,7 @@ pub fn connections(app: App, config: &Config) -> AnyView {
         <p class="lead">"Clients are the integrations that talk to your devices. Configure a connection on each device; there is no separate client to create."</p>
         <div class="destination-grid">
             <section class="card"><h2>"Kodi"</h2><p>"Use the player’s hostname or IP address and its JSON-RPC TCP port (usually 9090). Enable remote control in Kodi."</p></section>
-            <section class="card"><h2>"Home Assistant"</h2><p>"Store the entity ID, such as light.living_room. Server address, credentials and command execution are not configured by this editor yet."</p></section>
+            {super::home_assistant::setup(app)}
             <section class="card"><h2>"Infrared"</h2><p>"Store a codeset name for your device. Code learning, codeset discovery and sending test commands are not available here yet."</p></section>
         </div>
         <h2 class="section">"Device connections"</h2>

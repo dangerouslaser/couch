@@ -20,6 +20,8 @@
 //! load in order to ask for the PIN, and the page on its own says nothing about
 //! anybody's house.
 
+mod ha;
+
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
@@ -268,6 +270,8 @@ impl Api {
         if !open && !self.auth.authenticated(&cookies) {
             return Reply::error(401, "not paired - open the page and enter the PIN on your remote");
         }
+
+        if rest.first() == Some(&"ha") { return ha::route(&method, &rest[1..], &body); }
 
         match (method.as_str(), rest.as_slice()) {
             ("GET", ["health"]) => self.health(self.auth.authenticated(&cookies)),

@@ -227,3 +227,35 @@ async fn parse(response: gloo_net::http::Response) -> Result<Config, ApiError> {
         })
     })
 }
+
+/// Integration operations return live state, not a replacement house config.
+pub async fn ha(method: &str, path: &str, body: Option<Value>) -> Result<Value, ApiError> {
+    let builder = match method {
+        "PUT" => Request::put(path),
+        "POST" => Request::post(path),
+        _ => Request::get(path),
+    };
+    let response = if let Some(body) = body {
+        builder
+            .json(&body)
+            .map_err(|_| ApiError::new("Cannot encode the request"))?
+            .send()
+            .await
+    } else {
+        builder.send().await
+    }
+    .map_err(|_| ApiError::new("Cannot reach the remote"))?;
+    let status = response.status();
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|_| ApiError::new("The remote returned an invalid response"))?;
+    if !(200..300).contains(&status) {
+        return Err(ApiError {
+            message: value["error"].as_str().unwrap_or("Operation failed").into(),
+            unauthorized: status == 401,
+            stale: false,
+        });
+    }
+    Ok(value)
+}

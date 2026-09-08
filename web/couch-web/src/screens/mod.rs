@@ -7,6 +7,7 @@
 
 pub mod activities;
 pub mod areas;
+mod home_assistant;
 pub mod overview;
 pub mod rooms;
 pub mod scenes;

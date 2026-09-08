@@ -636,3 +636,9 @@ input:focus,select:focus {
     transition:background .12s,border-color .12s,box-shadow .12s;
   }
 }
+
+/* Home Assistant setup and live-light controls follow the device form. */
+.ha-connection input { box-sizing:border-box; width:100%; min-width:0; padding:12px 14px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+.ha-connection .actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.ha-connection .field { margin:14px 0; }
+.ha-connection .card { margin-top:18px; }

@@ -42,9 +42,9 @@ validation/network failures keep local drafts for correction or retry.
 This editor stores configuration; the current Slint GUI still uses its example
 home. The overview labels this boundary directly. The screen preview is a
 configuration visualization, not a live screenshot or a free-form layout editor.
-Home Assistant server/authentication, infrared learning/discovery, connection
-probing, live device state and execution of configured commands are not exposed
-by this editor. The separate `stage2/www` portal handles Wi-Fi and SSH setup.
+Home Assistant server setup, light discovery and explicit light controls are
+available under Connections; see [Home Assistant lights](home-assistant.md).
+Infrared learning/discovery and execution of configured scenes remain pending. The separate `stage2/www` portal handles Wi-Fi and SSH setup.
 
 ### Validation
 
