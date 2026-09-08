@@ -13,6 +13,8 @@ export component PairOverlay inherits Rectangle {
 
     visible: root.shown;
     background: #000000F5;
+    // The PIN covers the controls below; touches must not fall through to them.
+    TouchArea { enabled: root.shown; }
 
     VerticalLayout {
         alignment: center;

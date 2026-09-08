@@ -105,6 +105,15 @@ export component App inherits Window {
     /// host's to perform once this key's dispatch has returned.
     callback close-chooser();
 
+    in-out property <bool> light-shown: false;
+    in-out property <string> light-title;
+    in-out property <string> light-detail;
+    in-out property <[ChoiceItem]> light-items;
+    callback light-activate(int);
+    callback light-back();
+    public function focus-light() { light-page.take-focus(); }
+    public function focus-home() { fs.focus(); }
+
     // --- keyboard -------------------------------------------------------------
     // The on-screen keyboard, over the hub. Instantiated only while shown: it
     // takes focus on creation, and the shell's FocusScope takes it back when
@@ -219,7 +228,8 @@ export component App inherits Window {
         y: 0;
         width: parent.width;
         clock: root.clock;
-        title: root.wifi-setup-shown && !root.keyboard-shown ? "WI-FI"
+        title: root.light-shown ? "LIGHTS"
+             : root.wifi-setup-shown && !root.keyboard-shown ? "WI-FI"
              : root.settings-shown ? "SETTINGS"
              : root.keyboard-shown ? root.keyboard-title
              : root.chooser-shown ? root.chooser-title : root.area-name;
@@ -290,6 +300,15 @@ export component App inherits Window {
         }
     }
 
+
+    light-page := WifiSetup {
+        x: root.light-shown ? 0px : root.width;
+        y: root.status-h; width: root.width; height: root.height - root.status-h;
+        shown: root.light-shown; caption: "LIGHTS";
+        title: root.light-title; detail: root.light-detail; items: root.light-items;
+        activate(i) => {root.light-activate(i);}
+        back => {root.light-back();}
+    }
 
     wifi-setup := WifiSetup {
         x: root.wifi-setup-shown && !root.keyboard-shown ? 0px : root.width;

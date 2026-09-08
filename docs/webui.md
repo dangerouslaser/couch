@@ -39,8 +39,9 @@ validation/network failures keep local drafts for correction or retry.
 
 ### Current product boundary
 
-This editor stores configuration; the current Slint GUI still uses its example
-home. The overview labels this boundary directly. The screen preview is a
+The Slint GUI reads saved rooms and area order and reloads changes while on its
+home screen. Opening a room provides Home Assistant light controls. Activities,
+scenes and other device domains are still pending. The screen preview is a
 configuration visualization, not a live screenshot or a free-form layout editor.
 Home Assistant server setup, light discovery and explicit light controls are
 available under Connections; see [Home Assistant lights](home-assistant.md).

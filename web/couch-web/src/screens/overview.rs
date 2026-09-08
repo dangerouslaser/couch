@@ -23,7 +23,7 @@ pub fn overview(app: App, config: &Config) -> AnyView {
     view! {
         <div class="hero"><p class="eyebrow">"MAKE IT YOUR REMOTE"</p><h1>"A home that makes sense."</h1>
         <p>"Add the things you control, decide what they do together, then arrange your remote’s screens."</p></div>
-        <section class="notice"><strong>"Configuration preview"</strong><p>"Your changes are saved on this server. The current remote GUI still uses its built-in example home; these settings do not yet change its screens or run device commands."</p></section>
+        <section class="notice"><strong>"Your remote’s configuration"</strong><p>"Rooms and their screen order update on the remote. Home Assistant lights support on/off and brightness. Activities, scenes and other device controls are still being connected."</p></section>
         <h2 class="section">"Set up in three steps"</h2>
         <div class="destination-grid">
             {destination(app, Route::Rooms, "01 · Rooms & devices".into(), format!("Start with a room, then add its TV, lights or player. {} rooms · {} devices", config.rooms.len(), config.devices().count()))}

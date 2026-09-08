@@ -18,6 +18,7 @@ export struct RoomRow {
     detail: string,     // "Kodi, Hue, LG C3" - may be empty
 
     active-count: int,
+    status-known: bool,
     idle: bool,
     offline: bool,
     dimmed: bool,       // Study in the reference: idle and recessed further
@@ -402,7 +403,7 @@ component AreaPane inherits Rectangle {
                                 // behind the dot; on the software renderer that
                                 // is a blur we cannot afford, so the documented
                                 // substitute is a 1px accent ring.
-                                VerticalLayout {
+                                if area.status-known: VerticalLayout {
                                     alignment: center;
                                     spacing: 6px;
                                     horizontal-stretch: 0;

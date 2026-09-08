@@ -19,6 +19,9 @@ mod touch;
 mod wifi;
 mod network;
 mod network_ui;
+mod home;
+mod lights;
+use home::Area;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -162,20 +165,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new().map_err(|e| format!("App::new: {e:?}"))?;
 
     // Areas are a level above rooms: left and right move between them, up and
-    // down between the rooms inside one. Seeded here until a hub daemon exists.
-    struct Area {
-        name: &'static str,
-        activities: Vec<LiveActivity>,
-        rooms: Vec<RoomRow>,
-        scenes: Vec<SceneCell>,
-    }
-
+    // down between the rooms inside one. The demo remains a fallback when no
+    // saved home exists; normal operation reloads the daemon's configuration.
     fn room(name: &str, devices: &str, detail: &str, on: i32, glyph: i32) -> RoomRow {
         RoomRow {
             name: name.into(),
             devices: devices.into(),
             detail: detail.into(),
             active_count: on,
+            status_known: true,
             idle: on == 0,
             offline: false,
             dimmed: false,
@@ -200,7 +198,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut areas = vec![
         Area {
-            name: "WHOLE HOME",
+            name: "WHOLE HOME".into(),
+            room_ids: Vec::new(),
             activities: vec![
                 act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
                 act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
@@ -221,7 +220,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         },
         Area {
-            name: "UPSTAIRS",
+            name: "UPSTAIRS".into(),
+            room_ids: Vec::new(),
             activities: vec![act(0, "White noise", "SONOS", "BEDROOM")],
             rooms: vec![
                 room("Bedroom", "3 devices", "Hue, Sonos One", 0, 1),
@@ -231,7 +231,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scenes: vec![scene("Bedtime"), scene("Wake up"), scene("Upstairs off")],
         },
         Area {
-            name: "DOWNSTAIRS",
+            name: "DOWNSTAIRS".into(),
+            room_ids: Vec::new(),
             activities: vec![
                 act(1, "Paused - Andrei Rublev", "KODI", "LIVING"),
                 act(0, "Midnight Ferry", "SONOS", "KITCHEN"),
@@ -251,7 +252,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         },
         Area {
-            name: "OUTSIDE",
+            name: "OUTSIDE".into(),
+            room_ids: Vec::new(),
             activities: vec![],
             rooms: vec![
                 room("Garden", "3 devices", "Hue, Cameras", 1, 6),
@@ -280,9 +282,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         areas[0].rooms.truncate(n);
     }
 
+    let mut loaded_home = String::new();
+    if let Some((raw, saved)) = home::read(&loaded_home) { loaded_home = raw; areas = saved; }
+    let mut light_controls = lights::Controller::install(&app);
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
-    let areas = Rc::new(areas);
+    let areas = Rc::new(std::cell::RefCell::new(areas));
     // The area on screen. One index: a page change is applied in one go and
     // the slide is composed from the frame before it and the frame after, so
     // there is no 180ms during which the pager and the page disagree.
@@ -303,8 +308,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let put_front = {
         let areas = areas.clone();
         move |app: &App, index: usize| {
-            let a = &areas[index];
-            app.set_area_name(a.name.into());
+            let area_data = areas.borrow();
+            let a = &area_data[index];
+            app.set_area_name(a.name.as_str().into());
             app.set_area_index(index as i32);
             app.set_activities(ModelRc::new(VecModel::from(a.activities.clone())));
             app.set_rooms(ModelRc::new(VecModel::from(a.rooms.clone())));
@@ -320,7 +326,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first = std::env::var("COUCH_AREA")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|i| *i < areas.len())
+        .filter(|i| *i < areas.borrow().len())
         .unwrap_or(0);
     put_front(&app, first);
     current.set(first);
@@ -340,8 +346,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // OK on the strip or the scenes row opens what is there: straight through
-    // when there is one of it, as a list when there are several. A room has
-    // no screen behind it yet. The hub says which of the three it was and, for
+    // when there is one of it, as a list when there are several. Room controls
+    // use the saved room ID. The hub says which of the three it was and, for
     // a room, which one; it never hands over a row index. The chooser's
     // content is set here, where the list is known; showing it is the
     // transition, which the loop performs.
@@ -352,7 +358,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ask = ask.clone();
         app.on_open_strip(move || {
             let Some(app) = weak.upgrade() else { return };
-            let a = &areas[current.get()];
+            let area_data = areas.borrow();
+            let a = &area_data[current.get()];
             match a.activities.len() {
                 0 => return,
                 1 => {
@@ -385,7 +392,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ask = ask.clone();
         app.on_open_scenes(move || {
             let Some(app) = weak.upgrade() else { return };
-            let a = &areas[current.get()];
+            let area_data = areas.borrow();
+            let a = &area_data[current.get()];
             match a.scenes.len() {
                 0 => return,
                 1 => {
@@ -412,10 +420,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let areas = areas.clone();
         let current = current.clone();
+        let open = light_controls.opener();
         app.on_open_room(move |index| {
-            if let Some(r) = areas[current.get()].rooms.get(index as usize) {
-                println!("couch-gui: open room '{}'", r.name);
-            }
+            if let Some(id) = areas.borrow()[current.get()].room_ids.get(index as usize) { open(id.clone()); }
         });
     }
 
@@ -473,7 +480,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match what {
                 Intent::Area(delta) => {
                     let cur = current.get();
-                    let next = (cur as i32 + delta).rem_euclid(areas.len() as i32) as usize;
+                    let next = (cur as i32 + delta).rem_euclid(areas.borrow().len() as i32) as usize;
                     if next == cur {
                         return None;
                     }
@@ -820,7 +827,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 None => {}
             }
-            if let Some(key) = press.key {
+            if let Some(key) = press.key.filter(|_| !app.get_pair_shown()) {
                 let text = SharedString::from(char::from(key));
                 window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
                 window.dispatch_event(WindowEvent::KeyReleased { text });
@@ -904,7 +911,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // over. The state it shows - the SSID, whether SSH is up - is read here,
         // once, at open time rather than on the tick.
         if let Some(t) = menu_down_at {
-            let on_home = !app.get_wifi_setup_shown() && !app.get_settings_shown()
+            let on_home = !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
                 && !app.get_keyboard_shown()
                 && !app.get_chooser_shown()
                 && !app.get_pair_shown()
@@ -923,6 +930,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         network_setup.poll(&app);
+        light_controls.poll(&app);
 
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {
@@ -932,6 +940,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tz_checked = now;
             }
             app.set_clock(SharedString::from(system::clock_24h(tz_offset)));
+            if !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
+                if let Some((raw, saved)) = home::read(&loaded_home) {
+                    if raw != loaded_home {
+                        loaded_home = raw; *areas.borrow_mut() = saved;
+                        current.set(0); app.set_area_dots(ModelRc::new(VecModel::from(vec![true;areas.borrow().len()])));
+                        put_front(&app,0);
+                    }
+                }
+            }
+
 
             // The deadline is the daemon's, carried in the file, so restarting
             // this process cannot extend a PIN that is already on its way out.
@@ -976,7 +994,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Standby. Anything a person is looking at or waiting on holds
             // the panel awake and restarts the clock; otherwise it dims, then
             // powers down, on the two idle timers.
-            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown();
+            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown() || app.get_light_shown();
             let idle = now.saturating_sub(last_input);
             // The panel is meant to be showing something in every state but
             // Off. If the driver says it is asleep anyway - it has happened,

@@ -59,13 +59,28 @@ export CC_armv7_unknown_linux_musleabihf="$PWD/tools/arm-musl-cc.py"
 (cd clients && cargo build -p couch-ha --release --target armv7-unknown-linux-musleabihf)
 ```
 
-The ARM CLI and editor are deployed. A real Home Assistant connection and a
-user-designated test light are still needed for physical validation. Slint room
-controls are the next integration step; this web deployment alone does not make
-the existing example home consume the saved configuration. Color, temperature,
+The ARM CLI, editor and Slint room controls are deployed. The GUI reads saved
+area/room order and reloads changes on the home screen; ALL ROOMS keeps rooms
+accessible during setup. Open a room, choose a light, then use on/off or brightness
+in 10% steps. Requests run on a bounded worker queue; unavailable lights show
+Refresh/Back and old responses cannot replace a newer screen. Aggregate room
+status remains hidden until all device state is available. PIN pairing blocks
+interaction with covered controls.
+
+The physical GUI was exercised against an isolated HA fixture: room discovery,
+D-pad on, and 40% brightness reached the Rust client's real HTTP service path.
+Screenshots are in ignored `build/ha-device-{room,light,brightness}.png`.
+`COUCH_HOME_DIR` overrides the directory containing `config.json` and
+`ha-connection.json` for isolated GUI tests. Thirty GUI tests cover existing
+input/Wi-Fi logic and home projection. A real Home Assistant connection and a
+user-designated test light are still needed to validate household hardware. Color, temperature,
 groups, other entity domains and push subscriptions are deferred until light
 power and brightness have passed live testing.
 
 Protocol references: [Home Assistant REST API](https://developers.home-assistant.io/docs/api/rest/),
 [light actions](https://www.home-assistant.io/integrations/light/), and
 [ureq configuration](https://docs.rs/ureq/latest/ureq/).
+
+The new GUI modules pass rustfmt checks. Workspace-wide `cargo fmt --check`
+still reports existing formatting differences in files such as `keypad.rs`;
+unrelated formatting was left unchanged. Final ARM GUI is 4,060,196 bytes.

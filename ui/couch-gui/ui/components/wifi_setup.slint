@@ -3,6 +3,7 @@ import { Chooser, ChoiceItem } from "chooser.slint";
 
 export component WifiSetup inherits Rectangle {
     in property <bool> shown;
+    in property <string> caption: "WI-FI SETUP";
     in property <string> title;
     in property <string> detail;
     in property <[ChoiceItem]> items;
@@ -15,7 +16,7 @@ export component WifiSetup inherits Rectangle {
     VerticalLayout {
         padding-top: 26px;
         spacing: 12px;
-        Text { text: "WI-FI SETUP"; color: Theme.text-quaternary; font-size: 15px; horizontal-alignment: center; }
+        Text { text: root.caption; color: Theme.text-quaternary; font-size: 15px; horizontal-alignment: center; }
         Text { text: root.title; color: Theme.text; font-size: 28px; font-weight: 600; horizontal-alignment: center; wrap: word-wrap; }
         Text { text: root.detail; color: Theme.text-secondary; font-size: 18px; horizontal-alignment: center; wrap: word-wrap; min-height: 70px; }
         Chooser {
