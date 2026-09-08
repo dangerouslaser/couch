@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { FocusRing } from "focus_ring.slint";
 import { ChoiceItem } from "chooser.slint";
 
 // One flat list. State updates mutate model rows, preserving focus and scroll.
@@ -12,25 +13,71 @@ export component RoomDevices inherits Rectangle {
     property <length> scroll: 0px;
     callback activate(int);
     callback back();
-    changed items => { root.index = 0; root.scroll = 0px; }
+    property <length> row-h: 90px;
+    property <length> pitch: 101px;
+    property <length> scroll-goal: 0px;
+    property <length> ring-y: 0px;
+    property <bool> anim: false;
+    animate scroll, ring-y { duration: root.anim ? 160ms : 0ms; easing: ease-out; }
+    changed items => {
+        root.index = 0;
+        root.anim = false;
+        root.scroll-goal = 0px;
+        root.scroll = 0px;
+        root.ring-y = 0px;
+    }
     changed shown => { root.ok-down = false; }
     changed index => {
-        if (root.index * 82px < root.scroll) { root.scroll = root.index * 82px; }
-        if ((root.index + 1) * 82px > root.scroll + list.height) { root.scroll = (root.index + 1) * 82px - list.height; }
+        root.anim = true;
+        if (root.index * root.pitch < root.scroll-goal) {
+            root.scroll-goal = root.index * root.pitch;
+        }
+        if (root.index * root.pitch + root.row-h > root.scroll-goal + list.height - 12px) {
+            root.scroll-goal = root.index * root.pitch + root.row-h - (list.height - 12px);
+        }
+        root.scroll = root.scroll-goal;
+        root.ring-y = root.index * root.pitch;
     }
     public function take-focus() { keys.focus(); }
     background: Theme.bg;
     Text { x: 20px; y: 24px; width: parent.width - 40px; height: 42px; text: root.title; color: Theme.text; font-size: 28px; font-weight: 600; overflow: elide; }
     list := Rectangle {
-        x: 16px; y: 88px; width: parent.width - 32px; height: parent.height - 156px; clip: true;
-        for item[i] in root.items : Rectangle {
-            y: i * 82px - root.scroll; width: parent.width; height: 82px;
-            background: i == root.index ? Theme.surface : Theme.bg;
-            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: i == root.index ? Theme.accent : transparent; }
-            Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border; }
-            Text { x: 18px; y: 12px; width: parent.width - 36px; height: 28px; text: item.title; color: Theme.text; font-size: 22px; overflow: elide; }
-            Text { x: 18px; y: 45px; width: parent.width - 36px; height: 22px; text: item.detail; color: item.active ? Theme.accent : Theme.text-secondary; font-size: 16px; overflow: elide; }
-            TouchArea { clicked => { root.index = i; root.activate(i); } }
+        x: Theme.pad-side - 6px; y: 82px;
+        width: parent.width - 2 * (Theme.pad-side - 6px);
+        height: parent.height - 150px; clip: true;
+        Rectangle {
+            x: 6px; y: 6px - root.scroll; width: parent.width - 12px;
+            height: max(0px, root.items.length * root.pitch - 11px);
+            for item[i] in root.items : Rectangle {
+                x: 0px; y: i * root.pitch; width: parent.width; height: root.row-h;
+                background: Theme.surface;
+                border-width: 1px; border-color: Theme.border; border-radius: Theme.r-row;
+                // Like the room list, a tap selects; OK acts on the focused row.
+                TouchArea { clicked => { root.index = i; } }
+                HorizontalLayout {
+                    padding: 18px; spacing: 16px;
+                    Rectangle {
+                        width: 52px; height: 52px; border-radius: Theme.r-disc;
+                        background: Theme.surface-icon;
+                        border-width: 1px; border-color: Theme.border-icon;
+                        Image {
+                            x: 14px; y: 14px; width: 24px; height: 24px;
+                            source: item.light ? @image-url("../../assets/icon-lightbulb.png") : @image-url("../../assets/icon-monitor.png");
+                            colorize: Theme.accent;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center; spacing: 2px;
+                        Text { text: item.title; color: Theme.text; font-size: 26px; font-weight: 600; overflow: elide; }
+                        Text { text: item.detail; color: item.active ? Theme.accent : Theme.text-secondary; font-size: 19px; overflow: elide; }
+                    }
+                }
+            }
+            if root.items.length > 0: Rectangle {
+                x: 0px; y: root.ring-y; width: parent.width; height: root.row-h;
+                background: transparent;
+                FocusRing { focused: true; radius-inner: Theme.r-row; box-width: parent.width; box-height: parent.height; }
+            }
         }
     }
     Text { x: 20px; y: parent.height - 56px; width: parent.width - 40px; height: 48px; text: root.detail; color: Theme.text-secondary; font-size: 16px; wrap: word-wrap; }

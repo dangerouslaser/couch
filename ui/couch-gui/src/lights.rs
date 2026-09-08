@@ -155,10 +155,14 @@ fn perform(room: &Id, operation: Operation) -> Result<Answer, String> {
             // also handles a light changed from another app since opening the room.
             let mut state = if let Some(raw) = id.strip_prefix("hue:") {
                 let c = hue()?;
-                let state = c.light(raw).map_err(|e| e.to_string())?;
-                c.command(raw, toggle_command(&state)?)
-                    .map_err(|e| e.to_string())?;
-                c.light(raw).map_err(|e| e.to_string())?
+                let started = Instant::now();
+                let result = c.toggle(raw).map_err(|e| e.to_string());
+                println!(
+                    "couch-gui: Hue toggle acknowledged in {} ms (success={})",
+                    started.elapsed().as_millis(),
+                    result.is_ok()
+                );
+                result?
             } else if id.starts_with("device:") {
                 return Err("Controls for this device are not available yet".into());
             } else {
@@ -226,6 +230,7 @@ impl Controller {
         ChoiceItem {
             title: e.name.clone().into(),
             detail: detail.into(),
+            light: !e.id.starts_with("device:"),
             active: e.state.as_ref().is_some_and(|s| s.on == Some(true)),
         }
     }

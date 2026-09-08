@@ -69,6 +69,7 @@ impl Controller {
                     title: title.into(),
                     detail: detail.into(),
                     active: false,
+                    light: false,
                 })
                 .collect::<Vec<_>>(),
         )));

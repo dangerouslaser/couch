@@ -377,6 +377,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Everything in this list is playing, so a dot marking
                     // that would be on every row and mean nothing.
                     active: false,
+                    light: false,
                 })
                 .collect();
             app.set_chooser_title("NOW PLAYING".into());
@@ -409,6 +410,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     title: x.name.clone(),
                     detail: SharedString::new(),
                     active: x.active,
+                    light: false,
                 })
                 .collect();
             app.set_chooser_title("SCENES".into());

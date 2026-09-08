@@ -202,6 +202,20 @@ impl Hue {
             return Err(Error::Brightness);
         }
         let state = self.light(id)?;
+        self.command_for_state(&state, command)
+    }
+    /// Toggle from a fresh observation. Returns the bridge-acknowledged target,
+    /// not a second observation of the bulb; callers should reconcile later.
+    pub fn toggle(&self, id: &str) -> Result<Light> {
+        let mut state = self.light(id)?;
+        let on = !state.on.ok_or(Error::Unavailable)?;
+        self.command_for_state(&state, if on { Command::On } else { Command::Off })?;
+        state.on = Some(on);
+        state.brightness_percent = if on { None } else { Some(0) };
+        Ok(state)
+    }
+    fn command_for_state(&self, state: &Light, command: Command) -> Result<()> {
+        let id = state.entity_id.as_str();
         if state.on.is_none() {
             return Err(Error::Unavailable);
         }
@@ -234,6 +248,80 @@ impl Hue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn toggle_reads_once_and_only_returns_target_after_acknowledgement() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        for (connected, reject) in [(true, false), (false, false), (true, true)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let id = "00000000-0000-0000-0000-000000000001";
+            let server = std::thread::spawn(move || {
+                for request in 0..if connected { 2 } else { 1 } {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let header_end = loop {
+                        let mut b = [0];
+                        socket.read_exact(&mut b).unwrap();
+                        bytes.push(b[0]);
+                        if bytes.ends_with(b"\r\n\r\n") {
+                            break bytes.len();
+                        }
+                    };
+                    let header = String::from_utf8(bytes).unwrap();
+                    let length = header
+                        .lines()
+                        .find_map(|l| {
+                            let (key, value) = l.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    let mut body = vec![0; length];
+                    socket.read_exact(&mut body).unwrap();
+                    assert!(header_end > 0);
+                    let value = if request == 0 {
+                        assert!(header.starts_with("GET /clip/v2/resource "));
+                        json!({"errors":[], "data":[
+                            {"type":"light","id":id,"owner":{"rid":"device"},"on":{"on":false}},
+                            {"type":"zigbee_connectivity","owner":{"rid":"device"},"status":if connected {"connected"} else {"disconnected"}}
+                        ]})
+                    } else {
+                        assert!(header.starts_with(&format!("PUT /clip/v2/resource/light/{id} ")));
+                        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),json!({"on":{"on":true}}));
+                        if reject { json!({"errors":[{}],"data":[]}) }
+                        else { json!({"errors":[],"data":[{"rid":id,"rtype":"light"}]}) }
+                    }.to_string();
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        value.len(),
+                        value
+                    )
+                    .unwrap();
+                }
+            });
+            let client = Hue {
+                base: format!("http://{address}"),
+                key: "fixture".into(),
+                agent: ureq::Agent::new_with_defaults(),
+            };
+            let result = client.toggle(id);
+            if !connected {
+                assert_eq!(result.unwrap_err(), Error::Unavailable);
+            } else if reject {
+                assert_eq!(result.unwrap_err(), Error::Rejected);
+            } else {
+                let state = result.unwrap();
+                assert_eq!(state.on, Some(true));
+                assert_eq!(state.brightness_percent, None);
+            }
+            server.join().unwrap();
+        }
+    }
     #[test]
     fn rejects_unsafe_addresses_and_ids() {
         for a in [

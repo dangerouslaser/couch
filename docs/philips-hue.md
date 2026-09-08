@@ -14,7 +14,8 @@ implemented yet. One bridge connection is supported per remote.
    connection under **Add devices to this room**. Search the discovered lights and
    click **Add to this room**. Discovery never assigns devices automatically.
 4. Open that room on the remote. Devices appear in one flat list. Highlight a light
-   and press OK to toggle it, or tap its row. Physical Back returns home. Use
+   and press OK to toggle it. Tapping selects a row, matching room navigation.
+   Physical Back returns home. Use
    **Show light controls** on an assigned device in the web editor for brightness.
    Zero-percent brightness means off.
 
@@ -85,3 +86,17 @@ the selected D-pad row. The same test verified the configured purple accent.
 Flat-room validation: on-device HTTPS fixture testing verified direct OK on/off,
 live-state toggle after an external state change, and one toggle when OK is held.
 Both entry and exit slides rendered 11 frames. All 32 GUI unit tests passed.
+
+Device rows use the home room list’s 90 px rounded cards, icon discs, typography,
+and shared focus ring with 160 ms focus/scroll motion. The list stays ungrouped.
+Hue toggles use one live-state GET and one PUT instead of three GETs and a PUT.
+After acknowledgement, the row displays the accepted target; the next periodic
+refresh reconciles observed state and brightness. Failed commands retain the
+previous state and show an error. This reduces requests without toggling from
+a stale cache; bridge acknowledgement is not proof the bulb has finished fading.
+
+Validation: 32 GUI tests and five Hue client tests pass, including the exact
+two-request toggle sequence, unavailable-state refusal, and rejected-command
+handling. An eight-device fixture on the physical remote verified scrolling,
+wraparound, focus styling, toggles and both slide directions. Fixture toggle
+acknowledgements took 71–263 ms; these are not real-bridge/bulb latency measurements.
