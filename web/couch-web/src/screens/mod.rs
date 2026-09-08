@@ -7,6 +7,7 @@
 
 pub mod activities;
 pub mod areas;
+pub mod overview;
 pub mod rooms;
 pub mod scenes;
 
@@ -14,12 +15,14 @@ use couch_model::{Config, Id};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-
 use crate::route::Route;
 use crate::App;
 
 pub fn render(app: App, config: &Config, route: Route) -> AnyView {
     match route {
+        Route::Overview => overview::overview(app, config),
+        Route::Rooms => overview::rooms(app, config),
+        Route::Connections => overview::connections(app, config),
         Route::Areas => areas::list(app, config),
         Route::Area(id) => areas::detail(app, config, &id),
         Route::Room(id) => rooms::detail(app, config, &id),
@@ -168,11 +171,13 @@ pub fn reorder_buttons(
         <span class="reorder">
             <button
                 class="icon"
+                aria-label="Move up"
                 disabled=up.is_none()
                 on:click=move |_| if let Some(next) = up.clone() { up_commit(next) }
             >"↑"</button>
             <button
                 class="icon"
+                aria-label="Move down"
                 disabled=down.is_none()
                 on:click=move |_| if let Some(next) = down.clone() { commit(next) }
             >"↓"</button>
@@ -227,3 +232,17 @@ pub fn counts(parts: &[(usize, &str, &str)]) -> String {
         .join(" · ")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn reordering_preserves_members_and_rejects_edges() {
+        let ids = vec![Id::new("one"), Id::new("two"), Id::new("three")];
+        assert_eq!(moved(&ids, 0, -1), None);
+        assert_eq!(moved(&ids, 2, 1), None);
+        assert_eq!(
+            moved(&ids, 1, -1).unwrap(),
+            vec![ids[1].clone(), ids[0].clone(), ids[2].clone()]
+        );
+    }
+}

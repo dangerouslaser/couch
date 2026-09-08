@@ -9,7 +9,6 @@
 //! top, then the rooms, then the scenes. An editor that mirrors the page it
 //! edits saves the reader working out which is which.
 
-
 use couch_model::{Area, Config, Icon, Id};
 use leptos::prelude::*;
 use serde_json::json;
@@ -22,7 +21,8 @@ pub fn list(app: App, config: &Config) -> AnyView {
     let rows = config
         .areas
         .iter()
-        .map(|area| {
+        .enumerate()
+        .map(|(index, area)| {
             let id = area.id.clone();
             let open = id.clone();
             let subtitle = counts(&[
@@ -32,8 +32,17 @@ pub fn list(app: App, config: &Config) -> AnyView {
             ]);
 
             let name = area.name.clone();
+            let order: Vec<Id> = config.areas.iter().map(|a| a.id.clone()).collect();
+            let base = config.clone();
+            let reorder = move |order: Vec<Id>| {
+                let mut next = base.clone();
+                next.areas
+                    .sort_by_key(|a| order.iter().position(|id| id == &a.id));
+                app.run(api::put("/api/config", next));
+            };
             view! {
                 <li class="row">
+                    {reorder_buttons(order, index, reorder)}
                     <button class="row-main" on:click=move |_| app.go(Route::Area(open.clone()))>
                         <span class="row-title">{name}</span>
                         <span class="row-sub">{subtitle}</span>
@@ -48,13 +57,13 @@ pub fn list(app: App, config: &Config) -> AnyView {
 
     let empty = config.areas.is_empty();
     view! {
-        {ui::page_header(app, "Areas".to_string(), None)}
+        {ui::page_header(app, "Remote screens".to_string(), None)}
         <p class="dim pad-x">
-            "An area is a page on the remote: left and right move between them."
+            "Each area is one remote screen, such as Whole home or Upstairs. Choose its rooms, activity strip and scene shortcuts. Use the arrows to set the left-to-right screen order."
         </p>
         <ul class="rows">{rows}</ul>
         {empty.then(|| ui::empty("No areas yet. The remote needs at least one."))}
-        {ui::add_row("New area name", "Add", move |name| {
+        {ui::add_row("Screen / area name", "Create screen", move |name| {
             app.run(api::post("/api/areas", json!({ "name": name })))
         })}
     }
@@ -69,6 +78,8 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
 
     view! {
         {ui::page_header(app, area.name.clone(), Some(Route::Areas))}
+        {screen_preview(config, area)}
+        <p class="lead">"Edit this area’s screen below. Changes to names and order save automatically. Unlink removes only the shortcut from this screen."</p>
         <section class="card">
             {name_and_icon(app, area)}
         </section>
@@ -87,11 +98,11 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
         <h2 class="section">"Rooms"</h2>
         <ul class="rows">{room_rows(app, config, area)}</ul>
 
-        {config.rooms.is_empty().then(|| ui::empty("There are no rooms yet."))}
+        {area.rooms.is_empty().then(|| ui::empty("No rooms on this screen. Add an existing room below, or create a new one."))}
         {attach_existing_room(app, config, area)}
         {
             let for_new = id.clone();
-            ui::add_row("New room name", "Create", move |name| {
+            ui::add_row("New room name", "Create & add room", move |name| {
                 app.run(api::post(
                     format!("/api/areas/{for_new}/rooms"),
                     json!({ "name": name }),
@@ -104,7 +115,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
         {attach_existing_scene(app, config, area)}
         {
             let for_new = id.clone();
-            ui::add_row("New scene name", "Create", move |name| {
+            ui::add_row("New scene name", "Create & add scene", move |name| {
                 app.run(api::post(
                     format!("/api/areas/{for_new}/scenes"),
                     json!({ "name": name }),
@@ -133,7 +144,10 @@ fn name_and_icon(app: App, area: &Area) -> AnyView {
     let save = {
         let id = area.id.clone();
         move |name: String, icon: Option<Icon>| {
-            app.run(api::put(format!("/api/areas/{id}"), json!({ "name": name, "icon": icon })));
+            app.run(api::put(
+                format!("/api/areas/{id}"),
+                json!({ "name": name, "icon": icon }),
+            ));
         }
     };
     let (for_name, for_icon) = (save.clone(), save);
@@ -186,7 +200,7 @@ fn room_rows(app: App, config: &Config, area: &Area) -> AnyView {
                         on:click=move |_| app.run(api::delete(
                             format!("/api/areas/{detach_area}/rooms/{detach}")
                         ))
-                    >"Remove"</button>
+                    >"Unlink"</button>
                 </li>
             }
             .into_any()
@@ -226,7 +240,7 @@ fn scene_rows(app: App, config: &Config, area: &Area) -> AnyView {
                         on:click=move |_| app.run(api::delete(
                             format!("/api/areas/{detach_area}/scenes/{detach}")
                         ))
-                    >"Remove"</button>
+                    >"Unlink"</button>
                 </li>
             }
             .into_any()
@@ -283,7 +297,7 @@ fn activity_rows(app: App, config: &Config, area: &Area) -> AnyView {
                         on:click=move |_| app.run(api::delete(
                             format!("/api/areas/{detach_area}/activities/{detach}")
                         ))
-                    >"Remove"</button>
+                    >"Unlink"</button>
                 </li>
             }
             .into_any()
@@ -316,25 +330,30 @@ fn attach_existing_activity(app: App, config: &Config, area: &Area) -> AnyView {
 /// defensible guess. It is named in the caption rather than silently applied,
 /// and the activity's own screen can move it.
 fn new_activity(app: App, config: &Config, area: &Area) -> AnyView {
-    let Some(room) = config.rooms_in_area(area).next() else {
-        return ().into_any();
-    };
-    let (room_id, room_name) = (room.id.clone(), room.name.clone());
-    let area_id = area.id.clone();
-    view! {
-        {ui::add_row("New activity name", "Create", move |name| {
-            app.run(api::post(
-                format!("/api/areas/{area_id}/activities"),
-                json!({ "name": name, "room": room_id }),
-            ))
-        })}
-        <p class="dim pad-x">{format!("A new activity here happens in {room_name}.")}</p>
+    if area.rooms.is_empty() {
+        return ui::empty("Add a room to this screen before creating an activity here.");
     }
-    .into_any()
+    let room = RwSignal::new(area.rooms[0].to_string());
+    let area_id = area.id.clone();
+    view! { <section class="creation compact"><h3>"Create an activity for this screen"</h3>
+        <label class="field"><span class="label">"Activity room"</span><select prop:value=move || room.get() on:change=move |e| room.set(event_target_value(&e))>
+        {config.rooms_in_area(area).map(|r| view! { <option value=r.id.to_string()>{r.name.clone()}</option> }).collect_view()}</select></label>
+        {ui::add_row("New activity name", "Create & add activity", move |name| app.run(api::post(format!("/api/areas/{area_id}/activities"), json!({"name":name,"room":room.get()}))))}
+    </section> }.into_any()
+}
+
+fn screen_preview(config: &Config, area: &Area) -> AnyView {
+    view! { <section class="screen-preview" aria-label="Configured screen preview">
+        <div><p class="eyebrow">"SCREEN STRUCTURE PREVIEW"</p><h2>{area.name.clone()}</h2><p class="dim">"This shows saved content and order, not live device state. The visual layout is fixed; individual buttons cannot be placed freely."</p></div>
+        <div class="remote-outline"><span class="label">"Activity strip · shown when running"</span>
+        <div class="preview-chips">{config.activities_in_area(area).map(|a| view! { <span>{a.name.clone()}</span> }).collect_view()}</div>
+        <span class="label">"Rooms · top to bottom"</span>
+        {config.rooms_in_area(area).map(|r| view! { <div class="preview-room"><strong>{r.name.clone()}</strong><small>{r.device_summary()}</small></div> }).collect_view()}
+        <span class="label">"Scene shortcuts"</span><div class="preview-chips">{config.scenes_in_area(area).map(|s| view! { <span>{s.name.clone()}</span> }).collect_view()}</div></div>
+    </section> }.into_any()
 }
 
 fn attach_existing_room(app: App, config: &Config, area: &Area) -> AnyView {
-
     let options: Vec<(String, String)> = config
         .rooms
         .iter()

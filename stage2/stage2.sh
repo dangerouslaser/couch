@@ -307,6 +307,13 @@ if [ "${COUCH_NO_UI:-0}" = "1" ]; then
     exit 0
 fi
 
+# The configuration editor uses Alpine paths and the shared /tmp pairing PIN.
+# Keep it supervised independently of the physical display process.
+if [ -x "$A/opt/couch/couch-confd" ] && [ -f "$A/opt/couch/confd.sh" ]; then
+    $BB chroot "$A" /bin/sh /opt/couch/confd.sh </dev/null >/tmp/confd-supervisor.log 2>&1 &
+    echo "= configuration editor on port 8090"
+fi
+
 # --- the UI ------------------------------------------------------------------
 # Start it last, so anything above still reports to the screen through fbcon.
 # couch-gui takes the panel over when it starts and shows its own splash.

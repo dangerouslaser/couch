@@ -1,6 +1,6 @@
 //! Where in the app we are, kept in the browser's URL.
 //!
-//! Hand-rolled rather than `leptos_router`. There are seven screens and the
+//! Hand-rolled rather than `leptos_router`. The small route set is explicit and the
 //! whole router is one enum, two string functions and a `popstate` listener;
 //! the crate would add a matcher, a nested-route tree and a set of macros to
 //! do the same thing, on a bundle that is downloaded over the remote's own
@@ -16,6 +16,9 @@ use leptos::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
+    Overview,
+    Rooms,
+    Connections,
     Areas,
     Area(Id),
     Room(Id),
@@ -28,9 +31,16 @@ pub enum Route {
 
 impl Route {
     pub fn from_path(path: &str) -> Route {
-        let parts: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = path
+            .trim_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
         match parts.as_slice() {
-            [] => Route::Areas,
+            [] => Route::Overview,
+            ["overview"] => Route::Overview,
+            ["rooms"] => Route::Rooms,
+            ["connections"] => Route::Connections,
             ["areas"] => Route::Areas,
             ["areas", id] => Route::Area(Id::new(*id)),
             ["rooms", id] => Route::Room(Id::new(*id)),
@@ -44,6 +54,9 @@ impl Route {
 
     pub fn path(&self) -> String {
         match self {
+            Route::Overview => "/".to_string(),
+            Route::Rooms => "/rooms".to_string(),
+            Route::Connections => "/connections".to_string(),
             Route::Areas | Route::NotFound => "/areas".to_string(),
             Route::Area(id) => format!("/areas/{id}"),
             Route::Room(id) => format!("/rooms/{id}"),
@@ -54,9 +67,12 @@ impl Route {
         }
     }
 
-    /// Which of the three bottom-bar tabs this screen belongs to.
+    /// Which navigation destination this screen belongs to.
     pub fn tab(&self) -> Route {
         match self {
+            Route::Overview => Route::Overview,
+            Route::Rooms | Route::Room(_) => Route::Rooms,
+            Route::Connections => Route::Connections,
             Route::Scenes | Route::Scene(_) => Route::Scenes,
             Route::Activities | Route::Activity(_) => Route::Activities,
             _ => Route::Areas,
@@ -103,4 +119,28 @@ fn current_path() -> String {
         .location()
         .pathname()
         .unwrap_or_else(|_| "/".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn navigation_round_trips_and_keeps_old_bookmarks() {
+        for route in [
+            Route::Overview,
+            Route::Rooms,
+            Route::Connections,
+            Route::Areas,
+            Route::Area(Id::new("upstairs")),
+            Route::Room(Id::new("study")),
+            Route::Scenes,
+            Route::Scene(Id::new("night")),
+            Route::Activities,
+            Route::Activity(Id::new("tv")),
+        ] {
+            assert_eq!(Route::from_path(&route.path()), route);
+        }
+        assert_eq!(Route::Room(Id::new("study")).tab(), Route::Rooms);
+        assert_eq!(Route::from_path("/unknown"), Route::NotFound);
+    }
 }

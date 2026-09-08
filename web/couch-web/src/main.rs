@@ -56,6 +56,9 @@ impl App {
     where
         F: Future<Output = Result<Config, ApiError>> + 'static,
     {
+        if self.busy.get_untracked() {
+            return;
+        }
         let (config, error, busy, paired) = (self.config, self.error, self.busy, self.paired);
         busy.set(true);
         error.set(None);
@@ -69,21 +72,20 @@ impl App {
                     paired.set(Some(false));
                 }
                 Err(e) => {
-                    error.set(Some(e.message));
-                    // The screen is now showing something the daemon refused
-                    // to act on - most often a room that another phone has
-                    // already deleted. Re-reading costs one GET and is the
-                    // difference between a page that stays wrong and one that
-                    // explains itself. A failed re-read changes nothing: the
-                    // message from the edit is the more useful of the two.
-                    if let Ok(fresh) = api::load().await {
-                        config.set(Some(fresh));
+                    // A failed validation or network request must leave the
+                    // local device draft intact. Reload only stale references.
+                    if e.stale {
+                        error.set(Some(format!("{} Your saved configuration has been reloaded. Review it before trying again.", e.message)));
+                        if let Ok(fresh) = api::load().await {
+                            config.set(Some(fresh));
+                        }
+                    } else {
+                        error.set(Some(e.message));
                     }
                 }
             }
             busy.set(false);
         });
-
     }
 
     pub fn go(&self, route: Route) {
@@ -120,7 +122,10 @@ fn Shell() -> impl IntoView {
     // session lives a week, so the common case is that it is and the PIN box
     // never appears.
     spawn_local(async move {
-        let known = api::auth_status().await.map(|s| s.authenticated).unwrap_or(false);
+        let known = api::auth_status()
+            .await
+            .map(|s| s.authenticated)
+            .unwrap_or(false);
         app.paired.set(Some(known));
         if known {
             app.run(api::load());
@@ -131,10 +136,10 @@ fn Shell() -> impl IntoView {
 
     view! {
         <header class="bar">
-            <span class="brand">"Couch"</span>
+            <a class="brand" href="/">"couch"<span>" / configuration"</span></a>
             <span class="spacer"></span>
-            <span class="status">
-                {move || if app.busy.get() { "saving…" } else { "" }}
+            <span class="status" role="status" aria-live="polite">
+                {move || if app.busy.get() { "Saving…" } else if app.error.get().is_some() { "Not saved" } else if app.config.get().is_some() { "Saved" } else { "" }}
             </span>
             <Show when=move || app.paired.get() == Some(true)>
                 <button
@@ -166,15 +171,18 @@ fn Shell() -> impl IntoView {
                 None => view! { <p class="dim pad">"Connecting…"</p> }.into_any(),
                 Some(false) => view! { <Pair/> }.into_any(),
                 Some(true) => match app.config.get() {
-                    None => view! { <p class="dim pad">"Loading the house…"</p> }.into_any(),
-                    Some(config) => screens::render(app, &config, route.get()),
+                    None => view! { <p class="dim pad">"Loading your configuration…"</p> }.into_any(),
+                    Some(config) => view! { <fieldset class="editor" disabled=move || app.busy.get()>{screens::render(app, &config, route.get())}</fieldset> }.into_any(),
                 },
             }}
         </main>
 
-        <nav class="tabs" class:hidden=move || app.paired.get() != Some(true)>
+        <nav aria-label="Configuration" class="tabs" class:hidden=move || app.paired.get() != Some(true)>
             {[
-                (Route::Areas, "Areas"),
+                (Route::Overview, "Overview"),
+                (Route::Rooms, "Rooms & devices"),
+                (Route::Connections, "Connections"),
+                (Route::Areas, "Remote screens"),
                 (Route::Scenes, "Scenes"),
                 (Route::Activities, "Activities"),
             ]
@@ -217,7 +225,10 @@ fn Pair() -> impl IntoView {
             match api::auth_challenge().await {
                 // --no-auth: there is nothing to pair with, so do not sit here
                 // asking for a PIN that will never appear.
-                Ok(s) if s.disabled => app.paired.set(Some(true)),
+                Ok(s) if s.disabled => {
+                    app.paired.set(Some(true));
+                    app.run(api::load());
+                }
                 Ok(s) => status.set(s),
                 Err(e) => message.set(Some(e.message)),
             }

@@ -49,7 +49,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
     let delete_id = id.clone();
 
     view! {
-        {ui::page_header(app, room.name.clone(), Some(Route::Areas))}
+        {ui::page_header(app, room.name.clone(), Some(Route::Rooms))}
 
         <section class="card">
             {ui::text_field("Name", room.name.clone(), "Living room", move |name| {
@@ -79,144 +79,171 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
                 .map(|device| device_card(app, &id, device))
                 .collect_view()}
         </ul>
-        {ui::add_row("New device name", "Add", move |name| {
-            app.run(api::post(
-                format!("/api/rooms/{add_id}/devices"),
-                json!({ "name": name }),
-            ))
-        })}
+        {device_form(app, &add_id, None)}
 
         <div class="pad">
             {ui::danger_button("Delete this room", move || {
-                app.go(Route::Areas);
+                app.go(Route::Rooms);
                 app.run(api::delete(format!("/api/rooms/{delete_id}")));
             })}
             <p class="dim">
-                "Deleting a room removes it from every area, and removes its devices \
-                 from every scene."
+                "Deleting this room also deletes its devices and activities, removes it from all screens, and removes commands for its devices from scenes."
             </p>
         </div>
     }
     .into_any()
 }
 
-/// One device, editable in place.
-///
-/// Every control writes the whole device back, because the endpoint replaces
-/// it: sending only the changed field would need a merge on the server and a
-/// second shape for it to merge into.
 fn device_card(app: App, room: &Id, device: &Device) -> AnyView {
-    let save = {
-        let (room, id) = (room.clone(), device.id.clone());
-        move |next: Device| {
-            app.run(api::put(format!("/api/rooms/{room}/devices/{id}"), next));
-        }
-    };
-    let base = device.clone();
-    let (for_name, for_kind, for_integration) = (save.clone(), save.clone(), save);
-    let (name_base, kind_base, integration_base) = (base.clone(), base.clone(), base.clone());
-    let selected_kind = device.kind.name();
-    let delete = {
-        let (room, id) = (room.clone(), device.id.clone());
-        move || app.run(api::delete(format!("/api/rooms/{room}/devices/{id}")))
-    };
-
-    view! {
-        <li class="card device">
-            {ui::text_field("Name", device.name.clone(), "LG C3", move |name| {
-                for_name(Device { name, ..name_base.clone() })
-            })}
-
-            <label class="field">
-                <span class="label">"Kind"</span>
-                <select on:change=move |ev| {
-                    let kind = DeviceKind::from_name(&event_target_value(&ev)).unwrap_or_default();
-                    for_kind(Device { kind, ..kind_base.clone() });
-                }>
-                    {ALL_DEVICE_KINDS
-                        .iter()
-                        .map(|kind| {
-                            let name = kind.name();
-                            view! {
-                                <option value=name selected=name == selected_kind>{name}</option>
-                            }
-                        })
-                        .collect_view()}
-                </select>
-            </label>
-
-            {integration_editor(base.clone(), move |integration| {
-                for_integration(Device { integration, ..integration_base.clone() })
-            })}
-
-            <div class="card-foot">
-                <span class="dim mono">{device.id.to_string()}</span>
-                {ui::danger_button("Remove", delete)}
-            </div>
-        </li>
-    }
-    .into_any()
+    view! { <li class="card device"><details>
+        <summary><strong>{device.name.clone()}</strong><span class="row-sub">{super::overview::connection_summary(&device.integration)}</span><span class="destination-action">"Edit device"</span></summary>
+        {device_form(app, room, Some(device))}
+    </details></li> }.into_any()
 }
 
-/// How this device is reached: the transport, and the one or two fields it
-/// needs.
-///
-/// Switching transport resets the fields rather than trying to carry a host
-/// across to an entity id. They are not the same thing, and a half-migrated
-/// address that looks plausible is worse than a blank one.
-fn integration_editor(device: Device, commit: impl Fn(Integration) + Clone + 'static) -> AnyView {
-    let via = device.integration.via();
-    let on_via = commit.clone();
-    let fields = match device.integration.clone() {
-        Integration::None => ().into_any(),
-        Integration::Kodi { host, port } => {
-            let (host_commit, port_commit) = (commit.clone(), commit.clone());
-            let (host_for_port, port_for_host) = (host.clone(), port);
-            view! {
-                {ui::text_field("Host", host, "kodi.local", move |host| {
-                    host_commit(Integration::Kodi { host, port: port_for_host })
-                })}
-                {ui::text_field("Port", port.to_string(), "9090", move |text| {
-                    if let Ok(port) = text.parse::<u16>() {
-                        port_commit(Integration::Kodi { host: host_for_port.clone(), port });
-                    }
-                })}
+/// One explicit save keeps connection changes atomic and preserves the old
+/// connection until the user has supplied a complete replacement.
+fn device_form(app: App, room: &Id, device: Option<&Device>) -> AnyView {
+    let existing = device.cloned();
+    let name = RwSignal::new(device.map(|d| d.name.clone()).unwrap_or_default());
+    let kind = RwSignal::new(device.map(|d| d.kind).unwrap_or_default());
+    let via = RwSignal::new(
+        device
+            .map(|d| d.integration.via().to_string())
+            .unwrap_or("none".into()),
+    );
+    let (initial_host, initial_port, initial_entity, initial_codeset) =
+        match device.map(|d| &d.integration) {
+            Some(Integration::Kodi { host, port }) => {
+                (host.clone(), port.to_string(), String::new(), String::new())
             }
-            .into_any()
+            Some(Integration::HomeAssistant { entity_id }) => (
+                String::new(),
+                "9090".into(),
+                entity_id.clone(),
+                String::new(),
+            ),
+            Some(Integration::Ir { codeset }) => {
+                (String::new(), "9090".into(), String::new(), codeset.clone())
+            }
+            _ => (String::new(), "9090".into(), String::new(), String::new()),
+        };
+    let host = RwSignal::new(initial_host);
+    let port = RwSignal::new(initial_port);
+    let entity = RwSignal::new(initial_entity);
+    let codeset = RwSignal::new(initial_codeset);
+    let initial = (
+        name.get_untracked(),
+        kind.get_untracked(),
+        via.get_untracked(),
+        host.get_untracked(),
+        port.get_untracked(),
+        entity.get_untracked(),
+        codeset.get_untracked(),
+    );
+    let error = RwSignal::new(Option::<String>::None);
+    let room_id = room.clone();
+    let delete_room = room.clone();
+    let delete_device = device.map(|d| d.id.clone());
+    let editing = device.is_some();
+    let original_via = via.get_untracked();
+    view! { <form class="device-form" on:submit=move |event| {
+        event.prevent_default();
+        if app.busy.get_untracked() { return; }
+        let integration = match validated_connection(&via.get(), &host.get(), &port.get(), &entity.get(), &codeset.get()) {
+            Ok(value) => value,
+            Err(message) => { error.set(Some(message)); return; }
+        };
+        let name = name.get().trim().to_string();
+        if name.is_empty() { error.set(Some("Enter a device name.".into())); return; }
+        error.set(None);
+        match &existing {
+            Some(base) => app.run(api::put(format!("/api/rooms/{room_id}/devices/{}", base.id), Device {name, kind:kind.get(), integration, ..base.clone()})),
+            None => app.run(api::post(format!("/api/rooms/{room_id}/devices"), json!({"name":name,"kind":kind.get(),"integration":integration}))),
         }
-        Integration::HomeAssistant { entity_id } => ui::text_field(
-            "Entity id",
-            entity_id,
-            "light.living_room",
-            move |entity_id| commit(Integration::HomeAssistant { entity_id }),
-        ),
-        Integration::Ir { codeset } => {
-            ui::text_field("Codeset", codeset, "lg-tv", move |codeset| {
-                commit(Integration::Ir { codeset })
+    }>
+        <h3>{if editing { "Device settings" } else { "Add a device" }}</h3>
+        <p class="dim">"Name the device, choose what it is, then choose how to connect. Save when all fields are ready."</p>
+        {draft_field("Device name", name, "Living room TV")}
+        <label class="field"><span class="label">"Device type"</span><select aria-label="Device type" prop:value=move || kind.get().name() on:change=move |e| kind.set(DeviceKind::from_name(&event_target_value(&e)).unwrap_or_default())>
+        {ALL_DEVICE_KINDS.iter().map(|k| view! { <option value=k.name()>{k.name().replace('-', " ")}</option> }).collect_view()}</select></label>
+        <label class="field"><span class="label">"Connection / client"</span><select aria-label="Connection / client" prop:value=move || via.get() on:change=move |e| via.set(event_target_value(&e))>
+        <option value="none">"Set up later"</option><option value="kodi">"Kodi"</option><option value="home-assistant">"Home Assistant"</option><option value="ir">"Infrared (IR)"</option></select></label>
+        <Show when=move || via.get() == "kodi">{draft_field("Hostname or IP address", host, "192.168.1.20")}{draft_field("TCP port", port, "9090")}</Show>
+        <Show when=move || via.get() == "home-assistant">{draft_field("Entity ID", entity, "light.living_room")}</Show>
+        <Show when=move || via.get() == "ir">{draft_field("Codeset name", codeset, "lg-tv")}</Show>
+        <Show when=move || editing && via.get() != original_via><p class="notice">"Saving replaces this device’s previous connection settings. Switching back before saving keeps them."</p></Show>
+        {move || error.get().map(|message| view! { <p class="wrong" role="alert">{message}</p> })}
+        <button type="submit" class="primary" disabled=move || app.busy.get()>{if editing { "Save device" } else { "Add device" }}</button>
+        <button type="button" class="ghost" on:click=move |_| {
+            name.set(initial.0.clone()); kind.set(initial.1); via.set(initial.2.clone());
+            host.set(initial.3.clone()); port.set(initial.4.clone()); entity.set(initial.5.clone()); codeset.set(initial.6.clone()); error.set(None);
+        }>{if editing { "Discard changes" } else { "Clear form" }}</button>
+        {delete_device.map(|id| view! { <div class="card-foot">{ui::danger_button("Delete device", move || app.run(api::delete(format!("/api/rooms/{delete_room}/devices/{id}"))))}<span class="dim">"Also removes its commands from scenes and activities."</span></div> })}
+    </form> }.into_any()
+}
+
+fn draft_field(label: &'static str, value: RwSignal<String>, placeholder: &'static str) -> AnyView {
+    view! { <label class="field"><span class="label">{label}</span><input type="text" placeholder=placeholder prop:value=move || value.get() on:input=move |e| value.set(event_target_value(&e))/></label> }.into_any()
+}
+
+fn validated_connection(
+    via: &str,
+    host: &str,
+    port: &str,
+    entity: &str,
+    codeset: &str,
+) -> Result<Integration, String> {
+    match via {
+        "none" => Ok(Integration::None),
+        "kodi" => {
+            let port = port
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)
+                .ok_or("Enter a TCP port from 1 to 65535.")?;
+            if host.trim().is_empty() {
+                return Err("Enter the Kodi hostname or IP address.".into());
+            }
+            Ok(Integration::Kodi {
+                host: host.trim().into(),
+                port,
             })
         }
-    };
-
-    view! {
-        <label class="field">
-            <span class="label">"Reached via"</span>
-            <select on:change=move |ev| {
-                on_via(match event_target_value(&ev).as_str() {
-                    "kodi" => Integration::Kodi { host: String::new(), port: 9090 },
-                    "home-assistant" => Integration::HomeAssistant { entity_id: String::new() },
-                    "ir" => Integration::Ir { codeset: String::new() },
-                    _ => Integration::None,
-                });
-            }>
-                {["none", "kodi", "home-assistant", "ir"]
-                    .into_iter()
-                    .map(|option| view! {
-                        <option value=option selected=option == via>{option}</option>
-                    })
-                    .collect_view()}
-            </select>
-        </label>
-        {fields}
+        "home-assistant" if !entity.trim().is_empty() => Ok(Integration::HomeAssistant {
+            entity_id: entity.trim().into(),
+        }),
+        "ir" if !codeset.trim().is_empty() => Ok(Integration::Ir {
+            codeset: codeset.trim().into(),
+        }),
+        "home-assistant" => Err("Enter the Home Assistant entity ID.".into()),
+        "ir" => Err("Enter an infrared codeset name, or choose Set up later.".into()),
+        _ => Err("Choose a connection type.".into()),
     }
-    .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn connection_form_rejects_incomplete_and_invalid_settings() {
+        for port in ["", "0", "65536", "abc"] {
+            assert!(validated_connection("kodi", "kodi.local", port, "", "").is_err());
+        }
+        assert!(validated_connection("kodi", " ", "9090", "", "").is_err());
+        assert!(validated_connection("ir", "", "", "", " ").is_err());
+        assert!(validated_connection("home-assistant", "", "", " ", "").is_err());
+        assert_eq!(
+            validated_connection("kodi", " kodi.local ", "9090", "", "").unwrap(),
+            Integration::Kodi {
+                host: "kodi.local".into(),
+                port: 9090
+            }
+        );
+        assert_eq!(
+            validated_connection("none", "", "", "", "").unwrap(),
+            Integration::None
+        );
+    }
 }

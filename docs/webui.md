@@ -1,4 +1,82 @@
 # The config web UI
+## Configuration editor (September 2026)
+
+The editor starts with **Overview**, then offers **Rooms & devices**,
+**Connections**, **Remote screens**, **Scenes**, and **Activities**. Existing
+`/areas/...`, `/rooms/...`, `/scenes/...`, and `/activities/...` links still work.
+The JSON schema and daemon endpoints are unchanged.
+
+### Set up a home
+
+1. Open **Rooms & devices**, enter a room name, and choose **Create room**.
+   Open the room and use **Add a device**. Choose a device type and connection,
+   fill the connection fields, then save. **Set up later** creates an inventory
+   entry without pretending it can be controlled.
+2. Open **Activities** to describe a task such as Watch TV: choose its room,
+   source device and startup commands. Open **Scenes** for a named sequence of
+   device commands, such as Movie night. Saving a command does not execute it.
+3. Open **Remote screens** and create an area such as Upstairs. An area is a
+   screen containing ordered references to rooms, activities and scenes. Add
+   existing items or create them within the area. The structure preview shows
+   exactly which configured entries are included, in order.
+4. Use **Connections** to review settings across the home. A client means the
+   integration attached to a device; there is no separate client entity or
+   global client configuration in the current model.
+
+Rooms remain discoverable even when no area includes them. A room or scene can
+appear on several screens without duplication. **Unlink** removes an area's
+reference; **Delete** removes the entity and its dependent references. Room
+removal also deletes its devices and room-bound activities.
+
+Device edits are local drafts with explicit **Save device** and **Discard changes**
+buttons. Changing connection type does not write or erase saved fields until
+Save; switching back before saving preserves the original fields. Other names,
+selectors and ordering save on change. Writes are serialized, controls disable
+while saving, and the header reports Saved, Saving or Not saved. Requests send
+the loaded revision in `If-Match`; a stale write reloads saved configuration with
+an explanation instead of overwriting another browser's work. Ordinary
+validation/network failures keep local drafts for correction or retry.
+
+### Current product boundary
+
+This editor stores configuration; the current Slint GUI still uses its example
+home. The overview labels this boundary directly. The screen preview is a
+configuration visualization, not a live screenshot or a free-form layout editor.
+Home Assistant server/authentication, infrared learning/discovery, connection
+probing, live device state and execution of configured commands are not exposed
+by this editor. The separate `stage2/www` portal handles Wi-Fi and SSH setup.
+
+### Validation
+
+- `(cd web && cargo fmt --check && cargo test)` checks formatting and tests route
+  compatibility and device connection validation (including blank addresses,
+  invalid/zero/overflowing ports and optional unconfigured devices).
+- `(cd web && cargo check --target wasm32-unknown-unknown)` checks browser builds.
+- `(cd web/couch-web && env -u NO_COLOR trunk build --release)` creates the bundle;
+  unsetting `NO_COLOR=1` avoids Trunk's boolean CLI parsing error.
+- Browser review uses a host daemon on loopback with throwaway configurations;
+  it must not edit the physical remote's configuration during development.
+
+The repeatable browser regression lives in `web/tests/browser.mjs`. It replaces
+its test server's configuration, requires loopback and `--no-auth`, and refuses
+other hosts. Install its isolated browser tooling and run a disposable server:
+
+```sh
+npm install --prefix build/webui-review playwright@1.57.0
+build/webui-review/node_modules/.bin/playwright install chromium
+daemon/target/release/couch-confd --addr 127.0.0.1:18092 --no-auth \
+  --config build/webui-review-empty.json --www web/couch-web/dist
+# In another terminal, from the repository root:
+COUCH_TEST_URL=http://127.0.0.1:18092 node web/tests/browser.mjs
+```
+
+The browser flow covers keyboard room creation, invalid connection fields,
+device save/discard and failed-save draft preservation, screen membership,
+preview, unlinking and order, activity sources, scene commands, conflicting
+browser revisions, seeded configurations and 360-pixel mobile overflow. All
+checks passed in Chromium with no browser exceptions. Screenshots are written under ignored `build/webui-review/`.
+
+
 
 How the house gets described: `couch-confd`, a static binary on the remote that
 owns `/opt/couch/config.json`, and `couch-web`, the page it serves to a phone on
@@ -65,7 +143,7 @@ disagree with the icon list on the device.
 
 **Leptos' own signals, no router crate.** `leptos_router` would add a matcher, a
 nested-route tree and a set of macros; `route.rs` is one enum, two string
-functions and a `popstate` listener, because there are seven screens. The URL is
+functions and a `popstate` listener, with explicit routes for overview, catalogs and detail pages. The URL is
 real - `/rooms/kitchen` reloads to that room - because on a phone Back means "up
 one level", and without history entries Back leaves the app from the first
 screen a user drills into.
@@ -309,7 +387,7 @@ running `couch-gui` - the two do not contend for anything, since the daemon
 touches neither the framebuffer nor the keypad. Then
 `http://192.168.1.79:8090` from a phone on the same network.
 
-Nothing starts it at boot; see the section on pairing for where that goes.
+Stage2 now starts the editor automatically; see Starting it at boot below.
 
 ## Pairing by a PIN on the remote's screen
 
@@ -372,7 +450,7 @@ Details worth knowing:
 
 * **Plain HTTP.** Anything on the path can read the traffic and lift the session
   cookie. On a home LAN with WPA2 that is a smaller problem than it sounds, but
-  it is real, and it is why the boot block below is still not a default.
+  it is real. Use this editor on a trusted local network.
 * **No rate limit on challenges.** Attempts against a PIN are limited; asking
   for new PINs is not. The cost is deliberate and physical - each one lights up
   the remote - rather than enforced in code.
@@ -382,29 +460,26 @@ Details worth knowing:
 
 ### Starting it at boot
 
-Nothing starts `couch-confd` at boot yet. When that is wanted it belongs in
-`stage2/stage2.sh`, next to the block that starts `couch-gui` and after the
-network is up, since it is useless without one:
+`stage2/stage2.sh` starts `stage2/confd.sh` inside Alpine after normal network
+setup. Recovery mode skips it. The supervisor restarts the daemon after two
+seconds and uses `flock` to prevent duplicate supervisors. Configuration stays
+at `/opt/couch/config.json`; `/tmp/couch.pin` is shared with the Slint GUI.
+PIN authentication remains enabled. Logs are in `/tmp/confd.log`.
+
+For an immediate start after copying the helper to `/opt/couch/confd.sh`:
 
 ```sh
-CONFD="$(dirname "$0")/couch-confd"
-if [ -n "$IP" ] && [ -x "$CONFD" ]; then
-    ( while true; do "$CONFD" >>/tmp/confd.log 2>&1; $BB sleep 2; done ) &
-    echo "= couch-confd on $IP:8090"
-fi
+nohup /bin/sh /opt/couch/confd.sh </dev/null >/tmp/confd-supervisor.log 2>&1 &
 ```
 
-Pairing makes that defensible where it was not before. What would make it
-comfortable is TLS, or binding to the LAN interface rather than `0.0.0.0`.
+The redesigned editor was deployed on September 8, 2026 at
+`http://192.168.1.127:8090`. The existing configuration checksum was unchanged.
+The embedded ARM bundle, unauthenticated health endpoint and enabled pairing
+were verified; 17 daemon tests, three web tests and the browser regression passed.
+The startup script passed shell syntax checks; no reboot was required to deploy.
 
 ## Known gaps
 
-* **The client never sends `If-Match`.** The store implements optimistic
-  concurrency and the daemon honours the header, but `web/couch-web/src/api.rs`
-  does not set it, so two phones editing at once still last-write-wins. Wiring
-  it is a few lines; what it needs first is a decision about what the second
-  phone should *see* - a 409 for your own double-tap would be worse than the
-  race it prevents.
 * **No compression.** See the size table.
 * **Free-text commands.** A scene step's `command` is a string (`on`,
   `input:hdmi2`, `dim:30`) because what a device accepts is the integration's

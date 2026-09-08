@@ -11,6 +11,8 @@
 //! loop; see `Trunk.toml`.
 
 use couch_model::Config;
+
+thread_local! { static REVISION: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) }; }
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,11 +24,16 @@ pub struct ApiError {
     /// back to the pairing screen rather than showing this as an edit failure,
     /// because "not paired" is not something dismissing a banner can fix.
     pub unauthorized: bool,
+    pub stale: bool,
 }
 
 impl ApiError {
     fn new(message: impl Into<String>) -> ApiError {
-        ApiError { message: message.into(), unauthorized: false }
+        ApiError {
+            message: message.into(),
+            unauthorized: false,
+            stale: false,
+        }
     }
 }
 
@@ -74,9 +81,15 @@ pub async fn auth_verify(pin: String) -> Result<PinResult, ApiError> {
     let value: Value = serde_json::from_str(&text).unwrap_or_default();
 
     if (200..300).contains(&status) {
-        return Ok(PinResult { paired: true, message: String::new() });
+        return Ok(PinResult {
+            paired: true,
+            message: String::new(),
+        });
     }
-    let message = value.get("error").and_then(Value::as_str).unwrap_or("that PIN was not accepted");
+    let message = value
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("that PIN was not accepted");
     let tries = value.get("tries_left").and_then(Value::as_u64).unwrap_or(0);
     Ok(PinResult {
         paired: false,
@@ -145,6 +158,10 @@ async fn send(
     builder: gloo_net::http::RequestBuilder,
     body: Option<impl Serialize>,
 ) -> Result<Config, ApiError> {
+    let builder = match REVISION.with(|revision| revision.get()) {
+        Some(revision) => builder.header("If-Match", &revision.to_string()),
+        None => builder,
+    };
     let request = match body {
         Some(value) => builder
             .json(&value)
@@ -168,39 +185,45 @@ async fn parse(response: gloo_net::http::Response) -> Result<Config, ApiError> {
         .map_err(|e| ApiError::new(format!("truncated response: {e}")))?;
 
     if (200..300).contains(&status) {
-        return serde_json::from_str(&text)
-            .map_err(|e| ApiError::new(format!("the remote sent something unreadable: {e}")));
+        let config: Config = serde_json::from_str(&text)
+            .map_err(|e| ApiError::new(format!("the remote sent something unreadable: {e}")))?;
+        REVISION.with(|revision| revision.set(Some(config.revision)));
+        return Ok(config);
     }
 
     // The daemon's errors carry a message and, for a rejected edit, the list of
     // things wrong with it. Surface those verbatim: they name a field, which is
     // the only thing that helps a user fix it.
     let unauthorized = status == 401;
-    Err(ApiError { unauthorized, ..ApiError::new(match serde_json::from_str::<Value>(&text) {
-        Ok(value) => {
-            let message = value
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("the remote refused the change")
-                .to_string();
-            match value.get("problems").and_then(Value::as_array) {
-                Some(problems) if !problems.is_empty() => {
-                    let detail = problems
-                        .iter()
-                        .filter_map(|p| {
-                            Some(format!(
-                                "{}: {}",
-                                p.get("at")?.as_str()?,
-                                p.get("message")?.as_str()?
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    format!("{message} ({detail})")
+    Err(ApiError {
+        unauthorized,
+        stale: status == 409 || status == 404,
+        ..ApiError::new(match serde_json::from_str::<Value>(&text) {
+            Ok(value) => {
+                let message = value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the remote refused the change")
+                    .to_string();
+                match value.get("problems").and_then(Value::as_array) {
+                    Some(problems) if !problems.is_empty() => {
+                        let detail = problems
+                            .iter()
+                            .filter_map(|p| {
+                                Some(format!(
+                                    "{}: {}",
+                                    p.get("at")?.as_str()?,
+                                    p.get("message")?.as_str()?
+                                ))
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        format!("{message} ({detail})")
+                    }
+                    _ => message,
                 }
-                _ => message,
             }
-        }
-        Err(_) => format!("the remote answered {status}"),
-    })})
+            Err(_) => format!("the remote answered {status}"),
+        })
+    })
 }

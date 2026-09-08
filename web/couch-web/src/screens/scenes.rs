@@ -52,7 +52,7 @@ pub fn list(app: App, config: &Config) -> AnyView {
         </p>
         <ul class="rows">{rows}</ul>
         {empty.then(|| ui::empty("No scenes yet."))}
-        {ui::add_row("New scene name", "Add", move |name| {
+        {ui::add_row("New scene name", "Create scene", move |name| {
             app.run(api::post("/api/scenes", json!({ "name": name })))
         })}
     }
@@ -88,7 +88,8 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
             })}
         </section>
 
-        <h2 class="section">"Steps"</h2>
+        <h2 class="section">"Device commands"</h2>
+        <p class="dim">"Add commands in the order they should run. For example, turn on the TV, then select its input. Command names depend on the integration; saving does not test or send them."</p>
         {scene.steps.is_empty().then(|| {
             ui::empty("This scene does nothing yet. Add a step below.")
         })}
@@ -119,6 +120,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
             for_add(scene);
         })}
 
+        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Add this scene to a remote screen →"</button></div>
         <div class="pad">
             {ui::danger_button("Delete this scene", move || {
                 app.go(Route::Scenes);
@@ -144,6 +146,7 @@ fn step_row(
             <span class="row-title">{label}</span>
             <input
                 class="command"
+                aria-label="Device command"
                 type="text"
                 value=step.command.clone()
                 placeholder="on"

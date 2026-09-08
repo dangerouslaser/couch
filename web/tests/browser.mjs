@@ -1,0 +1,130 @@
+// Run against a disposable, --no-auth host daemon. Never a physical remote.
+// Install Playwright under build/webui-review first (see docs/webui.md).
+import assert from 'node:assert/strict';
+import { chromium } from '../../build/webui-review/node_modules/playwright/index.mjs';
+const origin = process.env.COUCH_TEST_URL;
+assert(origin, 'Set COUCH_TEST_URL to the disposable host daemon URL');
+assert(['127.0.0.1', 'localhost'].includes(new URL(origin).hostname), 'Only loopback test servers are allowed');
+const browser = await chromium.launch({headless:true});
+const context = await browser.newContext({viewport:{width:390,height:844}});
+const page = await context.newPage();
+const errors = [];
+page.on('pageerror', e => errors.push(String(e)));
+const config = async () => (await context.request.get(`${origin}/api/config`)).json();
+async function saved(action) {
+  const response = page.waitForResponse(r => r.url().includes('/api/') && ['POST','PUT','DELETE'].includes(r.request().method()));
+  await action();
+  const result = await response;
+  assert(result.ok(), `${result.status()}: ${await result.text()}`);
+  await page.getByRole('status').filter({hasText:/^Saved$/}).waitFor();
+}
+async function navigate(label) { await page.getByRole('navigation').getByRole('button',{name:label,exact:true}).click(); }
+async function noOverflow() { assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Page overflows viewport'); }
+try {
+  const auth = await (await context.request.get(`${origin}/api/auth/status`)).json();
+  assert(auth.disabled, 'The test requires a disposable --no-auth daemon');
+  await context.request.put(`${origin}/api/config`, {data:{schema_version:1,areas:[],rooms:[],scenes:[],activities:[]}});
+  await page.goto(origin);
+  await page.getByRole('heading',{name:'A home that makes sense.'}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:'Finish setting up'}).count(),0);
+  await noOverflow();
+  await page.screenshot({path:'build/webui-review/overview-empty-mobile.png',fullPage:true});
+  await navigate('Rooms & devices');
+  await page.getByRole('textbox',{name:'Room name',exact:true}).fill('Living room');
+  await saved(() => page.getByRole('textbox',{name:'Room name',exact:true}).press('Enter'));
+  await page.getByRole('button',{name:/Living room.*Open/}).click();
+  await page.getByRole('textbox',{name:'Device name',exact:true}).fill('Kodi player');
+  await page.getByRole('combobox',{name:'Device type',exact:true}).selectOption('media-player');
+  await page.getByRole('combobox',{name:'Connection / client',exact:true}).selectOption('kodi');
+  await page.getByRole('textbox',{name:'Hostname or IP address'}).fill('192.168.1.20');
+  await page.getByRole('textbox',{name:'TCP port'}).fill('0');
+  await page.getByRole('button',{name:'Add device',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'Enter a TCP port'}).waitFor();
+  assert.equal((await config()).rooms[0].devices.length,0);
+  await page.getByRole('textbox',{name:'TCP port'}).fill('9090');
+  await saved(() => page.getByRole('button',{name:'Add device',exact:true}).click());
+  assert.equal((await config()).rooms[0].devices[0].integration.via,'kodi');
+  await page.locator('summary').filter({hasText:'Kodi player'}).click();
+  const editor = page.locator('details[open]');
+  await editor.getByRole('combobox',{name:'Connection / client',exact:true}).selectOption('ir');
+  await editor.getByRole('textbox',{name:'Codeset name'}).fill('test-tv');
+  assert.equal((await config()).rooms[0].devices[0].integration.via,'kodi');
+  await editor.getByRole('button',{name:'Discard changes'}).click();
+  assert.equal(await editor.getByRole('combobox',{name:'Connection / client',exact:true}).inputValue(),'kodi');
+  assert.equal(await editor.getByRole('textbox',{name:'Hostname or IP address'}).inputValue(),'192.168.1.20');
+  await editor.getByRole('textbox',{name:'Device name',exact:true}).fill('Living room player');
+  await saved(() => editor.getByRole('button',{name:'Save device'}).click());
+  // A rejected save leaves the local draft visible and the saved device intact.
+  if (!(await page.locator('details').getByRole('textbox',{name:'Device name',exact:true}).isVisible())) {
+    await page.locator('summary').filter({hasText:'Living room player'}).click();
+  }
+  const retryEditor = page.locator('details[open]');
+  await retryEditor.getByRole('textbox',{name:'Device name',exact:true}).fill('Retry this draft');
+  await page.route('**/api/rooms/*/devices/*', route => route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Test save failure'})}));
+  await retryEditor.getByRole('button',{name:'Save device'}).click();
+  await page.getByRole('alert').filter({hasText:'Test save failure'}).waitFor();
+  assert.equal(await retryEditor.getByRole('textbox',{name:'Device name',exact:true}).inputValue(),'Retry this draft');
+  assert.equal((await config()).rooms[0].devices[0].name,'Living room player');
+  await page.unroute('**/api/rooms/*/devices/*');
+  await retryEditor.getByRole('button',{name:'Discard changes'}).click();
+  await noOverflow();
+  await page.screenshot({path:'build/webui-review/devices-mobile.png',fullPage:true});
+  await navigate('Remote screens');
+  await page.getByRole('textbox',{name:'Screen / area name'}).fill('Whole home');
+  await saved(() => page.getByRole('button',{name:'Create screen'}).click());
+  await page.getByRole('button',{name:/Whole home/}).click();
+  await saved(() => page.locator('select').filter({has:page.locator('option',{hasText:'Add an existing room'})}).selectOption('living-room'));
+  await page.locator('.remote-outline').getByText('Living room',{exact:true}).waitFor();
+  await page.getByRole('textbox',{name:'New activity name'}).fill('Watch TV');
+  await saved(() => page.getByRole('button',{name:'Create & add activity'}).click());
+  await page.getByRole('textbox',{name:'New scene name'}).fill('Movie night');
+  await saved(() => page.getByRole('button',{name:'Create & add scene'}).click());
+  await noOverflow();
+  await page.screenshot({path:'build/webui-review/screen-mobile.png',fullPage:true});
+  const beforeUnlink = await config();
+  const linkedRoom = page.locator('li.row').filter({has:page.getByRole('button',{name:/Living room.*1 device/})});
+  await saved(() => linkedRoom.getByRole('button',{name:'Unlink'}).click());
+  assert.equal((await config()).rooms.length,beforeUnlink.rooms.length);
+  assert.equal((await config()).areas[0].rooms.length,0);
+  await saved(() => page.locator('select').filter({has:page.locator('option',{hasText:'Add an existing room'})}).selectOption('living-room'));
+  await navigate('Activities');
+  await page.getByRole('button',{name:/Watch TV/}).click();
+  const deviceId = (await config()).rooms[0].devices[0].id;
+  await saved(() => page.getByLabel(/^Source device/).selectOption(deviceId));
+  await navigate('Scenes');
+  await page.getByRole('button',{name:/Movie night/}).click();
+  await saved(() => page.locator('.add-row select').selectOption(deviceId));
+  assert.equal((await config()).scenes[0].steps.length,1);
+  await navigate('Connections');
+  await page.getByRole('button',{name:/Living room player.*Kodi/}).waitFor();
+  await noOverflow();
+  // Revision guard: a second editor must not overwrite changes it never saw.
+  const stale = await context.newPage();
+  await stale.goto(`${origin}/rooms`);
+  await stale.getByRole('heading',{name:'Rooms & devices'}).waitFor();
+  await navigate('Rooms & devices');
+  await page.getByRole('textbox',{name:'Room name',exact:true}).fill('Kitchen');
+  await saved(() => page.getByRole('button',{name:'Create room'}).click());
+  await stale.getByRole('textbox',{name:'Room name',exact:true}).fill('Study');
+  await stale.getByRole('button',{name:'Create room'}).click();
+  await stale.getByRole('alert').filter({hasText:'reloaded'}).waitFor();
+  assert(!(await config()).rooms.some(r=>r.name==='Study'));
+  await stale.close();
+  // Existing configurations remain readable at desktop and small-phone sizes.
+  await context.request.post(`${origin}/api/config/reset`);
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto(`${origin}/areas/whole-home`);
+  await page.locator('.screen-preview').waitFor();
+  await noOverflow();
+  await page.screenshot({path:'build/webui-review/screen-seed-desktop.png',fullPage:true});
+  await navigate('Remote screens');
+  const beforeOrder = (await config()).areas.map(a=>a.id);
+  await saved(() => page.getByRole('button',{name:'Move down',exact:true}).first().click());
+  assert.deepEqual((await config()).areas.map(a=>a.id),[beforeOrder[1],beforeOrder[0],...beforeOrder.slice(2)]);
+  await page.setViewportSize({width:360,height:800});
+  for (const label of ['Overview','Rooms & devices','Connections','Remote screens','Scenes','Activities']) {
+    await navigate(label); await noOverflow();
+  }
+  assert.deepEqual(errors,[]);
+  console.log('PASS: empty setup, keyboard creation, validation, device draft/save/discard and failed-save preservation, screen membership/preview/unlink/order, activity source, scene command, connection inventory, stale-write rejection, seed routes, mobile overflow; no browser exceptions.');
+} finally { await browser.close(); }

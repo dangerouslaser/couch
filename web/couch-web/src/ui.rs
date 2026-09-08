@@ -23,7 +23,7 @@ pub fn page_header(app: App, title: String, back: Option<Route>) -> AnyView {
     view! {
         <div class="page-head">
             {back.map(|route| view! {
-                <button class="back" on:click=move |_| app.go(route.clone())>"‹"</button>
+                <button aria-label="Back to list" class="back" on:click=move |_| app.go(route.clone())>"‹"</button>
             })}
             <h1>{title}</h1>
         </div>
@@ -89,7 +89,7 @@ pub fn icon_select(current: Option<Icon>, commit: impl Fn(Option<Icon>) + 'stati
                 let name = event_target_value(&ev);
                 commit(Icon::from_name(&name));
             }>
-                <option value="" selected=selected.is_empty()>"(from its devices)"</option>
+                <option value="" selected=selected.is_empty()>"Automatic"</option>
                 {ALL_ICONS
                     .iter()
                     .map(|icon| {
@@ -114,6 +114,7 @@ pub fn danger_button(label: &'static str, confirm: impl Fn() + 'static) -> AnyVi
     let armed = RwSignal::new(false);
     view! {
         <button
+            type="button"
             class="danger"
             class:armed=move || armed.get()
             on:click=move |_| {
@@ -126,7 +127,7 @@ pub fn danger_button(label: &'static str, confirm: impl Fn() + 'static) -> AnyVi
             }
             on:blur=move |_| armed.set(false)
         >
-            {move || if armed.get() { "Really?".to_string() } else { label.to_string() }}
+            {move || if armed.get() { "Confirm delete".to_string() } else { label.to_string() }}
         </button>
     }
     .into_any()
@@ -147,7 +148,6 @@ pub fn add_row(
     fn flush(draft: RwSignal<String>, submit: &dyn Fn(String)) {
         let name = draft.get().trim().to_string();
         if !name.is_empty() {
-            draft.set(String::new());
             submit(name);
         }
     }
@@ -157,6 +157,7 @@ pub fn add_row(
             <input
                 type="text"
                 placeholder=placeholder
+                aria-label=placeholder
                 prop:value=move || draft.get()
                 on:input=move |ev| draft.set(event_target_value(&ev))
                 on:keydown=move |ev| {
@@ -165,7 +166,7 @@ pub fn add_row(
                     }
                 }
             />
-            <button class="primary" on:click=move |_| flush(draft, &*submit)>{button}</button>
+            <button class="primary" disabled=move || draft.get().trim().is_empty() on:click=move |_| flush(draft, &*submit)>{button}</button>
         </div>
     }
     .into_any()

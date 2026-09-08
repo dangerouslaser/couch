@@ -6,7 +6,6 @@
 //! is worth a strip on the whole-home page" is a judgement rather than a
 //! consequence of where the room is.
 
-
 use couch_model::{Action, Activity, ActivityKind, Config, Id};
 use leptos::prelude::*;
 use serde_json::json;
@@ -64,8 +63,7 @@ pub fn list(app: App, config: &Config) -> AnyView {
     view! {
         {ui::page_header(app, "Activities".to_string(), None)}
         <p class="dim pad-x">
-            "An activity happens in one room. Put it on an area's strip from \
-             that area's screen."
+            "An activity is something you do in a room, such as Watch TV or Listen to music. Choose its source device and startup commands, then add it to a remote screen."
         </p>
 
         <ul class="rows">{rows}</ul>
@@ -99,11 +97,12 @@ fn new_activity(app: App, config: &Config) -> AnyView {
         <div class="add-row">
             <input
                 type="text"
+                aria-label="Activity name"
                 placeholder="New activity name"
                 prop:value=move || draft.get()
                 on:input=move |ev| draft.set(event_target_value(&ev))
             />
-            <select node_ref=picked>
+            <select aria-label="Activity room" node_ref=picked>
                 {rooms
                     .into_iter()
                     .map(|(id, name)| view! { <option value=id>{name}</option> })
@@ -122,12 +121,11 @@ fn new_activity(app: App, config: &Config) -> AnyView {
                         ));
                     }
                 }
-            >"Add"</button>
+            >"Create activity"</button>
         </div>
     }
     .into_any()
 }
-
 
 pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
     let Some(activity) = config.activity(id) else {
@@ -178,7 +176,6 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
         format!("On the strip of: {}", strips.join(", "))
     };
 
-
     view! {
         {ui::page_header(app, activity.name.clone(), Some(Route::Activities))}
 
@@ -188,7 +185,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
             })}
 
             <label class="field">
-                <span class="label">"Kind"</span>
+                <span class="label">"Activity type"</span>
                 <select on:change=move |ev| {
                     let kind = if event_target_value(&ev) == "video" {
                         ActivityKind::Video
@@ -234,7 +231,8 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
         </section>
 
 
-        <h2 class="section">"Steps"</h2>
+        <h2 class="section">"Startup commands"</h2>
+        <p class="dim">"Commands are listed in execution order. Pick a device to add an on command, then edit the command for that device. Command names depend on its integration; saving does not test or send them."</p>
         {activity.steps.is_empty().then(|| {
             ui::empty("Nothing is brought up when this starts.")
         })}
@@ -260,6 +258,7 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
             </div>
         })}
 
+        <div class="pad"><button class="ghost" on:click=move |_| app.go(Route::Areas)>"Choose a remote screen for this activity →"</button></div>
         <div class="pad">
             {ui::danger_button("Delete this activity", move || {
                 app.go(Route::Activities);
@@ -287,6 +286,7 @@ fn step_row(
             <span class="row-title">{label}</span>
             <input
                 class="command"
+                aria-label="Device command"
                 type="text"
                 value=step.command.clone()
                 placeholder="on"
