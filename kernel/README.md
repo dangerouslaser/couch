@@ -123,12 +123,22 @@ next driver:
   makes it talk, and `echo 0 > /dev/wmtWifi; echo 1 > /dev/wmtWifi` re-runs
   the probe without a reboot.
 
-## Next
+## Current validation and remaining work
 
-1. Port `tlsc6x` into the `tpd` framework (`danascape/linux-daria-mt6877`
-   carries it wired in). Until then touch only works on the stock kernel.
-2. Port `mt_irtx_pwm` for mt6580 (the driver is understood; see `docs/ir.md`).
-3. Push `couch-ha100` to a remote, and clone it onto the Mac so the source is
-   on two machines.
-4. Then the payoff the rebuild was for: the 46-62ms keypad interrupt handler,
-   real suspend, and owning hotplug (`docs/frankenkernel.md`, Phase 4).
+Touch is now provided by `couch_tlsc6x` with bounded report retries and no
+firmware-update path. The keypad EINT mux and production panel setup are live.
+Apply the mail patches in `patches/series` order on top of `7a0e5e8f`.
+
+The PWM IR implementation remains **diagnostic-only**: a minimal transmit hung
+the device even after clock-ordering changes. The normal profile disables it,
+and stage2 removes the stale stock node when no driver is registered. Do not
+interpret driver probe success as a validated transmitter.
+
+The boot-health gate requires advancing local GUI heartbeats before clearing
+the recovery BCB. It does not protect failures before init arms the BCB.
+
+See [Slint performance](../docs/slint-performance.md) and
+[GPU experiments](../docs/gpu-acceleration.md) for current optimization work.
+Unplugged suspend, thermal/battery measurements, and full IR transmission remain
+unvalidated. Kernel source is committed on Ollie and backed up separately; this
+repository currently has no configured publishing remote.

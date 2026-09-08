@@ -19,6 +19,7 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Read;
+use std::os::unix::io::AsRawFd;
 
 use slint::platform::Key;
 
@@ -90,6 +91,15 @@ impl Keypad {
 
     pub fn device_count(&self) -> usize {
         self.files.len()
+    }
+
+    /// While the display is off, sleep until a key arrives or the next
+    /// one-second service update is due. The kernel wakes poll immediately.
+    pub fn wait_for_input(&self) {
+        let mut fds: Vec<libc::pollfd> = self.files.iter().map(|file| libc::pollfd {
+            fd: file.as_raw_fd(), events: libc::POLLIN, revents: 0,
+        }).collect();
+        unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, 1000); }
     }
 
     /// Non-blocking. Returns at most one press per call, which is what the UI

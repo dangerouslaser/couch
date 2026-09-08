@@ -43,11 +43,35 @@ main() {
     { $BB printf "boot-recovery"; $BB dd if=/dev/zero bs=499 count=1 2>/dev/null; } \
         | $BB dd of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
 
-    # ... and disarm it once this boot has proven itself, so a good build stays
-    # put. Ninety seconds is well past where every failure so far has landed.
+    # Confirm local GUI progress, not elapsed time or Internet availability.
+    # A rendered frame and three advancing heartbeats from the same process
+    # must be observed. A dead/hung GUI preserves the recovery request.
     ( $BB sleep 90
-      $BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null
-      mark $((BASE+40)) "S10 boot proven, bcb cleared" ) &
+      healthy_pid=0; healthy_stamp=0; streak=0; tries=0
+      while [ "$tries" -lt 12 ]; do
+          tries=$((tries+1))
+          if record=$($BB sh /extra/boot-health.sh 2>/dev/null); then
+              set -- $record
+              if [ "$1" = "$healthy_pid" ] && [ "$2" -gt "$healthy_stamp" ]; then
+                  streak=$((streak+1))
+              else
+                  streak=1
+              fi
+              healthy_pid=$1; healthy_stamp=$2
+              if [ "$streak" -ge 3 ] &&
+                 $BB dd if=/dev/zero of=/dev/mmcblk0p10 bs=512 count=1 conv=notrunc 2>/dev/null; then
+                  $BB sync
+                  mark $((BASE+40)) "S10 local GUI healthy, bcb cleared"
+                  exit 0
+              fi
+          else
+              streak=0
+          fi
+          $BB sleep 5
+      done
+      mark $((BASE+40)) "S10 GUI unhealthy, rebooting with recovery BCB armed"
+      $BB sync
+      $BB reboot -f ) &
 
     for c in 1 2 3; do $BB echo 1 > /sys/devices/system/cpu/cpu$c/online 2>/dev/null; done
     echo "= cpus $($BB nproc)  mem $($BB free | $BB awk '/Mem:/{print int($4/1024)}')MB free"

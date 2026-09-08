@@ -1,7 +1,7 @@
 From b3028d1a1be2eb42d330e317291b443347a6d9a1 Mon Sep 17 00:00:00 2001
 From: dangerouslaser <bryan.hoban@gmail.com>
 Date: Tue, 8 Sep 2026 10:35:28 -0400
-Subject: [PATCH] input: add HA100 TLSC6x reports without firmware updates
+Subject: [PATCH 1/2] input: add HA100 TLSC6x reports without firmware updates
 
 ---
  drivers/input/touchscreen/mediatek/Kconfig    |   8 +
@@ -278,6 +278,55 @@ index 00000000..b1fa2132
 +module_init(couch_touch_init);
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("HA100 TLSC6x input driver, without firmware updates");
+-- 
+2.43.0
+
+
+From 51a6e7f3dea7c705d9732bb7f5e3243e2571c0fa Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:41:31 -0400
+Subject: [PATCH 2/2] input: respect the MT6580 eight-byte I2C FIFO
+
+---
+ .../input/touchscreen/mediatek/couch_tlsc6x.c | 25 ++++++++++++-------
+ 1 file changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mediatek/couch_tlsc6x.c b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+index b1fa2132..1fbde773 100644
+--- a/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
++++ b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+@@ -23,15 +23,22 @@ static struct couch_touch *panel_touch;
+ 
+ static int couch_touch_read(struct i2c_client *client, u8 *report)
+ {
+-	u8 reg = 0;
+-	int ret;
+-
+-	/* The vendor protocol uses a STOP between selecting and reading reg 0. */
+-	ret = i2c_master_send(client, &reg, 1);
+-	if (ret != 1)
+-		return ret < 0 ? ret : -EIO;
+-	ret = i2c_master_recv(client, report, TLSC_REPORT_SIZE);
+-	return ret == TLSC_REPORT_SIZE ? 0 : (ret < 0 ? ret : -EIO);
++	u8 reg;
++	int ret, len;
++
++	/* The MT6580 non-DMA FIFO holds eight bytes. The controller's register
++	 * window supports addressed chunks; preserve STOP between address/read.
++	 */
++	for (reg = 0; reg < TLSC_REPORT_SIZE; reg += len) {
++		len = min_t(int, 8, TLSC_REPORT_SIZE - reg);
++		ret = i2c_master_send(client, &reg, 1);
++		if (ret != 1)
++			return ret < 0 ? ret : -EIO;
++		ret = i2c_master_recv(client, report + reg, len);
++		if (ret != len)
++			return ret < 0 ? ret : -EIO;
++	}
++	return 0;
+ }
+ 
+ static void couch_touch_clear(void)
 -- 
 2.43.0
 

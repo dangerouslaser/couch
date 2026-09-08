@@ -29,6 +29,7 @@ fi
 rm -rf build/tree
 mkdir -p build/tree/extra
 cp initramfs/init build/tree/init
+cp initramfs/boot-health.sh build/tree/extra/boot-health.sh
 cp build/busybox-armv7l build/tree/busybox
 [ -f build/fbcon ] && cp build/fbcon build/tree/extra/fbcon
 # Anything staged in initramfs/extra/ ships inside the image (modules, firmware).

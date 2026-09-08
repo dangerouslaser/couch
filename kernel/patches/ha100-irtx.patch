@@ -1,0 +1,212 @@
+From a10b6360c960184362c41cc901516e5ce8ef4181 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:44:04 -0400
+Subject: [PATCH] irtx: add bounded MT6580 PWM transfers with safe DMA cleanup
+
+---
+ drivers/misc/mediatek/irtx/mt6580/Makefile    |   3 +
+ .../misc/mediatek/irtx/mt6580/couch_irtx.c    | 182 ++++++++++++++++++
+ 2 files changed, 185 insertions(+)
+ create mode 100644 drivers/misc/mediatek/irtx/mt6580/Makefile
+ create mode 100644 drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+
+diff --git a/drivers/misc/mediatek/irtx/mt6580/Makefile b/drivers/misc/mediatek/irtx/mt6580/Makefile
+new file mode 100644
+index 00000000..15aaa439
+--- /dev/null
++++ b/drivers/misc/mediatek/irtx/mt6580/Makefile
+@@ -0,0 +1,3 @@
++include $(srctree)/drivers/misc/mediatek/Makefile.custom
++ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
++obj-$(CONFIG_MTK_IRTX_PWM_SUPPORT) += couch_irtx.o
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+new file mode 100644
+index 00000000..7add55fa
+--- /dev/null
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -0,0 +1,182 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* HA100 MT6580 PWM IR transmitter. ABI/register setup follows MediaTek's
++ * mt_irtx_pwm.c (SoCXin/MT6737, 89eaf42); bounded synchronous transfers,
++ * serialized callers and DMA quiescence replace its fixed post-send delay.
++ */
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/of.h>
++#include <linux/miscdevice.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++#include <linux/dma-mapping.h>
++#include <linux/mutex.h>
++#include <linux/delay.h>
++#include <linux/jiffies.h>
++#include <linux/wakelock.h>
++#include <mt-plat/mt_pwm.h>
++#include <mach/mt_pwm_hal.h>
++
++#define IRTX_SET_CARRIER _IOW('R', 0, unsigned int)
++#define IRTX_GET_SOLUTION _IOR('R', 1, unsigned int)
++#define IRTX_MAX_BYTES (128 * 1024)
++
++struct couch_irtx {
++	struct miscdevice misc;
++	struct device *dev;
++	struct mutex lock;
++	struct wake_lock awake;
++	struct pwm_spec_config pwm;
++	bool invert;
++};
++
++static long ir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	unsigned int carrier;
++	if (cmd == IRTX_GET_SOLUTION)
++		return put_user(1, (unsigned int __user *)arg);
++	/* Solution 1 includes the carrier in the bitstream; check, don't retune. */
++	if (cmd == IRTX_SET_CARRIER) {
++		if (get_user(carrier, (unsigned int __user *)arg))
++			return -EFAULT;
++		return carrier >= 10000 && carrier <= 100000 ? 0 : -EINVAL;
++	}
++	return -ENOTTY;
++}
++
++static ssize_t ir_write(struct file *file, const char __user *buf,
++			size_t count, loff_t *pos)
++{
++	struct miscdevice *misc = file->private_data;
++	struct couch_irtx *ir = container_of(misc, struct couch_irtx, misc);
++	dma_addr_t physical;
++	u8 *wave;
++	unsigned long deadline;
++	unsigned int i, finish = ir->pwm.pwm_no * 2;
++	int ret;
++
++	/* BUF0_SIZE counts whole 32-bit words minus one. Reject padding ambiguity. */
++	if (!count || count > IRTX_MAX_BYTES || count % 4)
++		return -EINVAL;
++	if (mutex_lock_interruptible(&ir->lock))
++		return -ERESTARTSYS;
++	wave = dma_alloc_coherent(ir->dev, count, &physical, GFP_KERNEL);
++	if (!wave) {
++		ret = -ENOMEM;
++		goto unlock;
++	}
++	if (copy_from_user(wave, buf, count)) {
++		ret = -EFAULT;
++		goto free;
++	}
++	if (ir->invert)
++		for (i = 0; i < count; i++)
++			wave[i] = ~wave[i];
++
++	wake_lock(&ir->awake);
++	mt_pwm_26M_clk_enable_hal(1);
++	mt_set_intr_ack(finish);
++	mt_set_intr_ack(finish + 1);
++	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_BASE_ADDR = (u32 *)physical;
++	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_SIZE = count / 4 - 1;
++	ret = pwm_set_spec_config(&ir->pwm);
++	if (ret) {
++		/* MTK HAL errors are not all Linux errno values. */
++		ret = -EIO;
++		goto stop;
++	}
++	/* Each bit is one microsecond. Poll completion without enabling an
++	 * unhandled shared PWM interrupt. Allow scheduling slack, never forever. */
++	deadline = jiffies + msecs_to_jiffies(DIV_ROUND_UP(count * 8, 1000) + 50);
++	for (;;) {
++		if (mt_get_intr_status(finish + 1) > 0) {
++			ret = -EIO;
++			break;
++		}
++		if (mt_get_intr_status(finish) > 0) {
++			ret = count;
++			break;
++		}
++		if (time_after_eq(jiffies, deadline)) {
++			dev_err_ratelimited(ir->dev, "PWM transmit timed out\n");
++			ret = -ETIMEDOUT;
++			break;
++		}
++		usleep_range(500, 1000);
++	}
++stop:
++	/* Disable includes MTK's drain delay. No DMA mapping is freed while live. */
++	mt_pwm_disable(ir->pwm.pwm_no, ir->pwm.pmic_pad);
++	mt_set_intr_ack(finish);
++	mt_set_intr_ack(finish + 1);
++	wake_unlock(&ir->awake);
++free:
++	dma_free_coherent(ir->dev, count, wave, physical);
++unlock:
++	mutex_unlock(&ir->lock);
++	return ret;
++}
++
++static const struct file_operations ir_fops = {
++	.owner = THIS_MODULE,
++	.write = ir_write,
++	.unlocked_ioctl = ir_ioctl,
++	.llseek = no_llseek,
++};
++
++static int ir_probe(struct platform_device *pdev)
++{
++	struct couch_irtx *ir;
++	u32 channel, invert = 0;
++	int ret;
++	if (of_property_read_u32(pdev->dev.of_node, "pwm_ch", &channel) || channel >= 5)
++		return -EINVAL;
++	of_property_read_u32(pdev->dev.of_node, "pwm_data_invert", &invert);
++	ir = devm_kzalloc(&pdev->dev, sizeof(*ir), GFP_KERNEL);
++	if (!ir)
++		return -ENOMEM;
++	ir->dev = &pdev->dev;
++	ir->invert = !!invert;
++	mutex_init(&ir->lock);
++	ret = dma_coerce_mask_and_coherent(ir->dev, DMA_BIT_MASK(32));
++	if (ret)
++		return ret;
++	ir->pwm.pwm_no = channel;
++	ir->pwm.mode = PWM_MODE_MEMORY;
++	ir->pwm.clk_div = CLK_DIV1;
++	ir->pwm.clk_src = PWM_CLK_NEW_MODE_BLOCK;
++	ir->pwm.PWM_MODE_MEMORY_REGS.STOP_BITPOS_VALUE = 31;
++	ir->pwm.PWM_MODE_MEMORY_REGS.HDURATION = 25;
++	ir->pwm.PWM_MODE_MEMORY_REGS.LDURATION = 25;
++	ir->pwm.PWM_MODE_MEMORY_REGS.WAVE_NUM = 1;
++	ir->misc.minor = MISC_DYNAMIC_MINOR;
++	ir->misc.name = "irtx";
++	ir->misc.fops = &ir_fops;
++	ir->misc.parent = ir->dev;
++	ir->misc.mode = 0600;
++	wake_lock_init(&ir->awake, WAKE_LOCK_SUSPEND, "couch-irtx");
++	ret = misc_register(&ir->misc);
++	if (ret) {
++		wake_lock_destroy(&ir->awake);
++		return ret;
++	}
++	platform_set_drvdata(pdev, ir);
++	dev_info(ir->dev, "HA100 IR PWM%u, invert=%u, completion polling\n", channel, invert);
++	return 0;
++}
++
++/* Built-in only: no removal while open descriptors refer to the hardware. */
++static const struct of_device_id ir_match[] = {
++	{ .compatible = "mediatek,irtx-pwm" }, { }
++};
++static struct platform_driver ir_driver = {
++	.probe = ir_probe,
++	.driver = {
++		.name = "couch-irtx",
++		.of_match_table = ir_match,
++		.suppress_bind_attrs = true,
++	},
++};
++module_platform_driver(ir_driver);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("HA100 MT6580 PWM infrared transmitter");
+-- 
+2.43.0
+

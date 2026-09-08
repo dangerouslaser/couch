@@ -1,0 +1,64 @@
+From 15b9bb349413240abb5538db678a2f9a8c4653ac Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 11:05:52 -0400
+Subject: [PATCH] irtx: keep PWM register accesses inside the powered interval
+
+---
+ drivers/misc/mediatek/include/mt-plat/mt_pwm.h | 2 ++
+ drivers/misc/mediatek/irtx/mt6580/couch_irtx.c | 4 +++-
+ drivers/misc/mediatek/pwm/mt_pwm.c             | 2 +-
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/misc/mediatek/include/mt-plat/mt_pwm.h b/drivers/misc/mediatek/include/mt-plat/mt_pwm.h
+index dac09d42..b17f51f1 100644
+--- a/drivers/misc/mediatek/include/mt-plat/mt_pwm.h
++++ b/drivers/misc/mediatek/include/mt-plat/mt_pwm.h
+@@ -108,6 +108,8 @@ s32 pwm_set_easy_config(struct pwm_easy_config *conf);
+ s32 pwm_set_spec_config(struct pwm_spec_config *conf);
+ 
+ void mt_pwm_dump_regs(void);
++/* Enable the register clock before direct HAL setup/status accesses. */
++void mt_pwm_power_on(u32 pwm_no, bool pmic_pad);
+ void mt_pwm_disable(u32 pwm_no, u8 pmic_pad);
+ 
+ /*----------3dLCM support-----------*/
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+index 7add55fa..3976b10e 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -74,6 +74,8 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 			wave[i] = ~wave[i];
+ 
+ 	wake_lock(&ir->awake);
++	/* Clock-gated PWM MMIO can wedge the bus before a timeout can run. */
++	mt_pwm_power_on(ir->pwm.pwm_no, ir->pwm.pmic_pad);
+ 	mt_pwm_26M_clk_enable_hal(1);
+ 	mt_set_intr_ack(finish);
+ 	mt_set_intr_ack(finish + 1);
+@@ -106,9 +108,9 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	}
+ stop:
+ 	/* Disable includes MTK's drain delay. No DMA mapping is freed while live. */
+-	mt_pwm_disable(ir->pwm.pwm_no, ir->pwm.pmic_pad);
+ 	mt_set_intr_ack(finish);
+ 	mt_set_intr_ack(finish + 1);
++	mt_pwm_disable(ir->pwm.pwm_no, ir->pwm.pmic_pad);
+ 	wake_unlock(&ir->awake);
+ free:
+ 	dma_free_coherent(ir->dev, count, wave, physical);
+diff --git a/drivers/misc/mediatek/pwm/mt_pwm.c b/drivers/misc/mediatek/pwm/mt_pwm.c
+index 17b91eb7..12039988 100644
+--- a/drivers/misc/mediatek/pwm/mt_pwm.c
++++ b/drivers/misc/mediatek/pwm/mt_pwm.c
+@@ -69,7 +69,7 @@ static struct pwm_device pwm_dat = {
+ 
+ static struct pwm_device *pwm_dev = &pwm_dat;
+ 
+-static void mt_pwm_power_on(u32 pwm_no, bool pmic_pad)
++void mt_pwm_power_on(u32 pwm_no, bool pmic_pad)
+ {
+ 	mt_pwm_power_on_hal(pwm_no, pmic_pad, &(pwm_dev->power_flag));
+ }
+-- 
+2.43.0
+

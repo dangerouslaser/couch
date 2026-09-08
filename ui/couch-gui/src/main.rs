@@ -68,8 +68,8 @@ enum Intent {
 /// the first key only wakes it - a dark remote should not change the house
 /// because someone found the wrong button in the dark. The microphone key is
 /// the exception: holding it in the dark means "talk", so it wakes and records.
-/// Only a key wakes; a touch on a dimmed or dark panel is ignored, and the
-/// touch controller is suspended anyway while the panel is off.
+/// A first tap wakes from dim without selecting a target. Full powerdown
+/// suspends the touch controller and still requires a button to wake.
 ///
 /// A pairing PIN on screen, a recording in progress, or first-run setup hold
 /// the panel awake: each is something a person is looking at or waiting on.
@@ -85,6 +85,29 @@ enum Standby {
 }
 
 
+#[derive(Debug, PartialEq)]
+enum TouchDisposition { Ignore, Wake, Dispatch }
+
+fn touch_disposition(state: Standby, event: &touch::Event, swallow: &mut bool) -> TouchDisposition {
+    if state == Standby::Off {
+        return TouchDisposition::Ignore;
+    }
+    if *swallow {
+        if matches!(event, touch::Event::Released { .. }) {
+            *swallow = false;
+        }
+        return TouchDisposition::Ignore;
+    }
+    if state == Standby::Dim {
+        if matches!(event, touch::Event::Pressed { .. }) {
+            *swallow = true;
+            return TouchDisposition::Wake;
+        }
+        return TouchDisposition::Ignore;
+    }
+    TouchDisposition::Dispatch
+}
+
 /// Bring the panel back, then bring Slint's clock up to date.
 ///
 /// Both the unblank (~430ms of panel re-init) and a backlight write (it goes
@@ -96,10 +119,14 @@ enum Standby {
 /// measured. Refreshing the tick here is what makes the first press after a
 /// wake glide like any other.
 fn wake(screen: &mut Panel, level: u8) {
+    let started = now_monotonic_us();
     if screen.unblank_if_asleep() {
         println!("couch-gui: standby: panel was asleep, unblanked");
     }
+    let presented = now_monotonic_us();
     Panel::set_backlight(level);
+    println!("couch-gui: wake: panel/present={}ms, backlight={}ms",
+             (presented - started) / 1000, (now_monotonic_us() - presented) / 1000);
     slint::platform::update_timers_and_animations();
 }
 
@@ -793,6 +820,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut standby = Standby::Active;
+    let mut swallow_wake_touch = false;
     let mut last_input = now_monotonic_us();
     // When to re-assert the backlight after a wake, forced past the LED
     // layer; None when nothing is owed.
@@ -804,6 +832,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let (mut in_n, mut in_sum, mut in_max) = (0u64, 0u64, 0u64);
     let mut last_stat = now_monotonic_us();
+    let mut rendered_once = false;
+    let mut last_health = 0;
+    let _ = std::fs::remove_file("/tmp/couch-gui.health");
 
     loop {
         if let Some(press) = pad.poll() {
@@ -867,11 +898,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Slint's own hit testing decides what a tap lands on, so nothing here
         // needs to know what is on screen.
         while let Some(event) = pointer.poll() {
-            // A touch neither wakes the panel nor counts as input while it is
-            // dimmed or dark: a button does. The events are still drained so
-            // the first tap after a wake starts from a clean state.
-            if standby != Standby::Active {
-                continue;
+            // Full powerdown sleeps the touch controller; button wake remains
+            // required. While only dimmed, the first tap restores brightness
+            // without also activating whatever happens to be underneath it.
+            match touch_disposition(standby, &event, &mut swallow_wake_touch) {
+                TouchDisposition::Ignore => continue,
+                TouchDisposition::Wake => {
+                    wake(&mut screen, active_level.get());
+                    standby = Standby::Active;
+                    last_input = now_monotonic_us();
+                    verify_at = Some(last_input + 1_000_000);
+                    println!("couch-gui: standby: wake from dim on touch");
+                    continue;
+                }
+                TouchDisposition::Dispatch => {}
             }
             last_input = now_monotonic_us();
             let (position, ev) = match event {
@@ -1094,15 +1134,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // polling input.
         // A powered-down panel shows nothing, so nothing is drawn for it:
         // Slint's state keeps advancing (the clock, a PIN arriving) and the
-        // first frame after waking catches up. Input is still polled, at a
-        // rate a hand cannot notice and the battery can.
+        // first frame after waking catches up. Keep local health updates
+        // alive in standby; they do not depend on any network service.
+        let health_now = now_monotonic_us();
+        if rendered_once && health_now - last_health >= 1_000_000 {
+            last_health = health_now;
+            if let Err(error) = system::report_gui_health() {
+                eprintln!("couch-gui: health marker: {error}");
+            }
+        }
         if standby == Standby::Off {
-            std::thread::sleep(Duration::from_millis(40));
+            pad.wait_for_input();
             continue;
         }
 
         match screen.render(&window) {
             Some(cost) => {
+                rendered_once = true;
                 render_us += cost.work_us;
                 wait_us += cost.wait_us;
                 frames += 1;
@@ -1115,7 +1163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if screen.unblank_if_asleep() {
                         println!("couch-gui: standby: panel asleep after wake, unblanked");
                     }
-                    Panel::force_backlight(255);
+                    Panel::force_backlight(active_level.get());
                     slint::platform::update_timers_and_animations();
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -1138,5 +1186,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             in_sum = 0;
             in_max = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod standby_tests {
+    use super::*;
+
+    #[test]
+    fn dim_wake_consumes_the_whole_contact_then_allows_the_next_tap() {
+        let press = touch::Event::Pressed { x: 20.0, y: 30.0 };
+        let moved = touch::Event::Moved { x: 25.0, y: 35.0 };
+        let release = touch::Event::Released { x: 25.0, y: 35.0 };
+        let mut swallow = false;
+        assert_eq!(touch_disposition(Standby::Dim, &press, &mut swallow), TouchDisposition::Wake);
+        assert_eq!(touch_disposition(Standby::Active, &moved, &mut swallow), TouchDisposition::Ignore);
+        assert_eq!(touch_disposition(Standby::Active, &release, &mut swallow), TouchDisposition::Ignore);
+        assert_eq!(touch_disposition(Standby::Active, &press, &mut swallow), TouchDisposition::Dispatch);
+        assert_eq!(touch_disposition(Standby::Off, &press, &mut swallow), TouchDisposition::Ignore);
+        assert!(!swallow);
     }
 }

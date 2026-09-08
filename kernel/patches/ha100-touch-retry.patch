@@ -1,0 +1,49 @@
+From 165e182c0a8adebfe82af0172b23900b12eddac4 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Tue, 8 Sep 2026 10:47:05 -0400
+Subject: [PATCH] input: retry transient TLSC6x report-read errors
+
+---
+ .../input/touchscreen/mediatek/couch_tlsc6x.c | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/input/touchscreen/mediatek/couch_tlsc6x.c b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+index 1fbde773..4954c080 100644
+--- a/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
++++ b/drivers/input/touchscreen/mediatek/couch_tlsc6x.c
+@@ -21,7 +21,7 @@ struct couch_touch {
+ /* The MediaTek framework supplies callbacks for this single panel. */
+ static struct couch_touch *panel_touch;
+ 
+-static int couch_touch_read(struct i2c_client *client, u8 *report)
++static int couch_touch_read_once(struct i2c_client *client, u8 *report)
+ {
+ 	u8 reg;
+ 	int ret, len;
+@@ -41,6 +41,23 @@ static int couch_touch_read(struct i2c_client *client, u8 *report)
+ 	return 0;
+ }
+ 
++static int couch_touch_read(struct i2c_client *client, u8 *report)
++{
++	int attempt, ret = -EIO;
++
++	/* The controller can NACK the first access after idle. Retry the whole
++	 * report, not a partial chunk, and bound the time spent in the IRQ thread.
++	 */
++	for (attempt = 0; attempt < 3; attempt++) {
++		ret = couch_touch_read_once(client, report);
++		if (!ret)
++			return 0;
++		if (attempt < 2)
++			usleep_range(1000, 2000);
++	}
++	return ret;
++}
++
+ static void couch_touch_clear(void)
+ {
+ 	int slot;
+-- 
+2.43.0
+

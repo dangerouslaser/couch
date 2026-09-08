@@ -18,6 +18,21 @@ mark() { $BB echo "[$($BB cut -d. -f1 /proc/uptime)s] $2" | $BB dd of=$LOG bs=51
 echo "= stage2 running from $(dirname "$0")"
 [ -e /dev/mmcblk0p13 ] || $BB mknod /dev/mmcblk0p13 b 179 13 2>/dev/null
 
+# The custom IR driver is a misc device; stock firmware used major 243.
+# Resolve the registered device number instead of retaining the cpio's stock
+# node (which may now refer to an unrelated character driver).
+if [ -r /sys/class/misc/irtx/dev ]; then
+    ir_dev=$($BB cat /sys/class/misc/irtx/dev)
+    case "$ir_dev" in
+        *[!0-9:]*|:*|*:) echo "= invalid IR device number: $ir_dev" ;;
+        *:*) $BB rm -f /dev/irtx
+             $BB mknod -m 600 /dev/irtx c "${ir_dev%:*}" "${ir_dev#*:}" ;;
+    esac
+else
+    # No IR driver: do not leave a stock node pointing at another driver.
+    $BB rm -f /dev/irtx
+fi
+
 # MediaTek's connectivity blobs. Couch ships its own copies so it does not
 # depend on Android still being installed: mounting Android's /system and
 # /vendor works only until someone flashes over them, and then WiFi disappears

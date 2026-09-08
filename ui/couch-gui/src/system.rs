@@ -2,6 +2,19 @@
 
 use std::process::Command;
 
+/// Only called after a real GUI frame, then from the functioning main loop.
+/// Atomic replacement keeps init from reading half a heartbeat.
+pub fn report_gui_health() -> std::io::Result<()> {
+    // /proc/uptime includes system suspend, matching init's freshness clock.
+    let uptime = std::fs::read_to_string("/proc/uptime")?;
+    let seconds = uptime.split('.').next().unwrap_or("").parse::<u64>()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let pid = std::process::id();
+    let temporary = format!("/tmp/couch-gui.health.{pid}");
+    std::fs::write(&temporary, format!("{pid} {seconds}\n"))?;
+    std::fs::rename(temporary, "/tmp/couch-gui.health")
+}
+
 const BATTERY: &str = "/sys/class/power_supply/battery/";
 
 pub struct Battery {
