@@ -124,14 +124,15 @@ def select_candidate(observed, expected):
 
 @contextmanager
 def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None):
-    """Gate an explicitly supplied backend; not exposed as a hardware CLI command.
+    """Gate an explicitly supplied backend for the read-only capture CLI.
 
     Factory must be side-effect-free until claim(), and expose enumerate(),
     claim(Candidate), claimed_candidate(), start_readonly(bytes, ReadPolicy),
     close(reset=False). start_readonly returns the connected upstream Mtk object.
     The backend must not rediscover a different target or invoke configure_da's
     generic reset/security fallback. mtk_usb.ExactUsbBackend implements this
-    contract experimentally; no physical session has been validated yet.
+    contract experimentally. Physical DA startup and identity readback have
+    passed; clean USB teardown and installer recovery remain separate milestones.
     """
     with exclusive_lock(lock_directory):
         pinned = source_pin(checkout)

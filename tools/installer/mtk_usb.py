@@ -1,7 +1,7 @@
-"""Experimental exact-device PyUSB binding; API only, hardware validation pending.
+"""Experimental exact-device PyUSB binding; DA startup validated on one HA100.
 
 Instantiating imports dependencies; enumerate/claim/start are explicit operations.
-The installer CLI deliberately does not invoke this backend yet.
+The read-only capture CLI uses this backend; physical installation stays disabled.
 """
 from contextlib import contextmanager
 import importlib
@@ -373,16 +373,16 @@ class ExactUsbBackend:
                 try:
                     self.usb.util.release_interface(self.device, number)
                 except Exception as error:
-                    errors.append(error)
+                    errors.append((f"release interface {number}", error))
             for number in reversed(self.detached):
                 try:
                     self.device.attach_kernel_driver(number)
                 except Exception as error:
-                    errors.append(error)
+                    errors.append((f"reattach kernel driver on interface {number}", error))
             try:
                 self.usb.util.dispose_resources(self.device)
             except Exception as error:
-                errors.append(error)
+                errors.append(("dispose USB resources", error))
         self.interfaces, self.detached, self.device = [], [], None
         if self.mtk is not None:
             self.mtk.port.cdc.connected = False
@@ -393,6 +393,7 @@ class ExactUsbBackend:
         if self.imports is not None:
             self.imports.close()
             self.imports = None
-        errors = [error for error in errors if getattr(error, "errno", None) != errno.ENODEV]
+        errors = [(operation, error) for operation, error in errors if getattr(error, "errno", None) != errno.ENODEV]
         if errors:
-            raise InstallError(f"USB cleanup failed: {errors[0]}; disconnect the cable before another session") from errors[0]
+            details = "; ".join(f"{operation}: {error}" for operation, error in errors)
+            raise InstallError(f"USB cleanup failed: {details}; disconnect the cable before another session") from errors[0][1]

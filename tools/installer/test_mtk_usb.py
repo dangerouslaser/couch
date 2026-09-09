@@ -135,6 +135,16 @@ class UsbBackendTests(unittest.TestCase):
         self.backend.close()
         self.assertIsNone(self.backend.device)
 
+    def test_cleanup_error_identifies_operation_without_swallowing_enoent(self):
+        self.backend.claim(descriptor(self.dev))
+        def missing(number):
+            raise OSError(errno.ENOENT, "Entity not found")
+        self.dev.attach_kernel_driver = missing
+        with self.assertRaisesRegex(InstallError, "reattach kernel driver on interface 1.*interface 0"):
+            self.backend.close()
+        self.assertIn("dispose", self.events)
+        self.assertIsNone(self.backend.device)
+
     def test_direct_da_start_disables_reconnect_and_write_entries(self):
         mtk = self.start()
         self.assertIn("upload", self.events)

@@ -57,6 +57,22 @@ class CaptureTests(unittest.TestCase):
         report = read_json(self.args.backup_dir / "readback.json")
         self.assertTrue(report["complete"] and report["runtime_cid_verified"] and report["runtime_identity_verified"])
         self.assertEqual(closed, [True])
+        self.assertTrue(report["usb_cleanup_verified"])
+
+    def test_successful_readback_remains_distinct_from_cleanup_failure(self):
+        @contextmanager
+        def session(*args, **kwargs):
+            yield self.reader
+            raise InstallError("USB cleanup failed: reattach kernel driver")
+        output = io.StringIO()
+        with patch("capture_readonly.source_pin", return_value={}), redirect_stdout(output):
+            with self.assertRaisesRegex(InstallError, "USB cleanup failed"):
+                capture(self.args, session=session)
+        report = read_json(self.args.backup_dir / "readback.json")
+        self.assertTrue(report["complete"])
+        self.assertFalse(report["usb_cleanup_verified"])
+        self.assertIn("Identity backup and independent readback verified", output.getvalue())
+        self.assertNotIn("session closed", output.getvalue())
 
     def test_changed_cid_is_rejected_before_backing_up(self):
         baseline = {"capacity": self.reader.capacity, "partitions": self.reader.description["partitions"], "cid": "12" * 16}

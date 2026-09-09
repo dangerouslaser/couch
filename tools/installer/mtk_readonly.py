@@ -128,7 +128,7 @@ class ConnectedMtkReader:
             result.update(data)
         return result.hexdigest()
 
-    def backup_identity(self, destination, confirm):
+    def backup_identity(self, destination, confirm, *, progress=None):
         require(confirm == self.description["storage_id"], "Storage confirmation mismatch")
         destination = Path(destination).absolute()
         require(not destination.is_symlink() and not destination.exists(), "Use a new backup destination")
@@ -140,6 +140,8 @@ class ConnectedMtkReader:
                   "identity_decoded": False}
         save_json(destination / "readback.json", report)
         for name in sorted(IDENTITY_PARTITIONS):
+            if progress:
+                progress(f"Backing up identity partition: {name}")
             path = destination / f"{name}.img"
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as output:
@@ -149,6 +151,8 @@ class ConnectedMtkReader:
                 os.fsync(output.fileno())
             sync_directory(destination)
             checksum = digest(path)
+            if progress:
+                progress(f"Verifying independent readback: {name}")
             require(checksum == self.hash(name), f"Independent identity readback mismatch: {name}")
             report["backups"][name] = checksum
             save_json(destination / "readback.json", report)

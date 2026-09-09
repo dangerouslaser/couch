@@ -1,6 +1,6 @@
 # Couch USB installer
 
-Status: experimental installer policy engine, simulation CLI, and read-only USB adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. Controlled HA100 testing has captured the selected preloader, synchronized, uploaded the approved download agent into RAM and obtained eMMC/RAM metadata. The first partition-table read then failed; USB identity backup, persistent writes and installer recovery remain unvalidated. Separately, runtime reads of five identity partitions plus boot/recovery have private, independently verified baseline copies.
+Status: experimental installer policy engine, simulation CLI, and read-only USB adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. Controlled HA100 testing has captured the selected preloader, synchronized, uploaded the approved download agent into RAM and obtained eMMC/RAM metadata. A subsequent controlled session verified both GPT copies, runtime CID and all five identity partitions, then saved and independently verified their 60 MiB backup. USB teardown returned ENOENT afterward; clean teardown, persistent writes and installer recovery remain unvalidated. Separately, runtime reads of five identity partitions plus boot/recovery have private, independently verified baseline copies.
 
 ## Intended experience
 
@@ -53,7 +53,7 @@ python3 -m unittest discover -s tools/installer -v
 
 The `plan` command is a dry run and writes nothing. Repeat `simulate` with `--resume` to verify a completed journal or continue after a simulated interruption. These tests cover wrong targets/layouts, prohibited writes, bad hashes, backup/readback failures, partial writes, corrupted backups, identity changes, write ordering and resume.
 
-The reviewed suite has 72 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Adapter tests cover GPT CRCs and disagreement between valid copies, bounded reads, short responses, target confirmation, and independent identity readback. Session-gate tests cover source/loader changes, competing locks, ambiguous device selection and cleanup. Simulation is single-process only; it does not yet use the session gate's lock. Do not treat the simulator as a hardware-ready transaction manager.
+The reviewed suite has 74 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Adapter tests cover GPT CRCs and disagreement between valid copies, bounded reads, short responses, target confirmation, and independent identity readback. Session-gate tests cover source/loader changes, competing locks, ambiguous device selection and cleanup. Simulation is single-process only; it does not yet use the session gate's lock. Do not treat the simulator as a hardware-ready transaction manager.
 
 Optional descriptor-only discovery requires PyUSB and a libusb backend. Install them in a development virtual environment following the host's package instructions, then run:
 
@@ -96,7 +96,7 @@ The backend contract separates descriptor enumeration, exact-device claiming, an
 
 Upstream USB `connect` currently chooses the first matching VID/PID and includes a fallback that re-enumerates by VID/PID. The Couch binding bypasses that connector: it claims the selected descriptor directly and disables upstream rediscovery entry points. It stops on errors rather than selecting a new VID/PID match. [Reviewed USB connector](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/Connection/usblib.py#L299)
 
-## Concrete USB binding: startup validated, readback pending
+## Concrete USB binding: startup and identity readback validated
 
 `tools/installer/mtk_usb.py` claims the exact enumerated PyUSB device and its CDC bulk endpoints. It records which interfaces it claimed and detached, then releases those interfaces and restores only those drivers during cleanup. It does not reset USB or fall back to setting a new configuration. USB transfer defaults are one second; claim and read operations have ten-second deadlines and startup has a thirty-second deadline. Deadlines require the main thread on Linux/macOS and unwind through cleanup; they are not a separate-process kill guarantee for a defective native USB library.
 
@@ -154,3 +154,12 @@ The fifth controlled attempt completed the READY exchange and uploaded both unpa
 Bulk transfers can terminate with a zero-length packet. The input adapter now accepts at most eight such empty transfers per logical read, retains all nonempty bytes and keeps the existing operation deadline. Oversized transfers remain fatal with explicit lengths; partition-read errors include offset and requested size without exposing contents. These changes are covered by mock tests and await the next controlled capture. [libusb transfer termination](https://libusb.sourceforge.io/api-1.0/group__libusb__asyncio.html), [packet sizing](https://libusb.sourceforge.io/api-1.0/libusb_packetoverflow.html).
 
 CID representation was checked privately against the same unit's runtime baseline. The pinned upstream parser reads two big-endian 64-bit values, but its diagnostic formatter emits them as little-endian, so printed CID text is not canonical. Recovering the wire bytes and rendering their four little-endian 32-bit registers in big-endian order exactly matched Linux sysfs. This is a hardware-confirmed conversion for the tested MT6580 legacy path, not a general claim about other DAs. The adapter preserves its original wire-based `storage_id` and adds `runtime_cid_sha256` with an explicit encoding label. Baseline comparison accepts only this fixed representation; no alternate permutations are attempted. Synthetic tests cover distinct byte positions and rejection of the raw wire encoding as a runtime CID. A complete live USB backup still needs validation. [Pinned upstream parser/formatter](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_flash_param.py#L130), [Linux CID formatting](https://github.com/torvalds/linux/blob/master/drivers/mmc/core/mmc.c).
+
+
+## Verified USB identity capture; teardown still unresolved
+
+Attempt six completed both GPT checks, matched the runtime CID and layout, compared all five partition hashes to the private runtime baseline, and wrote independently verified backups totaling 60 MiB. The private report recorded `complete`, `runtime_baseline_verified`, `runtime_cid_verified` and `runtime_identity_verified` as true. Vendor Device ID/MAC decoding remains unvalidated. No persistent partition writes were issued.
+
+The process subsequently returned an error during USB teardown (`ENOENT`). This does not invalidate the verified files, but it does prevent claiming a cleanly closed session or a restored GUI. The operator must confirm normal Couch operation separately. Teardown now identifies each failing release, driver reattachment or resource-disposal operation; unexplained ENOENT remains fatal. New reports distinguish successful readback (`complete`) from successful teardown (`usb_cleanup_verified`).
+
+The CLI now announces GPT completion, each runtime-baseline partition check, backup and independent readback, then the start of teardown. Baseline verification reads 60 MiB before creating the destination; backup and readback add another 120 MiB. Several minutes without a destination was therefore not proof of a stalled session. Each transfer remains limited to 1 MiB and ten seconds, with no automatic reconnect or reset.

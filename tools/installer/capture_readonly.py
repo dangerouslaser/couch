@@ -34,7 +34,7 @@ def baseline_record(path):
     return value
 
 
-def compare_baseline(reader, baseline):
+def compare_baseline(reader, baseline, *, progress=None):
     if baseline is None:
         return
     observed = reader.description
@@ -45,6 +45,8 @@ def compare_baseline(reader, baseline):
                 and observed.get("runtime_cid_sha256") == hashlib.sha256(bytes.fromhex(baseline["cid"])).hexdigest(),
                 "Observed eMMC CID differs from runtime baseline")
     for name, checksum in baseline.get("identity_sha256", {}).items():
+        if progress:
+            progress(f"Verifying runtime baseline: {name}")
         require(reader.hash(name) == checksum, f"Runtime identity baseline differs: {name}")
 
 
@@ -89,8 +91,10 @@ def capture(args, *, enumerate_devices=None, session=read_session):
                  candidate_provider=candidate_provider) as reader:
         # Hardware layout/CID only exist after DA startup. Baseline syntax was
         # checked before USB; actual metadata and bytes are compared here.
-        compare_baseline(reader, baseline)
-        report = reader.backup_identity(destination, reader.description["storage_id"])
+        progress = lambda message: print(message, flush=True)
+        progress("DA startup and both GPT copies verified. Checking runtime baseline before creating backup files.")
+        compare_baseline(reader, baseline, progress=progress)
+        report = reader.backup_identity(destination, reader.description["storage_id"], progress=progress)
         if baseline is not None:
             for name, checksum in baseline.get("identity_sha256", {}).items():
                 if report["backups"][name] != checksum:
@@ -104,7 +108,11 @@ def capture(args, *, enumerate_devices=None, session=read_session):
         report["loader_sha256"] = args.loader_sha256
         report["board_data_sha256"] = args.preloader_sha256
         report["revision"] = REVIEWED_REVISION
+        report["usb_cleanup_verified"] = False
         save_json(destination / "readback.json", report)
+        progress("Identity backup and independent readback verified. Releasing USB interfaces; Couch has not been rebooted.")
+    report["usb_cleanup_verified"] = True
+    save_json(destination / "readback.json", report)
     print("Read-only capture verified and session closed. No partition writes or reset were sent.")
 
 
