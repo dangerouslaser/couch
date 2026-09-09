@@ -41,7 +41,7 @@ class CaptureTests(unittest.TestCase):
     def test_complete_capture_matches_runtime_baseline_and_closes(self):
         baseline = {"schema": 1, "capacity": self.reader.capacity,
                     "partitions": self.reader.description["partitions"],
-                    "cid": struct.pack(">QQ", 123, 456).hex(),
+                    "cid": "000000007b00000000000000c8010000",
                     "identity_sha256": {name: self.reader.hash(name) for name in IDENTITY_PARTITIONS}}
         self.args.baseline = self.root / "baseline.json"
         self.args.baseline.write_text(json.dumps(baseline))
@@ -60,6 +60,12 @@ class CaptureTests(unittest.TestCase):
 
     def test_changed_cid_is_rejected_before_backing_up(self):
         baseline = {"capacity": self.reader.capacity, "partitions": self.reader.description["partitions"], "cid": "12" * 16}
+        with self.assertRaisesRegex(InstallError, "CID differs"):
+            compare_baseline(self.reader, baseline)
+
+    def test_wire_cid_is_not_accepted_as_runtime_format(self):
+        baseline = {"capacity": self.reader.capacity, "partitions": self.reader.description["partitions"],
+                    "cid": struct.pack(">QQ", 123, 456).hex()}
         with self.assertRaisesRegex(InstallError, "CID differs"):
             compare_baseline(self.reader, baseline)
 

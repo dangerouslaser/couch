@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import struct
 import tempfile
 from types import SimpleNamespace as NS
@@ -66,6 +67,15 @@ class MtkReaderTests(unittest.TestCase):
         chunks = list(reader.chunks("userdata"))
         self.assertEqual([len(chunk) for chunk in chunks], [CHUNK, 512])
         self.assertTrue(all(call["length"] <= CHUNK for call in self.calls))
+
+    def test_cid_has_fixed_register_order_and_preserves_wire_identity(self):
+        canonical = bytes.fromhex("00112233445566778899aabbccddeeff")
+        wire = bytes.fromhex("3322110077665544bbaa9988ffeeddcc")
+        self.session.daloader.daconfig.legacy_storage.emmc.m_emmc_cid = struct.unpack(">QQ", wire)
+        observed = self.reader().description
+        self.assertEqual(observed["storage_id"], hashlib.sha256(wire).hexdigest())
+        self.assertEqual(observed["runtime_cid_sha256"], hashlib.sha256(canonical).hexdigest())
+        self.assertEqual(observed["cid_encoding"], "mt6580-legacy-le32-registers")
 
     def test_short_read_stops(self):
         self.session.daloader.readflash = lambda **kwargs: b""

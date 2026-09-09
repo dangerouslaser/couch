@@ -41,7 +41,8 @@ def compare_baseline(reader, baseline):
     require(observed["capacity"] == baseline["capacity"], "Observed storage capacity differs from runtime baseline")
     require(observed["partitions"] == baseline["partitions"], "Observed partition layout differs from runtime baseline")
     if "cid" in baseline:
-        require(observed["storage_id"] == hashlib.sha256(bytes.fromhex(baseline["cid"])).hexdigest(),
+        require(observed.get("cid_encoding") == "mt6580-legacy-le32-registers"
+                and observed.get("runtime_cid_sha256") == hashlib.sha256(bytes.fromhex(baseline["cid"])).hexdigest(),
                 "Observed eMMC CID differs from runtime baseline")
     for name, checksum in baseline.get("identity_sha256", {}).items():
         require(reader.hash(name) == checksum, f"Runtime identity baseline differs: {name}")

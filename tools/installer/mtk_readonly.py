@@ -87,10 +87,19 @@ class ConnectedMtkReader:
                 "Missing observed eMMC CID")
         self._readflash = mtk.daloader.readflash
         self.capacity = capacity
+        wire_cid = struct.pack(">QQ", *cid)
+        # Pinned Legacy_EmmcInfo parses the wire as two BE qwords; its repr
+        # reverses each qword and is not canonical. The tested MT6580 DA sends
+        # four LE u32 CID registers. Linux sysfs renders those registers in BE
+        # order. This fixed conversion matched the same unit's runtime CID;
+        # never search byte permutations to make an identity check pass.
+        runtime_cid = struct.pack(">IIII", *struct.unpack("<IIII", wire_cid))
         self.description = {"schema": 1, "transport": "mtkclient-connected-readonly", "revision": revision,
                             "hwcode": 0x6580, "model_verified": False, "capacity": capacity,
                             # Stable within this adapter; never infer the vendor Device ID from it.
-                            "storage_id": hashlib.sha256(struct.pack(">QQ", *cid)).hexdigest(),
+                            "storage_id": hashlib.sha256(wire_cid).hexdigest(),
+                            "runtime_cid_sha256": hashlib.sha256(runtime_cid).hexdigest(),
+                            "cid_encoding": "mt6580-legacy-le32-registers",
                             "partitions": observed_layout(self._read, capacity)}
 
     def _read(self, offset, size):
