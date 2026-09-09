@@ -134,8 +134,8 @@ mod tests {
     #[test]
     fn raw_assignment_preserves_pulses() {
         let mut text = String::new();
-        assign(&mut text, "power-off", "Off raw 38000 9000 4500 560 560");
-        assert_eq!(text, "power-off raw 38000 9000 4500 560 560");
+        assign(&mut text, "power-off", "Off raw 38000 9000,4500,560,560");
+        assert_eq!(text, "power-off raw 38000 9000,4500,560,560");
     }
     #[test]
     fn assignment_replaces_only_requested_function() {

@@ -3,6 +3,8 @@
 mod android;
 #[path = "tv_apple.rs"]
 mod apple;
+#[path = "tv_ir.rs"]
+mod infrared;
 use crate::{home, App, TvChoice};
 use couch_control::WebOs as Client;
 use couch_webos::{Button, Playback, Settings};
@@ -35,8 +37,10 @@ enum Command {
     Input(String),
     App(String),
     Sound(String),
+    IrFunction(String),
 }
 fn command(name: &str) -> Option<Command> {
+    if let Some(id)=name.strip_prefix("ir:"){return Some(Command::IrFunction(id.into()));}
     if let Some(id) = name.strip_prefix("input:") {
         return Some(Command::Input(id.into()));
     }
@@ -97,7 +101,7 @@ fn execute(c: &mut Client, action: &Command) -> couch_control::Result<()> {
             Playback::Pause
         }),
         Command::Retry => Ok(()),
-        Command::Next(_) | Command::Wake => Err(couch_control::Error::Rejected),
+        Command::Next(_) | Command::Wake | Command::IrFunction(_) => Err(couch_control::Error::Rejected),
         Command::Stop => c.playback(Playback::Stop),
         Command::Rewind(forward) => c.playback(if *forward {
             Playback::FastForward
@@ -414,6 +418,15 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             {
                 continue;
             }
+            if w.connection.starts_with("ir:") {
+                let result=infrared::run(&w,&active);
+                match result {
+                    Ok(Some(event))=>{let _=tx.try_send(event);},
+                    Ok(None)=>{},
+                    Err(error)=>{let _=tx.try_send(Event{generation,details:None,status:Err(error)});}
+                }
+                continue;
+            }
             let provider = crate::connections::config().and_then(|c| {
                 c.connection(&couch_model::Id::new(&w.connection))
                     .map(|c| c.provider.clone())
@@ -648,18 +661,19 @@ impl Controller {
                     c.connection(&couch_model::Id::new(connection))
                         .is_some_and(|c| c.provider == couch_model::Provider::AppleTv)
                 });
+                app.set_tv_ir(connection.starts_with("ir:"));
                 app.set_tv_android(android);
                 app.set_tv_apple(apple);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 self.choices.clear();
                 self.settings_app = None;
-                app.set_tv_source("Connecting…".into());
+                app.set_tv_source(if app.get_tv_ir(){"Loading commands…"}else{"Connecting…"}.into());
                 app.set_tv_sound("Checking…".into());
                 app.set_tv_picture("Checking…".into());
                 app.set_tv_panel(0);
                 app.set_tv_title(name.into());
-                app.set_tv_status("Connecting to TV…".into());
+                app.set_tv_status(if app.get_tv_ir(){"Infrared · No device feedback"}else{"Connecting to TV…"}.into());
                 app.set_tv_error("".into());
                 app.set_tv_shown(true);
                 app.invoke_focus_tv();
@@ -671,7 +685,8 @@ impl Controller {
                 app.set_tv_panel(0);
                 continue;
             }
-            if ["inputs", "apps", "picture", "sound"].contains(&action) {
+            if ["inputs", "apps", "picture", "sound", "commands"].contains(&action) {
+                if app.get_tv_ir() && action != "commands" {app.set_tv_error("Infrared devices do not report apps or settings".into());continue;}
                 if (app.get_tv_android() || app.get_tv_apple()) && action != "apps" {
                     app.set_tv_error("This control is only available for LG webOS TVs".into());
                     continue;
@@ -696,7 +711,7 @@ impl Controller {
                 }
                 let panel = match action {
                     "inputs" => 1,
-                    "apps" => 2,
+                    "apps" | "commands" => 2,
                     "picture" => 3,
                     _ => 4,
                 };
@@ -707,7 +722,7 @@ impl Controller {
                         if panel == 1 {
                             id.starts_with("input:")
                         } else {
-                            panel == 2 && id.starts_with("app:")
+                            panel == 2 && (id.starts_with("app:") || (app.get_tv_ir() && id.starts_with("ir:")))
                         }
                     })
                     .map(|(id, title, detail)| TvChoice {
@@ -793,7 +808,7 @@ impl Controller {
                 });
                 self.choices = view.choices;
                 self.settings_app = view.settings_app;
-                if app.get_tv_apple() && app.get_tv_panel() == 2 {
+                if (app.get_tv_apple() || app.get_tv_ir()) && app.get_tv_panel() == 2 {
                     app.set_tv_choices(ModelRc::new(VecModel::from(
                         self.choices
                             .iter()
@@ -1017,6 +1032,13 @@ mod tests {
         app.hide().unwrap();
     }
     #[test]
+    fn infrared_screen_routes_physical_keys_without_an_overlay() {
+        let out=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","tv::tests::android_screen_routes_physical_keys_without_an_overlay"])
+            .env("COUCH_TEST_ANDROID_KEYS","1").env("COUCH_TEST_IR_KEYS","1").output().unwrap();
+        assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+    }
+    #[test]
     fn android_screen_routes_physical_keys_without_an_overlay() {
         if std::env::var_os("COUCH_TEST_ANDROID_KEYS").is_none() {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1045,7 +1067,8 @@ mod tests {
         let actions = Rc::new(RefCell::new(Vec::new()));
         let received = actions.clone();
         app.on_tv_action(move |name| received.borrow_mut().push(name.to_string()));
-        app.set_tv_android(true);
+        app.set_tv_android(std::env::var_os("COUCH_TEST_IR_KEYS").is_none());
+        app.set_tv_ir(std::env::var_os("COUCH_TEST_IR_KEYS").is_some());
         app.set_tv_shown(true);
         app.show().unwrap();
         app.invoke_focus_tv();
@@ -1088,9 +1111,9 @@ mod tests {
         );
         assert_eq!(app.get_tv_panel(), 0);
         if let Some(path) = std::env::var_os("COUCH_ANDROID_SCREENSHOT") {
-            app.set_tv_title("Android TV".into());
-            app.set_tv_source("MiTV-AFMU0".into());
-            app.set_tv_status("TV on · Volume 12".into());
+            app.set_tv_title(if app.get_tv_ir(){"Living room TV"}else{"Android TV"}.into());
+            app.set_tv_source(if app.get_tv_ir(){"Infrared controls"}else{"MiTV-AFMU0"}.into());
+            app.set_tv_status(if app.get_tv_ir(){"Infrared · No device feedback"}else{"TV on · Volume 12"}.into());
             window.draw_if_needed(|renderer| {
                 let mut pixels = vec![slint::Rgb8Pixel::default(); 480 * 800];
                 renderer.render(&mut pixels, 480);

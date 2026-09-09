@@ -612,6 +612,7 @@ fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String
         Integration::WebOs => couch_model::Provider::WebOs,
         Integration::AndroidTv => couch_model::Provider::AndroidTv,
         Integration::AppleTv => couch_model::Provider::AppleTv,
+        Integration::Ir { .. } => return Some(format!("ir:{device_id}")),
         _ => return None,
     };
     match &device.integration {
@@ -622,6 +623,12 @@ fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_ir_device_keeps_per_device_target() {
+        let config:couch_model::Config=serde_json::from_value(serde_json::json!({"schema_version":1,"connections":[{"id":"ir","name":"IR","provider":{"kind":"ir"}}],"rooms":[{"id":"r","name":"Room","devices":[{"id":"tv-a","name":"A","kind":"tv","integration":{"via":"connection","connection_id":"ir","resource_id":"a"}},{"id":"tv-b","name":"B","kind":"tv","integration":{"via":"connection","connection_id":"ir","resource_id":"b"}}]}]})).unwrap();
+        assert_eq!(tv_connection(&config,"tv-a").as_deref(),Some("ir:tv-a"));
+        assert_eq!(tv_connection(&config,"tv-b").as_deref(),Some("ir:tv-b"));
+    }
     #[test]
     fn selected_apple_tv_uses_its_own_connection() {
         let config: couch_model::Config = serde_json::from_value(serde_json::json!({

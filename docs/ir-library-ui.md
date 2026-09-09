@@ -40,3 +40,16 @@ The test uses a local server and mocked IR/TV endpoints. It checks brand/type
 filtering, unsupported commands, function aliases, raw import preservation,
 unsafe IDs, revision-protected room creation, LG power assignment and mobile
 layout. It does not transmit IR or validate compatibility with physical devices.
+
+## On the remote
+
+Selecting an IR device in a room opens its controls immediately. Physical
+navigation, volume, channel, media, color and power buttons use that device's
+assigned functions. **Commands** opens a tray containing its assigned supported
+commands. Power uses `toggle`; discrete on/off are separate commands. Missing
+assignments report an error instead of substituting another code. Hold Back to
+return to the room as with the other device screens.
+
+IR is one-way: Couch shows no inferred power, volume or playback state and does
+not poll the device. “IR command sent” reports transmitter completion only; it
+does not confirm the target received or acted on the command.

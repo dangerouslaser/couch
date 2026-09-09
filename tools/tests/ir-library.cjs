@@ -18,7 +18,7 @@ const assert=require('node:assert/strict');
    const path=new URL(r.request().url()).pathname;const method=r.request().method();
    if(path==='/api/ir/catalog')return r.fulfill({json:{source:{name:'Fixture library',license:'CC0'},codesets:[{id:'lg-tv',brand:'LG',device_type:'TV',model:'Example TV',supported_commands:2},{id:'sony-avr',brand:'Sony',device_type:'Audio',model:'Example receiver',supported_commands:1}]}});
    if(path==='/api/ir/catalog/lg-tv')return r.fulfill({json:{commands:[{name:'Power',supported:true,code:'Power nec 4 8'},{name:'On',supported:true,code:'On nec 4 9'},{name:'Unsupported',supported:false,reason:'Unsupported protocol fixture'}]}});
-   if(path==='/api/ir/import')return r.fulfill({json:{commands:[{name:'Imported Off',supported:true,code:'Off raw 38000 9000 4500 560 560'}]}});
+   if(path==='/api/ir/import')return r.fulfill({json:{commands:[{name:'Imported Off',supported:true,code:'Off raw 38000 9000,4500,560,560'}]}});
    if(path.startsWith('/api/ir/codesets/')){const id=path.split('/').pop();if(method==='PUT'){stored[id]=r.request().postDataJSON().text;writes.push(stored[id]);}return r.fulfill({json:{id,text:stored[id]||'',commands:[]}});}
    throw Error('Unexpected IR request '+method+' '+path);
   });
@@ -44,7 +44,7 @@ const assert=require('node:assert/strict');
   await page.getByLabel('IR import contents',{exact:true}).fill('Filetype: IR signals file');
   await page.getByRole('button',{name:'Preview imported commands',exact:true}).click();
   await page.getByLabel('Assign Imported Off (1)',{exact:true}).selectOption('power-off');
-  assert.match(await page.getByLabel('Assigned IR commands',{exact:true}).inputValue(),/power-off raw 38000 9000 4500 560 560/);
+  assert.match(await page.getByLabel('Assigned IR commands',{exact:true}).inputValue(),/power-off raw 38000 9000,4500,560,560/);
   assert.equal(writes.length,0,'Preview and assignment must not save or transmit');
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
