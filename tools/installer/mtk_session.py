@@ -1,7 +1,7 @@
-"""Source/loader/selection gate for a future physical read-only MTK backend.
+"""Source/loader/selection gate for an experimental read-only MTK backend.
 
-No concrete USB backend is enabled here. Tests inject a backend that never opens
-USB. A backend must claim an exact candidate before starting its DA handshake.
+The CLI does not enable physical operations. A backend must claim an exact
+candidate before starting its DA handshake; tests never open USB.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -130,7 +130,8 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
     claim(Candidate), claimed_candidate(), start_readonly(bytes, ReadPolicy),
     close(reset=False). start_readonly returns the connected upstream Mtk object.
     The backend must not rediscover a different target or invoke configure_da's
-    generic reset/security fallback. No production backend satisfies this yet.
+    generic reset/security fallback. mtk_usb.ExactUsbBackend implements this
+    contract experimentally; no physical session has been validated yet.
     """
     with exclusive_lock(lock_directory):
         pinned = source_pin(checkout)
