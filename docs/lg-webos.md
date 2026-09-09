@@ -114,3 +114,27 @@ The actual LG TV passed physical mute-toggle and power-off/network-wake tests.
 The TV and Kodi screens share the same touch back-button component. TV surfaces and text use the system theme, with the configured accent on controls; there is no fixed purple background tint. Activity button overrides are documented in [activity-buttons.md](activity-buttons.md).
 
 ![TV screen using the system theme](webos-system-theme.png)
+
+## Planned IR power default (hardware prerequisite)
+
+The requested power behavior is IR by default, with a per-TV opt-in for network
+power (WOL on, webOS off). The current custom kernel does not expose `/dev/irtx`,
+with `CONFIG_MTK_IRTX_SUPPORT` and `CONFIG_MTK_IRTX_PWM_SUPPORT` both disabled,
+although the Rust `couch-ir` transmitter is installed. Switching the default
+before the driver is ported would leave power control nonfunctional.
+
+Required work:
+1. Port/enable the HA100 MediaTek PWM IR driver and its board resources; build
+   the kernel on **Ollie**, following the existing recovery/deployment procedure.
+2. Verify the carrier and actual LED transmission on the remote, then test with
+   the LG TV in line of sight. Existing Rust encoding tests do not prove output.
+3. Validate LG's NEC address `0x04`, toggle command `0x08`; also test discrete
+   on `0xC4` and off `0xC5` on the actual model. Discrete commands are preferable
+   for explicit activity power-on/off; never infer power state from a failed
+   network request and blindly resend a toggle.
+4. Add the per-TV power-method setting and route both physical/default and
+   mapped power actions through it, with single-send behavior and clear errors.
+
+LG documents toggle and discrete commands in its
+[IR code table](https://www.lg.com/us/support/products/documents/32LC50CB_Manual.pdf).
+That table establishes candidate codes, not compatibility proof for the B4 TV.
