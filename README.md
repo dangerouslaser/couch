@@ -1,25 +1,25 @@
 # Couch
 
-A small Linux distribution for the couch: it runs on a Home Assistant remote
-control, the Sanytron Astrion HA100.
+A Linux OS for the Sanytron Astrion HA100 universal remote.
 
-```
-couch:~# uname -a
-Linux couch 3.18.79 #4 SMP PREEMPT armv7l GNU/Linux
-```
+[Project site](https://dangerouslaser.github.io/couch/) ·
+[Kernel source](https://github.com/dangerouslaser/couch-kernel)
 
-Alpine userland, WiFi, SSH, a framebuffer console, a Slint GUI, and a setup
-portal for configuring it without a cable. `#4` is our own kernel, built from
-source; the vendor's `#7` is the fallback.
+Couch combines an Alpine userland, a Slint device interface, Rust integration
+clients, and a browser configuration UI. First boot configures Wi-Fi on the
+remote; the hotspot portal remains an explicit recovery option.
 
-**Status, September 2026.** Couch owns the device. It boots from the `boot`
-slot on a kernel built from source (display, keypad, serial, WiFi), the
-recovery slot holds a Couch rescue image rather than Android, and Android is
-no longer installed on the device - its boot image lives only in the backup.
-Two things still need the vendor kernel: the touchscreen and the IR blaster,
-because those two drivers exist in no public source tree yet
-(`kernel/README.md`). The GUI, voice, IR client, settings and portal are all
-documented under `docs/`.
+**Status, September 9, 2026.** The remote boots from `boot` with our custom
+`3.18.79-couch-normal-ge581fb141386` kernel. Display, keypad, touchscreen,
+Wi-Fi and accelerometer support are present; the user has confirmed touch wake
+and physical lift wake. The independent recovery slot retains a stock-kernel
+Couch rescue image. Android is no longer installed; its images are backed up
+outside this repository.
+
+The GUI supports rooms, devices, scenes, media control screens and activity
+start/stop sequences. Rust clients cover Kodi, Philips Hue, Home Assistant,
+LG webOS, Denon and IR. Setup and subsystem details are under `docs/`; the USB
+installer is experimental and does not yet flash hardware.
 
 The HA100 is a MediaTek MT6580 (quad Cortex-A7, ARMv7, 1GB RAM, 480x800 touchscreen)
 shipping Android 8.1. This boots a non-Android userland on it and gives you a root
@@ -50,10 +50,10 @@ The slot layout has been swapped since bring-up:
 | `system`, `vendor` (p21, p14) | Android's, still present, only a fallback source of blobs |
 | `userdata` (p23) | the Alpine rootfs, Couch itself under `/opt/couch` |
 
-init arms the BCB as its first act and clears it 90 seconds later, so a kernel
-that hangs is watchdog-reset into the recovery slot, which comes up with a
-shell on the cable and sshd on the LAN and waits. A bad build costs a reboot,
-not a walk to the device. Android is gone from the device; `android-p9-BACKUP.img`
+Once init starts, it arms the BCB and clears it 90 seconds later. A reboot
+while that marker is armed selects the recovery slot, with a USB shell and
+SSH on an available network. This cannot protect a failure before init runs;
+verify USB recovery access before flashing. Android is gone from the device; `android-p9-BACKUP.img`
 in the backup puts it back on p9 if it is ever wanted.
 
 Nothing is signed. The stock boot image has 8.7MB of trailing zeros where a signature
@@ -83,9 +83,9 @@ Android has been put back on p9.
 
 ## Recovering a bad boot
 
-* A kernel that hangs before init proves itself is watchdog-reset into the
-  recovery slot within a couple of minutes: `boot-recovery` is written to the
-  BCB first thing and cleared only after 90s. Only the first 512 bytes of
+* After init starts, it writes `boot-recovery` to the BCB and clears it after
+  90s. A subsequent reboot while armed selects recovery. Failures before init
+  require the boot menu or download-mode recovery. Only the first 512 bytes of
   `para` are touched - an `ENV_v1` block lives at offset 128K and must survive.
 * Unclaimed sessions self-reboot after 15 minutes. `touch /tmp/stay` keeps one
   alive; `stage2.sh` does it once it reaches the GUI, so only a boot that fails
@@ -536,8 +536,8 @@ leaves it with no password at all, so key auth works and password auth cannot.
 3. ~~Captive portal~~ - done.
 4. ~~Move to the `boot` slot~~ - done; the recovery slot is now Couch's own rescue image.
 5. ~~A kernel built from source~~ - boots with display, keypad, serial and WiFi.
-6. **Touch and IR on that kernel** (`tlsc6x`, `mt_irtx`), then the payoff: the
-   46-62ms keypad interrupt handler, real suspend, owning hotplug.
+6. ~~Touch on the custom kernel~~ — done. Continue IR validation, keypad
+   interrupt-latency work, true SoC suspend, and hotplug tuning.
 7. ~~Put the kernel branch on a remote and on a second machine~~ — done.
    Full kernel history is published at [dangerouslaser/couch-kernel](https://github.com/dangerouslaser/couch-kernel),
    branch `couch-ha100`. Ollie holds the build checkout; the Mac holds an
