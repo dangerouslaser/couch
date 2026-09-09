@@ -16,7 +16,7 @@ import tempfile
 import threading
 
 from couch_install import InstallError, require
-from mtk_session import Candidate, ReadPolicy, select_candidate, source_pin
+from mtk_session import Candidate, ReadPolicy, loader_bytes, select_candidate, source_pin
 
 
 class _Deadline(BaseException):
@@ -84,8 +84,12 @@ def descriptor(device):
 
 
 class ExactUsbBackend:
-    def __init__(self, checkout, *, usb=None, bindings=None):
+    def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None):
         self.checkout = checkout
+        require((preloader is None) == (preloader_sha256 is None), "Provide both board preloader path and SHA-256")
+        # Read-only board-data input. It is never passed to a partition writer
+        # or used as the downloaded DA executable.
+        self.preloader_data = loader_bytes(preloader, preloader_sha256) if preloader is not None else None
         if usb is None:
             import usb.core
             import usb.util
@@ -164,6 +168,7 @@ class ExactUsbBackend:
             loader_path.chmod(0o600)
             config = Config(loglevel=logging.CRITICAL)
             config.loader = str(loader_path)
+            config.preloader = self.preloader_data
             config.stock = True
             config.skipwdt = True
             config.reconnect = False
@@ -173,6 +178,28 @@ class ExactUsbBackend:
             config.interface = self.interface.bInterfaceNumber
             self.mtk = Mtk(config=config, loglevel=logging.CRITICAL)
             mtk = self.mtk
+            daconfig = mtk.daloader.daconfig
+            if self.preloader_data is not None:
+                require(daconfig.emi is not None and len(daconfig.emi) > 0,
+                        "Approved board preloader has no supported EMI data")
+            extract_emi = daconfig.extract_emi
+            def approved_emi_only(preloader=None):
+                require((preloader is None and self.preloader_data is None)
+                        or (isinstance(preloader, (bytes, bytearray)) and preloader == self.preloader_data),
+                        "Unapproved automatic board preloader selection is disabled")
+                return extract_emi(preloader)
+            daconfig.extract_emi = approved_emi_only
+            set_da = mtk.daloader.set_da
+            def set_legacy_da():
+                result = set_da()
+                require(type(mtk.daloader.da).__name__ == "DALegacy", "Only the reviewed legacy DA path is supported")
+                # Legacy startup otherwise walks upstream Loader/Preloader and
+                # guesses a board using a partial DRAM signature. An empty
+                # private directory disables that scan. approved_emi_only also
+                # rejects any unapproved filename passed to extraction.
+                mtk.daloader.da.pathconfig.get_loader_path = lambda: self.work.name
+                return result
+            mtk.daloader.set_da = set_legacy_da
             cdc = mtk.port.cdc
             cdc.device, cdc.interface = self.device, self.interface.bInterfaceNumber
             cdc.EP_IN, cdc.EP_OUT = self.ep_in, self.ep_out
@@ -227,7 +254,7 @@ class ExactUsbBackend:
                     "Protected target requires a separately validated loader/authentication path")
             mtk.daloader.patch = False
             # Direct unpatched DA upload; never DaHandler.configure_da.
-            require(mtk.daloader.upload_da(preloader=None), "Approved DA upload failed")
+            require(mtk.daloader.upload_da(preloader=self.preloader_data), "Approved DA upload failed")
             require(not mtk.daloader.patch, "Unexpected download-agent patching")
             readflash = mtk.daloader.readflash
             read_failed = False

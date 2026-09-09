@@ -25,6 +25,11 @@ class Configuration(list):
     bNumInterfaces = 2
 
 
+class DALegacy:
+    def __init__(self):
+        self.pathconfig = NS(get_loader_path=lambda: "/unapproved/generic/loaders")
+
+
 class UsbBackendTests(unittest.TestCase):
     def setUp(self):
         self.events = []
@@ -63,7 +68,12 @@ class UsbBackendTests(unittest.TestCase):
                            echo=lambda value: True,
                            Cmd=NS(GET_TARGET_CONFIG=NS(value=b"x")),
                            rbyte=lambda length: self.security.to_bytes(4, "big") + b"\0\0")
+        mtk.daloader.daconfig.emi = b"fixture EMI" if config.preloader else None
+        mtk.daloader.daconfig.extract_emi = lambda preloader=None: None
+        mtk.daloader.set_da = lambda: setattr(mtk.daloader, "da", DALegacy())
         def upload(**kwargs):
+            mtk.daloader.daconfig.extract_emi(kwargs.get("preloader"))
+            mtk.daloader.set_da()
             self.events.append("upload")
             self.assertTrue(config.stock and config.skipwdt)
             self.assertFalse(config.reconnect)
@@ -134,6 +144,31 @@ class UsbBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(InstallError, "handshake failed"):
             self.start()
         self.assertNotIn("upload", self.events)
+
+    def test_generic_board_fallback_is_disabled(self):
+        mtk = self.start()
+        self.assertEqual(mtk.daloader.da.pathconfig.get_loader_path(), self.backend.work.name)
+        self.assertFalse((Path(self.backend.work.name) / "Preloader").exists())
+        with self.assertRaisesRegex(InstallError, "automatic board preloader"):
+            mtk.daloader.daconfig.extract_emi("/unapproved/generic/preloader.bin")
+
+    def test_pinned_board_data_is_used_only_for_emi(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "original-preloader.img"
+            data = b"synthetic original board data"
+            path.write_bytes(data)
+            backend = ExactUsbBackend("unused", preloader=path,
+                                      preloader_sha256=hashlib.sha256(data).hexdigest(),
+                                      usb=self.usb, bindings=(self.config, self.mtk))
+            try:
+                backend.claim(descriptor(self.dev))
+                mtk = backend.start_readonly(b"loader", ReadPolicy())
+                self.assertEqual(mtk.config.preloader, data)
+                self.assertEqual(Path(mtk.config.loader).read_bytes(), b"loader")
+                with self.assertRaisesRegex(InstallError, "automatic board preloader"):
+                    mtk.daloader.daconfig.extract_emi(b"different board")
+            finally:
+                backend.close()
 
     def test_missing_security_response_is_not_treated_as_unprotected(self):
         original = self.mtk
