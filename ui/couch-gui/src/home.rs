@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Area {
     pub name: String,
     pub activities: Vec<LiveActivity>,
+    pub activity_ids: Vec<Id>,
     pub rooms: Vec<RoomRow>,
     pub scenes: Vec<SceneCell>,
     pub room_ids: Vec<Id>,
@@ -33,11 +34,15 @@ pub fn read(previous: &str) -> Option<(String, Vec<Area>, [u8; 3])> {
     Some((raw, project(&config), config.appearance.rgb()?))
 }
 fn project(config: &Config) -> Vec<Area> {
-    let make = |name: String, ids: Vec<Id>, scene_ids: Vec<Id>| {
+    let make = |name: String, ids: Vec<Id>, scene_ids: Vec<Id>, activity_ids: Vec<Id>| {
         let rooms: Vec<_> = ids.iter().filter_map(|id| config.room(id)).collect();
         Area {
             name,
-            activities: Vec::new(),
+            activities: activity_ids.iter().filter_map(|id| config.activities.iter().find(|a| &a.id==id)).map(|a|LiveActivity {
+                kind:a.kind.glyph_index(),title:a.name.as_str().into(),source:a.source.as_ref().and_then(|id|config.devices().find(|(_,d)|&d.id==id).map(|(_,d)|d.name.as_str())).unwrap_or("Choose a source").into(),
+                place:config.room(&a.room).map(|r|r.name.as_str()).unwrap_or("").into(),
+            }).collect(),
+            activity_ids,
             scenes: scene_ids
                 .iter()
                 .filter_map(|id| config.scene(id))
@@ -81,12 +86,13 @@ fn project(config: &Config) -> Vec<Area> {
     let mut areas: Vec<_> = config
         .areas
         .iter()
-        .map(|a| make(a.name.clone(), a.rooms.clone(), a.scenes.clone()))
+        .map(|a| make(a.name.clone(), a.rooms.clone(), a.scenes.clone(), a.activities.clone()))
         .collect();
     areas.push(make(
         "ALL ROOMS".into(),
         config.rooms.iter().map(|r| r.id.clone()).collect(),
         config.scenes.iter().map(|s| s.id.clone()).collect(),
+        config.activities.iter().map(|a| a.id.clone()).collect(),
     ));
 
     areas

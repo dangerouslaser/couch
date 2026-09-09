@@ -226,13 +226,13 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
                 })}
 
             </label>
-            <p class="dim">"The device the transport keys drive while this is running."</p>
+            <p class="dim">"Choose a Kodi media player to open full-screen playback controls on the remote. Volume keys control Kodi volume."</p>
             <p class="dim">{shown_in}</p>
         </section>
 
 
         <h2 class="section">"Startup commands"</h2>
-        <p class="dim">"Commands are listed in execution order. Pick a device to add an on command, then edit the command for that device. Command names depend on its integration; saving does not test or send them."</p>
+        <p class="dim">"Startup commands are saved for future automation and are not executed by the remote yet. Commands are listed in execution order. Pick a device to add an on command, then edit the command for that device. Command names depend on its integration; saving does not test or send them."</p>
         {activity.steps.is_empty().then(|| {
             ui::empty("Nothing is brought up when this starts.")
         })}

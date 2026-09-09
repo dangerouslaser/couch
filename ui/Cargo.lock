@@ -757,16 +757,20 @@ dependencies = [
 name = "couch-gui"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "couch-ha",
  "couch-hue",
+ "couch-kodi",
  "couch-model",
  "couch-voice",
+ "image",
  "libc",
  "mimalloc",
  "qrcodegen",
  "serde_json",
  "slint",
  "slint-build",
+ "ureq",
 ]
 
 [[package]]
@@ -789,6 +793,14 @@ dependencies = [
  "serde_json",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "couch-kodi"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

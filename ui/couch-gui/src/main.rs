@@ -22,6 +22,8 @@ mod network_ui;
 mod home;
 mod lights;
 mod scenes;
+mod activity;
+mod activity_art;
 mod icons;
 use home::Area;
 
@@ -202,6 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut areas = vec![
         Area {
+            activity_ids: Vec::new(),
             name: "WHOLE HOME".into(),
             room_ids: Vec::new(),
             scene_ids: Vec::new(),
@@ -225,6 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         },
         Area {
+            activity_ids: Vec::new(),
             name: "UPSTAIRS".into(),
             room_ids: Vec::new(),
             scene_ids: Vec::new(),
@@ -237,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scenes: vec![scene("Bedtime"), scene("Wake up"), scene("Upstairs off")],
         },
         Area {
+            activity_ids: Vec::new(),
             name: "DOWNSTAIRS".into(),
             room_ids: Vec::new(),
             scene_ids: Vec::new(),
@@ -259,6 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         },
         Area {
+            activity_ids: Vec::new(),
             name: "OUTSIDE".into(),
             room_ids: Vec::new(),
             scene_ids: Vec::new(),
@@ -295,6 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut light_controls = lights::Controller::install(&app);
     let mut room_monitor = home::RoomMonitor::new(light_controls.hue_live());
     let mut scene_controls = scenes::Controller::new(&app);
+    let mut activity_controls = activity::Controller::new(&app);
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -374,7 +381,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match a.activities.len() {
                 0 => return,
                 1 => {
-                    println!("couch-gui: open activity '{}'", a.activities[0].title);
+                    if let Some(id)=a.activity_ids.first(){app.invoke_open_activity(id.as_str().into());}
                     return;
                 }
                 _ => {}
@@ -393,7 +400,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     icon: slint::Image::default(),
                 })
                 .collect();
-            app.set_chooser_title("NOW PLAYING".into());
+            app.set_chooser_title("ACTIVITIES".into());
             app.set_chooser_items(ModelRc::new(VecModel::from(items)));
             app.set_chooser_index(0);
             ask(Intent::OpenChooser);
@@ -483,6 +490,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = app.as_weak();
         let ask = ask.clone();
         let choices=scene_choices.clone(); let recall=scene_controls.opener();
+        let areas=areas.clone();let current=current.clone();
         app.on_chosen(move |index| {
             let Some(app) = weak.upgrade() else { return };
             let title = app
@@ -492,6 +500,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_default();
             if app.get_chooser_title()=="SCENES" {
                 if let Some(id)=choices.borrow().get(index as usize) { recall(id.clone()); }
+            }
+            if app.get_chooser_title()=="ACTIVITIES" {
+                if let Some(id)=areas.borrow()[current.get()].activity_ids.get(index as usize){app.invoke_open_activity(id.as_str().into());}
             }
             println!("couch-gui: chose '{title}'");
             ask(Intent::CloseChooser);
@@ -836,7 +847,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (app.get_light_shown(), app.get_chooser_shown(), app.get_settings_shown(),
          app.get_keyboard_shown(), app.get_wifi_setup_shown(), app.get_pair_shown(),
          app.get_setup_mode(), app.get_recording()),
-        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(),
+        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(), app.get_player_shown(),
     );
     let mut last_feedback_page = feedback_page(&app);
     let dismiss_feedback = |app: &App, scenes: &mut scenes::Controller, lights: &mut lights::Controller| {
@@ -990,7 +1001,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // over. The state it shows - the SSID, whether SSH is up - is read here,
         // once, at open time rather than on the tick.
         if let Some(t) = menu_down_at {
-            let on_home = !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
+            let on_home = !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
                 && !app.get_keyboard_shown()
                 && !app.get_chooser_shown()
                 && !app.get_pair_shown()
@@ -1053,7 +1064,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 home::apply_accent(&app,accent);
                 // Appearance updates in overlays too; defer home navigation changes
                 // until returning home so an open device control remains in place.
-                if !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
+                if !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
                     loaded_home = raw; *areas.borrow_mut() = saved;
                     current.set(0); app.set_area_dots(ModelRc::new(VecModel::from(vec![true;areas.borrow().len()])));
                     put_front(&app,0);
@@ -1171,6 +1182,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        activity_controls.poll(&app);
+        if feedback_page(&app) != last_feedback_page {
+            dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
+        }
         last_feedback_page = feedback_page(&app);
         // A scene picked in a chooser reports on the destination page. Older
         // in-flight replies were invalidated before navigation above.

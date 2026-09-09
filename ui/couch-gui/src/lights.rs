@@ -75,7 +75,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
     let room = config
         .room(room)
         .ok_or("This room was removed; return home to reload")?;
-    Ok(room
+    let mut entries: Vec<Entry> = room
         .devices
         .iter()
         .filter_map(
@@ -107,7 +107,11 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                 }),
             },
         )
-        .collect())
+        .collect();
+    entries.extend(config.activities.iter().filter(|a|a.room==room.id).map(|a|Entry {
+        icon:couch_model::Icon::Tv,name:a.name.clone(),id:format!("activity:{}",a.id),state:None,hue:false,
+    }));
+    Ok(entries)
 }
 fn toggle_command(state: &Light) -> Result<Command, String> {
     match state.on {
@@ -262,8 +266,10 @@ impl Controller {
     fn row(&self, e: &Entry) -> ChoiceItem {
         let detail = if !e.hue && self.busy.as_deref() == Some(&e.id) {
             "Updating…".into()
+        } else if e.id.starts_with("activity:") {
+            "Open activity".into()
         } else if e.id.starts_with("device:") {
-            "Controls not available yet".into()
+            "Press OK for controls".into()
         } else {
             e.state.as_ref().map(description).unwrap_or_else(|| {
                 if self.refreshing {
@@ -480,7 +486,13 @@ impl Controller {
                     let Some(e) = self.entries.get(i) else {
                         continue;
                     };
+                    if let Some(id)=e.id.strip_prefix("activity:") {
+                        app.invoke_open_activity(id.into());continue;
+                    }
                     if e.id.starts_with("device:") {
+                        let cfg=std::fs::read(home::path("config.json")).ok().and_then(|b|serde_json::from_slice::<Config>(&b).ok());
+                        let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
+                        if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
                         app.set_light_detail(
                             "Controls for this device are not available yet.".into(),
                         );

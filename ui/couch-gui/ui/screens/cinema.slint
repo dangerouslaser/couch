@@ -1,0 +1,140 @@
+import { Theme } from "../theme.slint";
+export struct PlayerChoice { title: string, detail: string }
+component Control inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback activate();
+    border-radius: root.primary ? 44px : 14px;
+    background: root.primary ? Theme.accent : #222623;
+    border-width: root.selected ? 3px : 1px;
+    border-color: root.selected ? (root.primary ? #ffffff : Theme.accent) : #ffffff15;
+    opacity: root.enabled ? 1 : 0.35;
+    Image { source:root.icon; width:root.primary ? 36px : 27px; height:self.width; x:(parent.width - self.width)/2; y:root.label=="" ? (parent.height - self.height)/2 : 13px; colorize:root.primary ? #151319 : #f6f6f1; }
+    if root.label!="": Text { text:root.label; y:44px; width:parent.width; horizontal-alignment:center; font-size:17px; color:#eceee8; }
+    TouchArea { enabled:root.enabled; clicked=>{root.activate();} }
+}
+export component Cinema inherits Rectangle {
+    in property <bool> shown;
+    in property <bool> ready;
+    in property <bool> paused;
+    in property <bool> can-seek;
+    in property <bool> has-art;
+    in property <bool> has-logo;
+    in property <image> fanart;
+    in property <image> logo;
+    in property <string> activity;
+    in property <string> room;
+    in property <string> title;
+    in property <string> metadata;
+    in property <string> elapsed;
+    in property <string> remaining;
+    in property <string> message;
+    in property <float> progress;
+    in property <int> panel;
+    in property <string> panel-detail;
+    in property <[PlayerChoice]> choices;
+    callback action(string,float);
+    property <int> selected:3;
+    property <int> choice-index:0;
+    property <float> seek-preview:0;
+    property <length> list-scroll:max(0,root.choice-index - 4)*84px;
+    animate list-scroll { duration:160ms; easing:ease-out; }
+    changed panel=>{root.choice-index=0;}
+    changed shown=>{root.selected=3;}
+    public function take-focus(){ keys.focus(); }
+    function fire(){
+        if(root.panel>0 && root.panel<4){root.action("choose",root.choice-index);return;}
+        if(root.panel==4){root.action("Input.Select",0);return;}
+        if(root.selected==0){root.action("back",0);}
+        if(root.selected==1 && root.can-seek){root.action("seek",root.seek-preview);}
+        if(root.selected==2 && root.can-seek){root.action("skip",-10);}
+        if(root.selected==3){root.action(root.ready ? "play" : "retry",0);}
+        if(root.selected==4 && root.can-seek){root.action("skip",30);}
+        if(root.selected==5 && root.ready){root.action("chapters",0);}
+        if(root.selected==6 && root.ready){root.action("audio",0);}
+        if(root.selected==7 && root.ready){root.action("subtitles",0);}
+        if(root.selected==8){root.action("tv",0);}
+    }
+    background:#111311;
+    if root.has-art: Image { source:root.fanart; width:parent.width;height:parent.height;image-fit:cover; }
+    Control { x:24px;y:22px;width:48px;height:48px;icon:@image-url("../../../../assets/lucide/arrow-left.svg");selected:root.selected==0 && root.panel==0;activate=>{root.action("back",0);} }
+    Text {x:88px;y:24px;width:parent.width - 120px;height:26px;text:root.activity;font-size:19px;font-weight:600;color:#ffffff;overflow:elide;}
+    Text {x:88px;y:52px;width:parent.width - 120px;height:22px;text:root.room;font-size:15px;color:#cbcfc8;overflow:elide;}
+    if root.ready: Rectangle {
+        background:transparent;x:32px;y:290px;width:parent.width - 64px;height:160px;
+        if root.has-logo: Image {source:root.logo;width:parent.width;height:125px;image-fit:contain;horizontal-alignment:left;}
+        if !root.has-logo: Text {text:root.title;width:parent.width;height:125px;font-size:36px;font-weight:700;color:#ffffff;wrap:word-wrap;overflow:elide;vertical-alignment:bottom;}
+        Text {text:root.metadata;y:135px;width:parent.width;height:25px;font-size:16px;color:#d2d5ce;overflow:elide;}
+    }
+    if root.ready: Rectangle {
+        x:32px;y:parent.height - 330px;width:parent.width - 64px;height:300px;background:transparent;
+        Text {x:0px;y:0px;height:27px;text:root.elapsed;font-size:18px;color:#ffffff;}
+        Text {x:0px;y:0px;height:27px;text:root.remaining;width:parent.width;horizontal-alignment:right;font-size:18px;color:#c7cec3;}
+        Rectangle {y:47px;width:parent.width;height:5px;border-radius:3px;background:#ffffff35;
+            Rectangle {x:0px;width:parent.width*(seek-touch.pressed || root.selected==1 ? root.seek-preview : root.progress)/100;height:parent.height;background:Theme.accent;border-radius:3px;}
+        }
+        Rectangle {visible:root.selected==1;y:30px;width:parent.width;height:38px;border-width:2px;border-color:Theme.accent;border-radius:8px;background:transparent;}
+        seek-touch:=TouchArea {y:27px;width:parent.width;height:48px;enabled:root.can-seek;
+            pointer-event(e)=>{if(e.kind==PointerEventKind.down){root.seek-preview=max(0,min(100,self.mouse-x/self.width*100));}if(e.kind==PointerEventKind.up){root.action("seek",root.seek-preview);}}
+            moved=>{if(self.pressed){root.seek-preview=max(0,min(100,self.mouse-x/self.width*100));}}
+        }
+        Control {x:38px;y:93px;width:70px;height:70px;icon:@image-url("../../../../assets/lucide/rotate-ccw.svg");label:"10s";enabled:root.can-seek;selected:root.selected==2;activate=>{root.action("skip",-10);}}
+        Control {x:(parent.width - 88px)/2;y:84px;width:88px;height:88px;primary:true;icon:root.paused ? @image-url("../../../../assets/lucide/play.svg") : @image-url("../../../../assets/lucide/pause.svg");selected:root.selected==3;activate=>{root.action("play",0);}}
+        Control {x:parent.width - 108px;y:93px;width:70px;height:70px;icon:@image-url("../../../../assets/lucide/rotate-cw.svg");label:"30s";enabled:root.can-seek;selected:root.selected==4;activate=>{root.action("skip",30);}}
+        for label[i] in ["Chapters","Audio","Subtitles"]: Control {x:i*(parent.width+10px)/3;y:198px;width:(parent.width - 20px)/3;height:76px;label:label;selected:root.selected==i+5;icon:i==0 ? @image-url("../../../../assets/lucide/list-video.svg") : i==1 ? @image-url("../../../../assets/lucide/audio-lines.svg") : @image-url("../../../../assets/lucide/captions.svg");activate=>{root.action(i==0 ? "chapters" : i==1 ? "audio" : "subtitles",0);}}
+    }
+    if !root.ready: Rectangle {x:36px;y:220px;width:parent.width - 72px;height:310px;background:transparent;
+        Text {text:root.title;width:parent.width;height:170px;wrap:word-wrap;font-size:27px;color:#f1f2eb;horizontal-alignment:center;vertical-alignment:center;}
+        Control {x:60px;y:195px;width:parent.width - 120px;height:78px;label:"Reconnect";selected:root.selected==3;icon:@image-url("../../../../assets/lucide/rotate-cw.svg");activate=>{root.action("retry",0);}}
+    }
+    Control {x:130px;y:parent.height - 48px;width:parent.width - 260px;height:40px;label:"";selected:root.selected==8;icon:@image-url("../../../../assets/lucide/gamepad-2.svg");activate=>{root.action("tv",0);}}
+    if root.panel>0: Rectangle {width:parent.width;height:parent.height;background:#00000066;TouchArea{} }
+    if root.panel>0: Rectangle {x:0px;y:parent.height - 620px;width:parent.width;height:620px;background:#1b1e1b;border-radius:24px;
+        Text {x:28px;y:26px;text:root.panel==1 ? "Chapters" : root.panel==2 ? "Audio" : root.panel==3 ? "Subtitles" : "TV controls";font-size:28px;color:#ffffff;}
+        Control {x:parent.width - 76px;y:18px;width:48px;height:48px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("back",0);}}
+        if root.panel-detail!="" && root.panel<4: Text {x:28px;y:110px;width:parent.width - 56px;height:250px;wrap:word-wrap;font-size:21px;color:#c0c7bc;text:root.panel-detail;}
+        if root.panel<4: Rectangle {x:28px;y:105px;width:parent.width - 56px;height:412px;clip:true;background:transparent;
+            for item[i] in root.choices: Rectangle {y:i*84px - root.list-scroll;width:parent.width;height:76px;background:i==root.choice-index ? #35303e : #242823;border-radius:12px;border-width:root.choice-index==i ? 2px : 0px;border-color:Theme.accent;
+                Text {x:18px;y:12px;width:parent.width - 36px;height:28px;text:item.title;overflow:elide;font-size:22px;color:#ffffff;}
+                Text {x:18px;y:43px;width:parent.width - 36px;height:22px;text:item.detail;font-size:16px;color:#b7beb2;overflow:elide;}
+                TouchArea {clicked=>{root.choice-index=i;root.action("choose",i);}}
+            }
+        }
+        if root.panel==4: Rectangle {x:30px;y:100px;width:parent.width - 60px;height:470px;background:transparent;
+            Text {text:"D-pad controls Kodi on your TV";width:parent.width;font-size:19px;horizontal-alignment:center;color:#c0c7bc;}
+            for name[i] in ["Up","Left","Select","Right","Down"]: Control {x:i==0 || i==2 || i==4 ? (parent.width - 80px)/2 : i==1 ? (parent.width - 80px)/2-90px : (parent.width - 80px)/2+90px;y:i==0 ? 55px : i==4 ? 235px :145px;width:80px;height:80px;label:name;activate=>{root.action("Input."+name,0);}}
+            Control {x:20px;y:345px;width:160px;height:75px;label:"Back on TV";icon:@image-url("../../../../assets/lucide/arrow-left.svg");activate=>{root.action("Input.Back",0);}}
+            Control {x:parent.width - 180px;y:345px;width:160px;height:75px;label:"Kodi home";icon:@image-url("../../../../assets/lucide/house.svg");activate=>{root.action("Input.Home",0);}}
+        }
+    }
+    if root.message!="": Rectangle {x:24px;y:parent.height - 150px;width:parent.width - 48px;height:100px;border-radius:16px;background:#30263e;
+        Text {x:16px;y:12px;width:parent.width - 32px;height:parent.height - 24px;text:root.message;wrap:word-wrap;font-size:20px;color:#ffffff;}
+    }
+    keys:=FocusScope {enabled:root.shown;
+        key-pressed(e)=>{
+            if(e.text==Key.Escape){root.action("back",0);return accept;}
+            if(e.text==Key.F23 || e.text==Key.F24){root.action("volume",e.text==Key.F23 ? 5 : -5);return accept;}
+            if(e.text==Key.F21 || e.text==Key.F22){root.action("chapter-step",e.text==Key.F21 ? 1 : -1);return accept;}
+            if(root.panel==4){
+                if(e.text==Key.UpArrow){root.action("Input.Up",0);}
+                if(e.text==Key.DownArrow){root.action("Input.Down",0);}
+                if(e.text==Key.LeftArrow){root.action("Input.Left",0);}
+                if(e.text==Key.RightArrow){root.action("Input.Right",0);}
+                if(e.text==Key.Return){root.action("Input.Select",0);}return accept;
+            }
+            if(e.text==Key.Return){root.fire();return accept;}
+            if(root.panel>0){if(e.text==Key.UpArrow){root.choice-index=max(0,root.choice-index - 1);}if(e.text==Key.DownArrow){root.choice-index=min(root.choices.length - 1,root.choice-index+1);}return accept;}
+            if(!root.ready){
+                if(e.text==Key.UpArrow || e.text==Key.LeftArrow){root.selected=root.selected==8 ? 3 : 0;}
+                if(e.text==Key.DownArrow || e.text==Key.RightArrow){root.selected=root.selected==0 ? 3 : 8;}return accept;
+            }
+            if(root.selected==1 && (e.text==Key.LeftArrow || e.text==Key.RightArrow)){root.seek-preview=max(0,min(100,root.seek-preview+(e.text==Key.RightArrow ? 1 : -1)));return accept;}
+            if(e.text==Key.UpArrow || e.text==Key.LeftArrow){root.selected=max(0,root.selected - 1);}
+            if(e.text==Key.DownArrow || e.text==Key.RightArrow){root.selected=min(8,root.selected+1);}
+            if(root.selected==1){root.seek-preview=root.progress;}return accept;
+        }
+    }
+}
