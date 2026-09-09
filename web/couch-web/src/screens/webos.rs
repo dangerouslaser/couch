@@ -175,7 +175,8 @@ fn power_settings(app: App, base: String) -> AnyView {
         </select></label>
         <Show when=move ||method.get()=="ir">
             <p class="dim">{move ||if available.get(){"IR device node is present. Confirm your TV’s codes and line of sight before use."}else{"IR blaster is unavailable on this system. Power will report an error until its driver is enabled; select network power explicitly if needed."}}</p>
-            <label class="field">"Verified IR power codes"<textarea rows="4" maxlength="4096" prop:value=move ||codeset.get() disabled=move ||busy.get() on:input=move |e|codeset.set(event_target_value(&e)) /></label>
+            <details><summary>"Choose power codes from the library"</summary>{super::infrared::library(app,codeset,true)}</details>
+            <label class="field">"IR power code assignments"<textarea rows="4" maxlength="4096" prop:value=move ||codeset.get() disabled=move ||busy.get() on:input=move |e|codeset.set(event_target_value(&e)) /></label>
             <p class="dim">"Use couch-ir codeset lines: button protocol address command. Use power for the physical toggle, and power-on / power-off for activity commands. Enter codes verified for your TV; none are supplied automatically. A missing discrete code never falls back to toggle."</p>
         </Show>
         <button disabled=move ||busy.get()||!loaded.get() on:click=move |_|{

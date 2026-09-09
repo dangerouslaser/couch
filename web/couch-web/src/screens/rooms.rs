@@ -119,6 +119,7 @@ fn device_card(app: App, room: &Id, device: &Device) -> AnyView {
         .unwrap_or_else(|| super::overview::connection_summary(&device.integration));
     view!{<li class="card device"><h3>{device.name.clone()}</h3><p class="dim">{summary}</p>
         {super::device_picker::controls(app,device)}
+        {match &device.integration {Integration::Connection{connection_id,..} if app.config.get_untracked().and_then(|c|c.connection(connection_id).map(|c|c.provider==couch_model::Provider::Ir)).unwrap_or(false)=>Some(super::infrared::device_setup(app,connection_id.clone(),room.clone(),Some(device.clone()))),_=>None}}
         <details><summary>"Edit device"</summary><form on:submit=move |e|{e.prevent_default();let title=name.get_untracked().trim().to_string();if title.is_empty(){return}app.run(api::put(format!("/api/rooms/{room}/devices/{}",base.id),Device{name:title,kind:kind.get_untracked(),icon:icon.get_untracked(),..base.clone()}));}>
         {super::connections::field("Device name",name,"Device name")}
         <label class="field">"Device type"<select aria-label="Device type" prop:value=move ||kind.get().name() on:change=move |e|kind.set(DeviceKind::from_name(&event_target_value(&e)).unwrap_or_default())>{ALL_DEVICE_KINDS.iter().map(|k|view!{<option value=k.name()>{k.name()}</option>}).collect_view()}</select></label>

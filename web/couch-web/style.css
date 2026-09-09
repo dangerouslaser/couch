@@ -725,3 +725,10 @@ input[type=color] { width:100%; height:48px; padding:4px; border:1px solid var(-
 .activity-command-search{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg)}
 
 .custom-page-editor{margin:16px 0;padding:20px}.custom-page-heading,.custom-page-actions{display:flex;align-items:center;gap:8px}.custom-page-heading{justify-content:space-between;flex-wrap:wrap}.custom-page-heading h3{margin:0}.custom-widget-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.custom-widget-editor{padding:16px;border:1px solid var(--line);border-radius:12px;min-width:0}.custom-widget-heading{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}.custom-widget-heading span{font-size:13px;color:var(--dim)}.custom-add-widget{margin-top:20px;padding:18px;background:var(--bg);border-radius:12px}.custom-add-widget h4{margin:0 0 16px}.custom-page-actions button{padding:8px 12px}.custom-pages>h3{margin-top:28px}@media(max-width:650px){.custom-widget-grid{grid-template-columns:1fr}.custom-page-editor{padding:12px}.custom-page-actions{flex-wrap:wrap}}
+
+/* IR command lists stay browsable even when a library remote has many keys. */
+.ir-library { margin: 1rem 0; }
+.ir-command-list { max-height: 24rem; overflow-y: auto; overscroll-behavior: contain; }
+.ir-command { padding: .8rem 0; border-bottom: 1px solid var(--line, #dce1d9); }
+.ir-command .field { margin-bottom: 0; }
+.ir-library select { max-width: 100%; }

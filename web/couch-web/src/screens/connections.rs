@@ -47,7 +47,7 @@ fn saved(app: App, c: Connection) -> AnyView {
         Provider::AndroidTv | Provider::AppleTv => super::streaming_tv::setup(app, &c),
     };
     view!{<section class="card saved-connection"><h2>{title}</h2><p>{format!("{label} · {usage} assigned devices")}</p>
-        <p class="dim">{match &c.provider{Provider::Kodi{host,port}=>format!("{host}:{port} · Saved address"),Provider::Ir=>"Built-in transmitter · Sending is currently unavailable on this device".into(),_=>"Credentials are kept privately on the remote".into()}}</p>
+        <p class="dim">{match &c.provider{Provider::Kodi{host,port}=>format!("{host}:{port} · Saved address"),Provider::Ir=>"Built-in transmitter · Codes are configured per device".into(),_=>"Credentials are kept privately on the remote".into()}}</p>
         <details open=usage==0><summary>"Connection settings"</summary>{edit}</details>
         <p class="dim">"Removing a connection requires removing its assigned devices first. Bridge credentials are retained for reconnecting."</p>
         {ui::danger_button("Remove connection",move ||app.run(api::delete(format!("/api/connections/{id}"))))}
@@ -77,7 +77,7 @@ fn local_form(app: App, existing: Option<Connection>, infrared: bool) -> AnyView
     }>
         {field("Connection name",name,"Living room Kodi")}
         {(!infrared).then(||view!{<p class="dim">"Enable remote control in Kodi. Saving an address does not test connectivity."</p>{field("Hostname or IP address",host,"kodi.local")}{field("TCP port",port,"9090")}})}
-        {infrared.then(||view!{<p class="notice">"Use the remote’s built-in infrared transmitter. Configure each device’s codeset inside its room. IR sending and learning are not yet available on the current kernel."</p>})}
+        {infrared.then(||view!{<p class="notice">"Use the remote’s built-in infrared transmitter. In Rooms & devices, choose a brand and model from the library or import your own codes, then assign commands. Sending requires a working IR driver; learning is not available."</p>})}
         <p role="alert">{move ||error.get()}</p><button class="primary" type="submit">"Save connection"</button>
     </form>}.into_any()
 }

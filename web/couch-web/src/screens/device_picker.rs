@@ -153,24 +153,18 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
     </div>}.into_any()
 }
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
-    let infrared = connection.provider == Provider::Ir;
-    let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv);
+    if connection.provider == Provider::Ir { return super::infrared::device_setup(app, connection.id, room, None); }
+    let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv | Provider::AppleTv);
     let receiver = matches!(connection.provider, Provider::Denon { .. });
     let existing = assigned(app, &connection, "");
-    let name = RwSignal::new(if infrared {
-        String::new()
-    } else {
-        connection.name.clone()
-    });
-    let codeset = RwSignal::new(String::new());
-    let kind = RwSignal::new("tv".to_string());
-    view!{<form on:submit=move |e|{e.prevent_default();let title=name.get_untracked().trim().to_string();if title.is_empty(){return}let resource=if infrared{codeset.get_untracked().trim().to_string()}else{String::new()};app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":title,"kind":if infrared{kind.get_untracked()}else if television{"tv".into()}else if receiver{"speaker".into()}else{"media-player".into()},"integration":{"via":"connection","connection_id":connection.id,"resource_id":resource}})));}>
+    let name = RwSignal::new(connection.name.clone());
+    view!{<form on:submit=move |e|{e.prevent_default();let title=name.get_untracked().trim().to_string();if title.is_empty(){return}app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":title,"kind":if television{"tv"}else if receiver{"speaker"}else{"media-player"},"integration":{"via":"connection","connection_id":connection.id,"resource_id":""}})));}>
         {super::connections::field("Device name",name,"Living room TV")}
-        {infrared.then(||view!{<label class="field">"Device type"<select aria-label="Device type" prop:value=move ||kind.get() on:change=move |e|kind.set(event_target_value(&e))><option value="tv">"TV"</option><option value="speaker">"Speaker"</option><option value="media-player">"Media player"</option><option value="other">"Other"</option></select></label>{super::connections::field("Codeset name",codeset,"lg-tv")}<p class="dim">"Use an installed codeset name. Codeset discovery, learning and sending are not available yet."</p>})}
         {existing.as_ref().map(|r|view!{<p>{format!("This device is already in {r}")}</p>})}
-        <button type="submit" class="primary" disabled=move ||app.busy.get()||(!infrared && existing.is_some())>"Add to this room"</button>
+        <button type="submit" class="primary" disabled=move ||app.busy.get()||existing.is_some()>"Add to this room"</button>
     </form>}.into_any()
 }
+
 pub fn controls(app: App, device: &Device) -> AnyView {
     let config = app.config.get_untracked().unwrap_or_default();
     let (prefix, id) = match config.resolve_integration(&device.integration) {
