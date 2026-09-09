@@ -260,6 +260,7 @@ impl Controller {
         self.error_until = Some(Instant::now() + Duration::from_secs(4));
     }
     fn open(&mut self, app: &App, id: &str) {
+        app.set_active_activity(if id.starts_with("device:") {""}else{id}.into());
         if let Some(config) = std::fs::read(home::path("config.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Config>(&b).ok())

@@ -23,6 +23,7 @@ mod home;
 mod lights;
 mod scenes;
 mod activity;
+mod activity_buttons;
 mod tv;
 mod connections;
 mod remote_clock;
@@ -830,6 +831,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.on_settings_leave(move || ask(Intent::SettingsBack));
     }
 
+    let mut button_controls = activity_buttons::Controller::new();
     let mut standby = Standby::Active;
     let mut swallow_wake_touch = false;
     let mut last_input = now_monotonic_us();
@@ -864,7 +866,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     loop {
-        if let Some(press) = pad.poll() {
+        let replay = button_controls.next_replay();
+        let replayed = replay.is_some();
+        if let Some(press) = replay.or_else(||pad.poll()) {
+            if press.released && press.mic.is_none() && press.menu.is_none() {
+                if !replayed {button_controls.handle(&app,&press);}
+                continue;
+            }
             if !press.repeat {
                 in_n += 1;
                 in_sum += press.latency_us;
@@ -895,6 +903,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if swallow {
                 continue;
             }
+            if !replayed && button_controls.handle(&app,&press) {continue;}
             if press.menu == Some(true) && !app.get_pair_shown() {
                 if app.get_tv_shown() {app.invoke_tv_action("menu".into());}
                 else if app.get_player_shown() {app.invoke_player_action("Input.ContextMenu".into(),0.);}
@@ -1212,6 +1221,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if activity_navigation {screen.snapshot();}
         activity_controls.poll(&app);
         tv_controls.poll(&app);
+        if let Some(error)=button_controls.poll(&app) {toast(error,3);}
+        if !app.get_player_shown() && !app.get_tv_shown() {app.set_active_activity("".into());}
         if activity_navigation && was_activity != (app.get_player_shown(), app.get_tv_shown()) {
             dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
             slint::platform::update_timers_and_animations();

@@ -13,6 +13,7 @@ pub struct Connection {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Provider {
     Kodi { host: String, port: u16 },
+    Denon { host: String, port: u16 },
     HomeAssistant,
     Hue,
     WebOs,
@@ -22,6 +23,7 @@ impl Provider {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Kodi { .. } => "kodi",
+            Self::Denon { .. } => "denon",
             Self::HomeAssistant => "home-assistant",
             Self::Hue => "hue",
             Self::WebOs => "web-os",
@@ -31,6 +33,7 @@ impl Provider {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Kodi { .. } => "Kodi",
+            Self::Denon { .. } => "Denon AVR",
             Self::HomeAssistant => "Home Assistant",
             Self::Hue => "Philips Hue",
             Self::WebOs => "LG webOS",
@@ -65,6 +68,7 @@ impl Config {
                 host: host.clone(),
                 port: *port,
             },
+            Provider::Denon {host,port} => Integration::Denon {host:host.clone(),port:*port},
             Provider::HomeAssistant => Integration::HomeAssistant {
                 entity_id: alloc::format!("{connection_id}/{resource_id}"),
             },

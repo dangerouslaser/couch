@@ -6,6 +6,7 @@
 //! reconciled with it.
 
 pub mod activities;
+mod activity_buttons;
 pub mod areas;
 mod home_assistant;
 pub mod overview;

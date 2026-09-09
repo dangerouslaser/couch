@@ -205,6 +205,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Video,
             room: Id::new("living-room"),
             source: Some(Id::new("living-kodi")),
+                buttons: Vec::new(),
             steps: vec![
                 Action::new(Id::new("living-tv"), "on"),
                 Action::new(Id::new("living-tv"), "input:hdmi2"),
@@ -217,6 +218,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Audio,
             room: Id::new("kitchen"),
             source: Some(Id::new("kitchen-sonos")),
+                buttons: Vec::new(),
             steps: vec![Action::new(Id::new("kitchen-sonos"), "play")],
         },
         Activity {
@@ -225,6 +227,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Audio,
             room: Id::new("study"),
             source: Some(Id::new("study-sonos")),
+                buttons: Vec::new(),
             steps: vec![Action::new(Id::new("study-sonos"), "play")],
         },
         Activity {
@@ -233,6 +236,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Audio,
             room: Id::new("bedroom"),
             source: Some(Id::new("bedroom-sonos")),
+                buttons: Vec::new(),
             steps: vec![Action::new(Id::new("bedroom-sonos"), "play")],
         },
         Activity {
@@ -241,6 +245,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Video,
             room: Id::new("hallway"),
             source: Some(Id::new("hallway-cam")),
+                buttons: Vec::new(),
             steps: vec![],
         },
         // The mock's DOWNSTAIRS strip has three things running in the living
@@ -252,6 +257,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Audio,
             room: Id::new("living-room"),
             source: Some(Id::new("living-soundbar")),
+                buttons: Vec::new(),
             steps: vec![Action::new(Id::new("living-soundbar"), "on")],
         },
         Activity {
@@ -260,6 +266,7 @@ pub(crate) fn seed() -> Config {
             kind: ActivityKind::Video,
             room: Id::new("living-room"),
             source: Some(Id::new("living-tv")),
+                buttons: Vec::new(),
             steps: vec![
                 Action::new(Id::new("living-tv"), "on"),
                 Action::new(Id::new("living-tv"), "input:hdmi1"),

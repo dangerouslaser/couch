@@ -64,7 +64,10 @@ pub struct Keypad {
     last_repeat: u64,
 }
 
+#[derive(Clone)]
 pub struct Press {
+    pub code: u16,
+    pub released: bool,
     pub key: Option<Key>,
     /// Some(true) when the microphone key went down, Some(false) when it came
     /// back up. Hold to talk, so both edges are events.
@@ -192,20 +195,21 @@ impl Keypad {
                     self.held = 0;
                 }
                 if code == KEY_MIC {
-                    return Some(Press { key: None, mic: Some(false), menu: None,
+                    return Some(Press { code, released: true, key: None, mic: Some(false), menu: None,
                                         latency_us, repeat: false });
                 }
                 if code == KEY_MENU {
-                    return Some(Press { key: None, mic: None, menu: Some(false),
+                    return Some(Press { code, released: true, key: None, mic: None, menu: Some(false),
                                         latency_us, repeat: false });
                 }
-                None
+                Some(Press {code, released:true,key:None,mic:None,menu:None,latency_us,repeat:false})
             }
             1 => {
                 if code == KEY_MIC {
                     // Not held for repeat: a key you hold down to talk must not
                     // also be a key that repeats.
                     return Some(Press {
+                        code, released: false,
                         key: None,
                         mic: Some(true),
                         menu: None,
@@ -218,6 +222,7 @@ impl Keypad {
                     // it from this down edge and the up edge above. Not held
                     // for repeat, for the same reason as the mic key.
                     return Some(Press {
+                        code, released: false,
                         key: None,
                         mic: None,
                         menu: Some(true),
@@ -236,6 +241,7 @@ impl Keypad {
                 let Some(key) = map_key(code) else {
                     println!("couch-gui: unmapped key code {code}");
                     return Some(Press {
+                        code, released: false,
                         key: None,
                         mic: None,
                         menu: None,
@@ -247,6 +253,7 @@ impl Keypad {
                 self.held_since = mono;
                 self.last_repeat = 0;
                 Some(Press {
+                    code, released: false,
                     key: Some(key),
                     mic: None,
                     menu: None,
@@ -276,6 +283,7 @@ impl Keypad {
         }
         self.last_repeat = now;
         Some(Press {
+            code: self.held, released: false,
             key: map_key(self.held),
             mic: None,
             menu: None,
@@ -288,7 +296,7 @@ impl Keypad {
 // Measured HA100 legends: Power=F2, Home=F1, R/G/B/Y=F8/F9/F10/F11.
 // Reserve F13–F18 for TV actions; never repeat power, mute, home or colors.
 fn one_shot(code: u16) -> bool {
-    matches!(code,59|60|113|116|172|66|67|68|87|398|399|400|401)
+    !matches!(code,103|108|105|106|104|109|402|403|115|114)
 }
 fn map_key(code: u16) -> Option<Key> {
     match code {
@@ -315,6 +323,7 @@ fn map_key(code: u16) -> Option<Key> {
         67 | 399 => Some(Key::F16),      // green
         68 | 401 => Some(Key::F17),      // blue
         87 | 400 => Some(Key::F18),      // yellow
+        62 => Some(Key::F3), 63 => Some(Key::F4), 64 => Some(Key::F5), 65 => Some(Key::F6),
         59 | 172 => Some(Key::Home),         // KEY_HOMEPAGE
         _ => None,
     }
@@ -384,6 +393,7 @@ mod tests {
     ) -> Vec<(Option<char>, Option<bool>, bool)> {
         k.feed(&events.concat(), mono, 0);
         std::iter::from_fn(|| k.queue.pop_front())
+            .filter(|p| !p.released || p.mic.is_some())
             .map(|p| (p.key.map(char::from), p.mic, p.repeat))
             .collect()
     }

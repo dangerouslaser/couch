@@ -176,7 +176,7 @@ fn remember_wake(settings: &Settings, credentials: &std::path::Path) {
         let _ = std::fs::remove_file(tmp);
     }
 }
-fn wake_tv(settings: &Settings, credentials: &std::path::Path) -> Result<(), String> {
+pub(crate) fn wake_tv(settings: &Settings, credentials: &std::path::Path) -> Result<(), String> {
     let saved = std::fs::read(credentials.with_file_name("webos-wake.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -725,4 +725,10 @@ mod tests {
         assert!(command("close").is_none());
         assert!(command("unknown").is_none());
     }
+}
+
+pub(crate) fn mapped_command(c: &mut Client, name: &str) -> couch_webos::Result<()> {
+    if name == "stop" {return c.playback(Playback::Stop)}
+    let name=match name {"power-off"=>"power","mute"=>"toggle-mute","fast-forward"=>"forward",_=>name};
+    execute(c, &command(name).ok_or(couch_webos::Error::Protocol)?)
 }

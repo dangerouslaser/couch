@@ -14,6 +14,10 @@ impl Api {
         body: &[u8],
         revision: Option<u64>,
     ) -> Reply {
+        if let [id,"denon",rest @ ..] = path {
+            let settings=self.with(|s|match &s.config().connection(&Id::new(*id))?.provider {Provider::Denon{host,port}=>Some(couch_denon::Settings{host:host.clone(),port:*port}),_=>None});
+            return match settings {Some(settings)=>super::denon::route(method,rest,body,settings),None=>Reply::error(404,"Denon connection not found")};
+        }
         if let [id, kind @ ("hue" | "ha" | "webos" | "kodi"), rest @ ..] = path {
             let file = self.with(|s| {
                 let c = s.config().connection(&Id::new(*id))?;

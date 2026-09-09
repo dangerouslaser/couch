@@ -128,6 +128,7 @@ export component App inherits Window {
     in-out property <[TvChoice]> tv-choices;
     public function focus-tv(){television.take-focus();}
     callback player-action(string,float);
+    in-out property <string> active-activity;
     in-out property <bool> player-shown: false;
     in-out property <bool> player-ready: false;
     in-out property <bool> player-connected: false;

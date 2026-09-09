@@ -52,6 +52,7 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
+pub mod buttons;
 mod device;
 mod connection;
 mod appearance;
@@ -204,6 +205,9 @@ pub struct Activity {
     /// The device the transport keys drive while this is running.
     #[serde(default)]
     pub source: Option<DeviceId>,
+    /// Overrides apply only while this activity screen is open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buttons: Vec<buttons::Binding>,
     #[serde(default)]
     pub steps: Vec<Action>,
 }
@@ -416,6 +420,9 @@ impl Config {
         }
         for act in &mut self.activities {
             act.steps.retain(|s| &s.device != device);
+            for binding in &mut act.buttons {
+                if binding.action.as_ref().is_some_and(|a| &a.device == device) { binding.action = None; }
+            }
             if act.source.as_ref() == Some(device) {
                 act.source = None;
             }

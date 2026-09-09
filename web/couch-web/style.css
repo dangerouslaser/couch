@@ -670,3 +670,16 @@ input[type=color] { width:100%; height:48px; padding:4px; border:1px solid var(-
 .icon-option[aria-pressed="true"] { border-color: var(--accent); background: #e4eee8; }
 
 .icon-picker input[type="search"] { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); }
+
+/* HA100 physical activity mapper: all hit targets remain real buttons. */
+.button-editor { display:grid; grid-template-columns:260px minmax(0,1fr); gap:32px; align-items:start; }
+.remote-map { width:240px; height:600px; position:relative; margin:auto; background:#16151b; border:2px solid #48444f; border-radius:42px; box-shadow:0 12px 24px #0003; }
+.remote-display { position:absolute; left:12%; right:12%; top:5%; height:29%; border:1px solid #55505d; border-radius:8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:#e8ddf6; background:linear-gradient(150deg,#352349,#17131e); }
+.remote-display strong { font-size:30px; font-weight:800; letter-spacing:-2px; }
+.remote-display span { font-size:12px; }
+.remote-dpad { position:absolute; left:23%; top:45%; width:54%; height:26%; border:1px solid #66606d; border-radius:50%; }
+.remote-key { position:absolute; transform:translate(-50%,-50%); width:40px; height:40px; padding:0; border-radius:50%; border:1px solid #625b6d; background:#2b2732; color:white; font-size:12px; }
+.remote-key.mapped { box-shadow:0 0 0 2px #ab77e8; }
+.remote-key.chosen { background:#8153bc; outline:3px solid #d9b7ff; outline-offset:3px; }
+.remote-key[aria-label=Red] { color:#ff8080; }.remote-key[aria-label=Green] { color:#7ddc93; }.remote-key[aria-label=Blue] { color:#79b7ff; }.remote-key[aria-label=Yellow] { color:#f5d566; }
+@media(max-width:650px) { .button-editor { grid-template-columns:1fr; }.button-assignment { width:100%; } }

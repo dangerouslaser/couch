@@ -58,6 +58,7 @@ pub fn rooms(app: App, config: &Config) -> AnyView {
 
 pub fn connection_summary(integration: &Integration) -> String {
     match integration {
+        Integration::Denon{host,port}=>format!("Denon AVR · {host}:{port}"),
         Integration::Connection { connection_id, .. } => format!("Connection · {connection_id}"),
         Integration::WebOs => "LG webOS TV".into(),
         Integration::None => "Not configured".into(),

@@ -226,11 +226,12 @@ pub fn detail(app: App, config: &Config, id: &Id) -> AnyView {
                 })}
 
             </label>
-            <p class="dim">"Choose a Kodi media player to open full-screen playback controls on the remote. Volume keys control Kodi volume."</p>
+            <p class="dim">"Choose a Kodi player or LG webOS TV for full-screen controls. Customize individual physical buttons below."</p>
             <p class="dim">{shown_in}</p>
         </section>
 
 
+        {super::activity_buttons::editor(app, config, activity)}
         <h2 class="section">"Startup commands"</h2>
         <p class="dim">"Startup commands are saved for future automation and are not executed by the remote yet. Commands are listed in execution order. Pick a device to add an on command, then edit the command for that device. Command names depend on its integration; saving does not test or send them."</p>
         {activity.steps.is_empty().then(|| {

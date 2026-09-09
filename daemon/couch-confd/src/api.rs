@@ -26,6 +26,7 @@ mod remote;
 mod hue;
 mod webos;
 mod connections;
+mod denon;
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -557,7 +558,7 @@ impl Api {
                 "schema_version": SCHEMA_VERSION,
                 "icons": ALL_ICONS.iter().map(|i| i.name()).collect::<Vec<_>>(),
                 "device_kinds": ALL_DEVICE_KINDS.iter().map(|k| k.name()).collect::<Vec<_>>(),
-                "integrations": ["none", "kodi", "home-assistant", "hue", "ir"],
+                "integrations": ["none", "kodi", "home-assistant", "hue", "web-os", "denon", "ir"],
                 "activity_kinds": ["audio", "video"],
             }),
         )
@@ -643,6 +644,7 @@ impl Api {
                 kind: new.kind,
                 room: new.room,
                 source: new.source,
+                buttons: Vec::new(),
                 steps: Vec::new(),
             });
         });
@@ -761,6 +763,8 @@ impl Api {
             source: Option<Id>,
             #[serde(default)]
             steps: Vec<Action>,
+            #[serde(default)]
+            buttons: Vec<couch_model::buttons::Binding>,
         }
         let incoming: Body = match parse(body) {
             Ok(v) => v,
@@ -774,6 +778,7 @@ impl Api {
             act.room = incoming.room;
             act.source = incoming.source;
             act.steps = incoming.steps;
+            act.buttons = incoming.buttons;
             Some(())
         })
     }
@@ -902,6 +907,7 @@ impl Api {
                         kind: req.kind,
                         room: room.clone(),
                         source: req.source.clone(),
+                buttons: Vec::new(),
                         steps: Vec::new(),
                     });
                     id
@@ -1022,4 +1028,26 @@ fn read_body(request: &mut Request) -> Result<Vec<u8>, Reply> {
         .read_to_end(&mut body)
         .map_err(|e| Reply::error(400, format!("could not read the request body: {e}")))?;
     Ok(body)
+}
+
+#[cfg(test)]
+mod activity_mapping_tests {
+    use super::*;
+    #[test]
+    fn activity_update_persists_and_validates_physical_bindings() {
+        let dir=std::env::temp_dir().join(format!("couch-api-buttons-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let api=Api::new(Store::open(dir.join("config.json")).unwrap(),Assets::embedded(),Arc::new(Auth::new(dir.join("pin"),true)));
+        let mut activity=api.with(|s|s.config().activities[0].clone());
+        activity.buttons=vec![couch_model::buttons::Binding{button:couch_model::buttons::Button::Ok,gesture:couch_model::buttons::Gesture::Long,action:Some(Action::new("living-kodi","home"))}];
+        let reply=api.replace_activity(&serde_json::to_vec(&activity).unwrap(),None,activity.id.as_str());assert_eq!(reply.status,200);
+        assert_eq!(api.with(|s|s.config().activities[0].buttons.clone()),activity.buttons);
+        let original=std::fs::read(dir.join("config.json")).unwrap();
+        activity.buttons[0].action.as_mut().unwrap().command="bad-command".into();
+        let reply=api.replace_activity(&serde_json::to_vec(&activity).unwrap(),None,activity.id.as_str());assert_eq!(reply.status,422);
+        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(),original);
+        activity.buttons.clear();let reply=api.replace_activity(&serde_json::to_vec(&activity).unwrap(),None,activity.id.as_str());assert_eq!(reply.status,200);
+        assert!(api.with(|s|s.config().activities[0].buttons.is_empty()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

@@ -488,6 +488,7 @@ impl Controller {
                         let tv=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration))).is_some_and(|i|matches!(i,Integration::WebOs));
                         if tv {
                             let connection=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|match &d.integration {Integration::Connection{connection_id,..}=>Some(connection_id.to_string()),_=>c.connections.iter().find(|c|c.provider==couch_model::Provider::WebOs).map(|c|c.id.to_string())})).unwrap_or_default();
+                            app.set_active_activity("".into());
                             app.invoke_open_tv(connection.as_str().into(),e.name.as_str().into());continue;
                         }
                         app.set_light_detail(

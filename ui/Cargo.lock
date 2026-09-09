@@ -763,10 +763,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "couch-denon"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "couch-gui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "couch-denon",
  "couch-ha",
  "couch-hue",
  "couch-kodi",

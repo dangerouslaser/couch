@@ -11,6 +11,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("home-assistant", "Home Assistant"),
         ("hue", "Philips Hue"),
         ("web-os", "LG webOS TV"),
+        ("denon", "Denon AVR"),
         ("ir", "Infrared"),
     ]
     .into_iter()
@@ -25,7 +26,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared uses the built-in blaster with a separate codeset on each room device."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared uses the built-in blaster with a separate codeset on each room device."</p>}.into_any()}}
         </section>
     }.into_any()
 }
@@ -36,6 +37,7 @@ fn saved(app: App, c: Connection) -> AnyView {
     let usage=app.config.get_untracked().map(|cfg|cfg.devices().filter(|(_,d)|matches!(&d.integration,couch_model::Integration::Connection{connection_id,..} if connection_id==&id)).count()).unwrap_or(0);
     let edit = match c.provider {
         Provider::Kodi { .. } => view!{ {local_form(app, Some(c.clone()), false)} {super::kodi::setup(app, &c)} }.into_any(),
+        Provider::Denon { .. } => view!{{denon_form(app, Some(c.clone()))}{denon_controls(app,c.id.to_string())}}.into_any(),
         Provider::Ir => local_form(app, Some(c.clone()), true),
         Provider::HomeAssistant => super::home_assistant::setup(app, &c),
         Provider::Hue => super::hue::setup(app, &c),
@@ -98,4 +100,38 @@ fn create_named(app:App, provider:Provider)->AnyView {
     {field("Connection name",name,"Living room TV / Upstairs bridge")}
     <p class="dim">"Create a named connection, then enter its address and pair it in Connection settings above."</p>
     <button type="submit" class="primary">"Create connection"</button></form>}.into_any()
+}
+
+fn denon_form(app: App, existing: Option<Connection>) -> AnyView {
+    let name = RwSignal::new(existing.as_ref().map(|c|c.name.clone()).unwrap_or("Denon AVR".into()));
+    let (host, port) = match existing.as_ref().map(|c|&c.provider) {Some(Provider::Denon{host,port})=>(host.clone(),port.to_string()),_=>(String::new(),"23".into())};
+    let host=RwSignal::new(host); let port=RwSignal::new(port); let error=RwSignal::new(String::new());
+    view!{<form on:submit=move |e|{e.prevent_default();let Ok(port)=port.get_untracked().parse::<u16>() else {error.set("Enter a valid TCP port".into());return};
+        let body=json!({"name":name.get_untracked(),"provider":Provider::Denon{host:host.get_untracked().trim().into(),port}});
+        match &existing {Some(c)=>app.run(api::put(format!("/api/connections/{}",c.id),body)),None=>app.run(api::post("/api/connections",body))}
+    }>{field("Connection name",name,"Theater receiver")}{field("Hostname or IP address",host,"192.168.1.29")}{field("TCP port",port,"23")}
+    <p class="dim">"Enable Network Control / Always On on the receiver for standby access. Add the receiver to a room, then assign activity volume, mute and power buttons to it."</p>
+    <p role="alert">{move ||error.get()}</p><button class="primary">"Save connection"</button></form>}.into_any()
+}
+
+pub(super) fn denon_controls(app: App, id: String) -> AnyView {
+    use leptos::task::spawn_local;
+    let base=StoredValue::new(format!("/api/connections/{id}/denon"));
+    let status=RwSignal::new(String::new());let busy=RwSignal::new(false);let sources=RwSignal::new(Vec::<(String,String)>::new());
+    let send=move |command:Option<&'static str>, value:Option<serde_json::Value>| {
+        if busy.get_untracked(){return}busy.set(true);
+        spawn_local(async move {
+            let (method,path,body)=match command {Some(command)=>("POST","command",Some(json!({"command":command,"value":value}))),None=>("GET","status",None)};
+            match api::ha(method,&format!("{}/{path}",base.get_value()),body).await {
+                Ok(s)=>{status.set(format!("{} · {} · {}{}",if s["on"]==true{"Main zone on"}else{"Standby"},s["input"].as_str().unwrap_or("Unknown input"),s["volume_db"].as_f64().map(|db|format!("{db:.1} dB")).unwrap_or("Minimum volume".into()),if s["muted"]==true{" · Muted"}else{""}));
+                    if command.is_none(){if let Ok(v)=api::ha("GET",&format!("{}/sources",base.get_value()),None).await {sources.set(serde_json::from_value(v).unwrap_or_default());}}
+                },Err(e)=>{if e.unauthorized {app.paired.set(Some(false));}status.set(e.message);}
+            }busy.set(false);
+        });
+    };
+    view!{<section><p role="status">{move ||status.get()}</p><div class="actions">
+        <button disabled=move ||busy.get() on:click=move |_|send(None,None)>"Test connection / refresh"</button>
+        {[("power-on","On"),("power-off","Standby"),("volume-down","Volume −"),("volume-up","Volume +"),("mute","Mute"),("unmute","Unmute")].into_iter().map(move |(command,label)|view!{<button disabled=move ||busy.get() on:click=move |_|send(Some(command),None)>{label}</button>}).collect_view()}
+        </div><label class="field">"Input"<select aria-label="AVR input" disabled=move ||busy.get() on:change=move |e|{let id=event_target_value(&e);if !id.is_empty(){send(Some("input"),Some(json!(id)));}}><option value="">"Choose an input (refresh to discover)"</option>{move ||sources.get().into_iter().map(|(id,name)|view!{<option value=id>{name}</option>}).collect_view()}</select></label>
+    </section>}.into_any()
 }

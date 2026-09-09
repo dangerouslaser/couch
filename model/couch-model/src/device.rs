@@ -143,6 +143,7 @@ impl core::fmt::Display for DeviceKind {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(tag = "via", rename_all = "kebab-case")]
 pub enum Integration {
+    Denon { host: String, port: u16 },
     /// Configured but not wired to anything: the device exists so it can be
     /// counted and named, which is what the hub's room rows show.
     #[default]
@@ -182,6 +183,7 @@ impl Integration {
             Integration::WebOs => "web-os",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",
+            Integration::Denon { .. } => "denon",
         }
     }
 }

@@ -17,6 +17,7 @@ description = "Config server for Couch: the REST API and the web UI it serves"
 # static musl cross-build a one-liner - the constraint that has already cost
 # this project a day over yeslogic-fontconfig-sys.
 [dependencies]
+couch-denon = { path = "../../clients/couch-denon" }
 couch-model = { path = "../../model/couch-model" }
 tiny_http = "0.12"
 serde = { version = "1", features = ["derive"] }

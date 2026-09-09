@@ -104,8 +104,8 @@ impl Config {
         let mut connection_ids = Vec::new();
         for (i,c) in self.connections.iter().enumerate() {
             check_entity(&mut problems, &mut connection_ids, "connections", i, &c.id, &c.name);
-            if let crate::Provider::Kodi{host,port}=&c.provider {
-                if host.trim().is_empty() || *port==0 { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Kodi needs an address and a TCP port from 1 to 65535".into()}); }
+            if let crate::Provider::Kodi{host,port}|crate::Provider::Denon{host,port}=&c.provider {
+                if host.trim().is_empty() || *port==0 { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Connection needs an address and a TCP port from 1 to 65535".into()}); }
             }
             if c.provider==crate::Provider::Ir && self.connections[..i].iter().any(|old|old.provider==crate::Provider::Ir) { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Use the built-in IR connection and configure a separate codeset on each device".into()}); }
             if c.id.as_str().len()>128 || !c.id.as_str().bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-' || b==b'_') { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Connection IDs must be safe alphanumeric identifiers".into()}); }
@@ -117,7 +117,7 @@ impl Config {
                     None=>problems.push(Problem{at,message:"This device refers to a missing connection; remove its devices before deleting the connection".into()}),
                     Some(c)=>{
                         let valid=match c.provider {
-                            crate::Provider::Kodi{..}|crate::Provider::WebOs=>resource_id.is_empty(),
+                            crate::Provider::Kodi{..}|crate::Provider::Denon{..}|crate::Provider::WebOs=>resource_id.is_empty(),
                             crate::Provider::HomeAssistant=>resource_id.starts_with("light.") && resource_id.len()>6 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'.'),
                             crate::Provider::Hue=>{ let id=resource_id.strip_prefix("room:").unwrap_or(resource_id); id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) },
                             crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),
@@ -209,6 +209,14 @@ impl Config {
                         message: alloc::format!("no device \"{src}\""),
                     });
                 }
+            }
+            for (j, binding) in act.buttons.iter().enumerate() {
+                let valid = !act.buttons[..j].iter().any(|b| b.button == binding.button && b.gesture == binding.gesture)
+                    && (binding.gesture == crate::buttons::Gesture::Short || binding.button.supports_long())
+                    && binding.action.as_ref().map_or(true, |action| self.devices().find(|(_, d)| d.id == action.device)
+                        .and_then(|(_, d)| self.resolve_integration(&d.integration))
+                        .is_some_and(|integration| crate::buttons::functions(&integration).iter().any(|f| f.0 == action.command)));
+                if !valid { problems.push(Problem {at:alloc::format!("activities[{i}].buttons[{j}]"),message:"Choose one mapping per button and a supported device function".into()}); }
             }
             for (j, step) in act.steps.iter().enumerate() {
                 if !device_ids.contains(&&step.device) {
