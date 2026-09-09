@@ -255,6 +255,41 @@ The header documents the remaining fields. This attribute's show callback reads
 GPIO state; **writing** the same attribute can change pins and is not a query.
 Do not substitute GPIO numbers from generic PWM test code for HA100 wiring.
 
+## Output-path investigation
+
+A real LG B4 OLED Volume Up command (NEC address 0x04, command 0x02) returned transport
+success but produced no visible response. The original remote worked from the
+same position. A phone camera showed neither remote, so that comparison did not
+establish whether Couch emitted IR. Do not equate `sent=true` with target reception.
+
+The source and live mux/config agree on PWM_A, non-inverted samples, little-endian
+LSB-first waveform bits and 228 reference clocks per sample at nominal 38 kHz.
+However, successful write duration does not verify the PWM clock: the conservative
+minimum-time guard can conceal hardware completing earlier than expected.
+
+Diagnostic kernel `b3c10e0e` logs one `TX timing` record after each successful
+write, separating `first_complete_us` from `guard_complete_us` and reporting
+`expected_us`, `setup_us`, carrier and DMA size. The first counter observation
+requires the existing zero baseline; a stale count is ignored. Safety guards,
+IRQ state and DMA cleanup are unchanged. Counter timing is sampled at roughly
+0.5–1 ms intervals; setup time is reported separately.
+
+After coordinated candidate boot and recovery setup, run individually:
+
+```sh
+irtx_probe --zero-us 68000 --carrier 38000
+irtx_probe --zero-us 500000 --carrier 38000
+```
+
+Capture both probe output and `TX timing` kernel lines. At the intended 26 MHz,
+first completion should track approximately 68.2 ms and 500.1 ms. A 66 MHz source
+would instead imply approximately 26.9 ms and 197.0 ms, while guard completion still
+waits the expected duration. If first completion does not scale with payload
+length, investigate counter semantics before attributing it to a clock ratio.
+These all-zero transfers emit no intentional carrier marks and cannot establish
+optical carrier, polarity or LED power. Scope/receiver evidence or a responding
+target is still needed before declaring IR control working.
+
 ## Remaining hardware checks
 
 - Confirm PWM0 reaches the IR LED and its idle polarity is correct.

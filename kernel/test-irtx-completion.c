@@ -37,6 +37,12 @@ int main(void)
     assert(couch_irtx_complete(1, &zero, 68000, 68000));
     assert(!couch_irtx_complete(0, &zero, 1000000, 68000));
     assert(!couch_irtx_complete(2, &zero, 1000000, 68000));
+    /* Timing instrumentation must not report a stale count or replace an
+     * early hardware observation with the later conservative guard time. */
+    assert(couch_irtx_first_complete(1, false, -1, 0) == -1);
+    assert(couch_irtx_first_complete(0, true, -1, 500) == -1);
+    assert(couch_irtx_first_complete(1, true, -1, 27000) == 27000);
+    assert(couch_irtx_first_complete(1, true, 27000, 68000) == 27000);
     puts("IR completion guards passed: duration, stale count, reset, full frame, invalid count");
     return 0;
 }

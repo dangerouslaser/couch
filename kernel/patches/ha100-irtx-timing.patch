@@ -1,0 +1,78 @@
+From b3c10e0eb7794c8604d1d1f9663751888a6e256a Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Wed, 9 Sep 2026 19:48:44 -0400
+Subject: [PATCH] irtx: measure hardware completion independently of timing
+ guard
+
+---
+ drivers/misc/mediatek/irtx/mt6580/couch_irtx.c   | 16 +++++++++++++---
+ .../mediatek/irtx/mt6580/couch_irtx_complete.h   |  7 +++++++
+ 2 files changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+index c960e127..eda94da1 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -92,7 +92,8 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	u32 duration, clocks, actual_us;
+ 	s32 sent_before = 0, sent;
+ 	bool saw_zero = false;
+-	ktime_t started;
++	ktime_t started, setup_started;
++	s64 first_complete_us = -1, elapsed_us, setup_us;
+ 	size_t wave_bytes = count - sizeof(u32);
+ 	int ret;
+ 
+@@ -138,6 +139,7 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_SIZE = wave_bytes / 4 - 1;
+ 	sent_before = mt_get_pwm_send_wavenum_hal(ir->pwm.pwm_no);
+ 	saw_zero = sent_before == 0;
++	setup_started = ktime_get();
+ 	ret = pwm_set_spec_config(&ir->pwm);
+ 	if (ret) {
+ 		/* MTK HAL errors are not all Linux errno values. */
+@@ -149,6 +151,7 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	 * Start the minimum-time guard after setup: this intentionally waits a
+ 	 * full frame even if the hardware already began during configuration. */
+ 	started = ktime_get();
++	setup_us = ktime_us_delta(started, setup_started);
+ 	deadline = jiffies + msecs_to_jiffies(DIV_ROUND_UP(actual_us, 1000) + 50);
+ 	for (;;) {
+ 		if (mt_get_intr_status(finish + 1) > 0) {
+@@ -160,8 +163,15 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 			ret = -EIO;
+ 			break;
+ 		}
+-		if (couch_irtx_complete(sent, &saw_zero,
+-				       ktime_us_delta(ktime_get(), started), actual_us)) {
++		elapsed_us = ktime_us_delta(ktime_get(), started);
++		/* Record the first valid hardware completion independently of the
++		 * conservative minimum-time guard. A retained prior count is ignored. */
++		first_complete_us = couch_irtx_first_complete(sent, saw_zero,
++						       first_complete_us, elapsed_us);
++		if (couch_irtx_complete(sent, &saw_zero, elapsed_us, actual_us)) {
++			dev_info(ir->dev, "TX timing carrier=%u bytes=%zu expected_us=%u setup_us=%lld first_complete_us=%lld guard_complete_us=%lld sent_before=%d\n",
++				 ctx->carrier, wave_bytes, actual_us, setup_us,
++				 first_complete_us, elapsed_us, sent_before);
+ 			ret = count;
+ 			break;
+ 		}
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx_complete.h b/drivers/misc/mediatek/irtx/mt6580/couch_irtx_complete.h
+index 0a3cd96f..8066d808 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx_complete.h
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx_complete.h
+@@ -11,4 +11,11 @@ static inline bool couch_irtx_complete(u32 sent, bool *saw_zero,
+ 		*saw_zero = true;
+ 	return *saw_zero && sent == 1 && elapsed_us >= expected_us;
+ }
++/* Keep the first valid observation; later minimum-duration waiting must not
++ * overwrite the measurement of hardware completion. */
++static inline s64 couch_irtx_first_complete(u32 sent, bool saw_zero,
++					  s64 first_us, s64 elapsed_us)
++{
++	return sent == 1 && saw_zero && first_us < 0 ? elapsed_us : first_us;
++}
+ #endif
+-- 
+2.43.0
+
