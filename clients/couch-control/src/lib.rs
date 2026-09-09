@@ -346,8 +346,31 @@ fn run_lane(rx: mpsc::Receiver<Job>, stats: Arc<Counters>) {
             if client.is_none() {
                 client = Some(Client::open(&job.packet.spec)?);
             }
-            client.as_mut().unwrap().execute(job.packet.op)
+            if !matches!(job.packet.op, Op::Open) {
+                if let Some(Client::Streaming(streaming::Client::Android(c))) = client.as_mut() {
+                    // Busy key traffic must also service pings and observe a
+                    // dropped TLS socket before issuing another command.
+                    c.poll().map_err(|e| Error::Remote(e.to_string()))?;
+                }
+            }
+            Ok(())
         })();
+        if let Err(error) = result {
+            client = None;
+            let _ = job.reply.send(Err(error));
+            continue;
+        }
+        // Opening a replacement socket can take longer than the queue limit.
+        // Never send that old key after a slow handshake. Keep the now-open
+        // socket so a fresh user request can proceed without another reconnect.
+        if !matches!(job.packet.op, Op::Open) && job.at.elapsed() > Duration::from_millis(750) {
+            stats.dropped.fetch_add(1, Ordering::Relaxed);
+            let _ = job.reply.send(Err(Error::Remote(
+                "Device command expired during connection setup; not sent".into(),
+            )));
+            continue;
+        }
+        let result = client.as_mut().unwrap().execute(job.packet.op);
         // A failed read/command is never retried. Reconnect on a future request.
         if result
             .as_ref()
@@ -600,3 +623,6 @@ mod tests {
         assert!(matches!(read_frame::<Packet>(&mut b), Err(Error::Protocol)));
     }
 }
+
+#[cfg(test)]
+mod android_recovery_tests;

@@ -235,6 +235,8 @@ dependencies = [
  "couch-kodi",
  "couch-webos",
  "libc",
+ "prost",
+ "rustls",
  "serde",
  "serde_json",
 ]

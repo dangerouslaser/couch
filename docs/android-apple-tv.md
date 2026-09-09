@@ -163,3 +163,24 @@ Already implemented: both Rust protocol clients, discovery and private pairing
 flows, multi-connection storage, room test controls, activity commands, Android's
 dedicated screen and configured app shortcuts. The README's older hardware
 roadmap does not track these client milestones; use this list for their status.
+
+
+## Android recovery and command-expiry regression coverage
+
+Loopback mutual-TLS peers now exercise the real shared broker lane, not a mock
+replacement for the Android client. Tests cover repeated keepalives during
+continuous key traffic, a dropped TLS socket, a later explicit reconnect, and a
+slow replacement handshake with another key queued behind it. The peer asserts
+that expired keys never arrive and only the fresh requested key is sent after
+reconnection. Forty consecutive ping/key exchanges check that traffic does not
+starve keepalives; these are bounded regression tests, not a multi-hour hardware
+soak or a claim about every TV's firmware.
+
+Two broker fixes follow from those tests. Android input is serviced before
+command dispatch even when the queue stays busy. Command age is checked again
+after connection setup and that input read: a key older than 750 ms is rejected
+without sending it, while a successfully reopened connection remains available
+for the next fresh request. A transport failure never triggers replay of the
+failed command. The original queue-entry expiry and per-endpoint isolation
+remain in place. Real-TV network-loss and longer standby/reconnect checks are
+still outstanding.
