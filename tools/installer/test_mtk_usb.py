@@ -233,6 +233,29 @@ class UsbBackendTests(unittest.TestCase):
         self.assertEqual(target.tobytes(), b"ef")
         self.assertEqual(reads, [(64, 1000)])
 
+    def test_zero_length_transfer_boundaries_preserve_protocol_bytes(self):
+        replies = iter([b"", b"a" * 64, b"", b"bc"])
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: next(replies)))
+        target = array.array("B", [0] * 65)
+        self.assertEqual(incoming.read(target), 65)
+        self.assertEqual(target.tobytes(), b"a" * 64 + b"b")
+        self.assertEqual(incoming.read(1), b"c")
+
+    def test_repeated_zero_length_transfers_stop(self):
+        calls = []
+        def read(size, timeout):
+            calls.append(size)
+            return b""
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=read))
+        with self.assertRaisesRegex(InstallError, "Too many zero-length USB transfers.*logical=1"):
+            incoming.read(1)
+        self.assertEqual(len(calls), 9)
+
+    def test_oversized_transfer_is_distinct_and_rejected(self):
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"x" * 65))
+        with self.assertRaisesRegex(InstallError, "Oversized USB transfer: received=65, requested=64"):
+            incoming.read(1)
+
     def test_full_packet_handshake_still_sends_exactly_four_commands(self):
         writes, reads = [], []
         def read(size, timeout):

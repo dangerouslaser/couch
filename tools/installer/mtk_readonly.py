@@ -10,7 +10,7 @@ import shutil
 import struct
 import zlib
 
-from couch_install import CHUNK, IDENTITY_PARTITIONS, REPO, digest, layout, require, save_json, sync_directory
+from couch_install import CHUNK, IDENTITY_PARTITIONS, InstallError, REPO, digest, layout, require, save_json, sync_directory
 
 # Existing Ollie checkout, source reviewed 2026-09-09. Not a hardware certification.
 REVIEWED_REVISION = "60e07f3b343a4469389f15967626d63e049968d4"
@@ -100,7 +100,10 @@ class ConnectedMtkReader:
         # This revision's legacy in-memory loop computes remaining bytes
         # incorrectly after the first packet. Stay within its 1 MiB packet and
         # verify exact length. Never use its background file writer for backups.
-        data = self._readflash(addr=offset, length=size, filename="", parttype="user", display=False)
+        try:
+            data = self._readflash(addr=offset, length=size, filename="", parttype="user", display=False)
+        except Exception as error:
+            raise InstallError(f"eMMC user read failed at offset={offset:#x}, size={size}: {error}") from error
         require(isinstance(data, (bytes, bytearray)) and len(data) == size, "Short or failed MTK read")
         return data
 

@@ -101,12 +101,24 @@ class PacketBufferedInput:
         size = size_or_buffer if isinstance(size_or_buffer, int) else len(size_or_buffer)
         require(0 <= size <= 1024 * 1024, "USB protocol read exceeds transfer limit")
         timeout = min(1000, timeout) if timeout is not None and timeout > 0 else 1000
+        empty_transfers = 0
         while len(self.pending) < size:
             remaining = size - len(self.pending)
             packet = self.endpoint.wMaxPacketSize
             request = ((remaining + packet - 1) // packet) * packet
             data = bytes(self.endpoint.read(request, timeout=timeout))
-            require(data and len(data) <= request, "Empty or oversized USB packet read")
+            require(len(data) <= request,
+                    f"Oversized USB transfer: received={len(data)}, requested={request}, logical={size}")
+            # A successful zero-length bulk transfer terminates a USB transfer,
+            # not the DA's length-delimited byte stream. It supplies no bytes.
+            # Bound even fast repeated ZLPs; the enclosing operation also has
+            # an absolute deadline. Never discard nonempty protocol data.
+            if not data:
+                empty_transfers += 1
+                require(empty_transfers <= 8,
+                        f"Too many zero-length USB transfers: requested={request}, logical={size}, "
+                        f"buffered={len(self.pending)}")
+                continue
             self.pending.extend(data)
         data = bytes(self.pending[:size])
         del self.pending[:size]

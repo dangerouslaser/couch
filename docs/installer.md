@@ -1,6 +1,6 @@
 # Couch USB installer
 
-Status: experimental installer policy engine, simulation CLI, and read-only connected-session adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. No live USB session, flash operation, recovery boot, or identity extraction has been validated for this implementation.
+Status: experimental installer policy engine, simulation CLI, and read-only USB adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. Controlled HA100 testing has captured the selected preloader, synchronized, uploaded the approved download agent into RAM and obtained eMMC/RAM metadata. The first partition-table read then failed; USB identity backup, persistent writes and installer recovery remain unvalidated. Separately, runtime reads of five identity partitions plus boot/recovery have private, independently verified baseline copies.
 
 ## Intended experience
 
@@ -53,7 +53,7 @@ python3 -m unittest discover -s tools/installer -v
 
 The `plan` command is a dry run and writes nothing. Repeat `simulate` with `--resume` to verify a completed journal or continue after a simulated interruption. These tests cover wrong targets/layouts, prohibited writes, bad hashes, backup/readback failures, partial writes, corrupted backups, identity changes, write ordering and resume.
 
-The reviewed suite has 66 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Adapter tests cover GPT CRCs and disagreement between valid copies, bounded reads, short responses, target confirmation, and independent identity readback. Session-gate tests cover source/loader changes, competing locks, ambiguous device selection and cleanup. Simulation is single-process only; it does not yet use the session gate's lock. Do not treat the simulator as a hardware-ready transaction manager.
+The reviewed suite has 70 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Adapter tests cover GPT CRCs and disagreement between valid copies, bounded reads, short responses, target confirmation, and independent identity readback. Session-gate tests cover source/loader changes, competing locks, ambiguous device selection and cleanup. Simulation is single-process only; it does not yet use the session gate's lock. Do not treat the simulator as a hardware-ready transaction manager.
 
 Optional descriptor-only discovery requires PyUSB and a libusb backend. Install them in a development virtual environment following the host's package instructions, then run:
 
@@ -96,7 +96,7 @@ The backend contract separates descriptor enumeration, exact-device claiming, an
 
 Upstream USB `connect` currently chooses the first matching VID/PID and includes a fallback that re-enumerates by VID/PID. The Couch binding bypasses that connector: it claims the selected descriptor directly and disables upstream rediscovery entry points. It stops on errors rather than selecting a new VID/PID match. [Reviewed USB connector](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/Connection/usblib.py#L299)
 
-## Concrete USB binding: software implemented, hardware unvalidated
+## Concrete USB binding: startup validated, readback pending
 
 `tools/installer/mtk_usb.py` claims the exact enumerated PyUSB device and its CDC bulk endpoints. It records which interfaces it claimed and detached, then releases those interfaces and restores only those drivers during cleanup. It does not reset USB or fall back to setting a new configuration. USB transfer defaults are one second; claim and read operations have ten-second deadlines and startup has a thirty-second deadline. Deadlines require the main thread on Linux/macOS and unwind through cleanup; they are not a separate-process kill guarantee for a defective native USB library.
 
@@ -132,7 +132,7 @@ All capture files must be outside the repository. A fresh destination is require
 
 ## First capture attempt and startup corrections
 
-A controlled hardware attempt observed preloader PID 2000 on the expected port, but the initial handshake failed before any DA upload. The remote subsequently returned to normal Couch operation. Source review found two issues worth correcting before another attempt: preparation occurred inside the short preloader window, and the upstream handshake sent an extra A0 byte before the four-byte exchange. Preparation now happens before waiting; the binding implements the strict exchange directly and reports the failing byte and response. Tests verify the exact transmitted sequence, preparation-before-wait ordering and preservation of protocol errors during cleanup. Successful physical DA startup and USB identity readback remain unvalidated.
+A controlled hardware attempt observed preloader PID 2000 on the expected port, but the initial handshake failed before any DA upload. The remote subsequently returned to normal Couch operation. Source review found two issues worth correcting before another attempt: preparation occurred inside the short preloader window, and the upstream handshake sent an extra A0 byte before the four-byte exchange. Preparation now happens before waiting; the binding implements the strict exchange directly and reports the failing byte and response. Tests verify the exact transmitted sequence, preparation-before-wait ordering and preservation of protocol errors during cleanup. These were the initial findings; subsequent DA startup succeeded as recorded below, while USB identity readback remains unvalidated.
 
 An offline preparation check then found a separate upstream constructor bug: interface `-1` indexes a dictionary of default USB IDs as though it were a list. Preparation now supplies an explicit placeholder interface without claiming it; startup replaces it with the observed CDC interface. The full real pinned `Mtk` constructor and candidate-loader/board-data parsing subsequently passed offline on Ollie, including EMI version 21 / 752 bytes. No USB enumeration, claim or handshake was used in that check.
 
@@ -144,4 +144,13 @@ Host inspection also found ModemManager probing the same port during the attempt
 
 The next physical attempt exposed an exact `READY` banner, before any DA upload. Published MT6580 preloader source explains this state: `usb_listen` emits that banner and consumes an initial A0 byte before invoking the download handler. The handler then expects a fresh four-byte A0/0A/50/05 exchange. Thus the earlier duplicate-byte hypothesis was incomplete: this particular preloader path needs a trigger plus synchronization, whereas an already active download handler needs only synchronization. No `DOWNLOAD`, META or reset command is required. [MT6580 USB listener](https://github.com/svoboda18/preloader/blob/73d33cc801ec3ab49c886529ca2f19a6b11f2d03/platform/mt6580/src/core/handshake_usb.c#L189), [MT6580 download synchronization](https://github.com/svoboda18/preloader/blob/73d33cc801ec3ab49c886529ca2f19a6b11f2d03/platform/mt6580/src/core/download.c#L679).
 
-The host now recognizes only the complete `READY` token while expecting the initial complement. It sends one additional A0 after a 30 ms gap, accounting for the source's 20 ms listener poll, then strictly validates synchronization. Up to eight already queued exact banners are accepted without sending further triggers. Unknown tokens, excessive banners or wrong complements stop the session. Direct-complement targets retain the four-write exchange. This state handling is source-backed and unit-tested; the next physical attempt must establish whether the HA100 follows it fully. No vendor source code was incorporated.
+The host now recognizes only the complete `READY` token while expecting the initial complement. It sends one additional A0 after a 30 ms gap, accounting for the source's 20 ms listener poll, then strictly validates synchronization. Up to eight already queued exact banners are accepted without sending further triggers. Unknown tokens, excessive banners or wrong complements stop the session. Direct-complement targets retain the four-write exchange. The next physical attempt confirmed this state handling and uploaded both DA stages successfully. No vendor source code was incorporated.
+
+
+## DA startup and pending readback validation
+
+The fifth controlled attempt completed the READY exchange and uploaded both unpatched DA stages. The loader reported 1 GiB external RAM, 4 MiB eMMC boot areas and user capacity `0x1d2000000`. It then stopped on an empty-or-oversized USB transfer before completing GPT validation. No persistent partition writes were issued. DA mode can remain active after a failed read, so normal OS return must be verified by the operator before continuing.
+
+Bulk transfers can terminate with a zero-length packet. The input adapter now accepts at most eight such empty transfers per logical read, retains all nonempty bytes and keeps the existing operation deadline. Oversized transfers remain fatal with explicit lengths; partition-read errors include offset and requested size without exposing contents. These changes are covered by mock tests and await the next controlled capture. [libusb transfer termination](https://libusb.sourceforge.io/api-1.0/group__libusb__asyncio.html), [packet sizing](https://libusb.sourceforge.io/api-1.0/libusb_packetoverflow.html).
+
+CID comparison also needs validation: the pinned upstream parser reads two big-endian 64-bit values, but its diagnostic formatter emits them as little-endian. Printed CID text is therefore not the adapter's current hash input and must not be treated as a canonical sysfs CID. No automatic byte-order search or relaxed identity comparison is allowed. Preserve the runtime baseline while resolving this explicit format difference before declaring a complete USB backup.

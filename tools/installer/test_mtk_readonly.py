@@ -72,6 +72,13 @@ class MtkReaderTests(unittest.TestCase):
         with self.assertRaisesRegex(InstallError, "Short or failed"):
             self.reader()
 
+    def test_transfer_failure_reports_first_gpt_read_location(self):
+        def failed(**kwargs):
+            raise InstallError("transport detail")
+        self.session.daloader.readflash = failed
+        with self.assertRaisesRegex(InstallError, "offset=0x200, size=512: transport detail"):
+            self.reader()
+
     def test_header_and_array_corruption_are_rejected(self):
         for position, message in ((512 + 56, "header CRC"), (1024 + 56, "entry CRC"),
                                   (len(self.disk) - 512 + 56, "header CRC")):
