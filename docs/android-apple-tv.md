@@ -206,3 +206,17 @@ component; routing tests check per-TV selection and reject unsupported commands.
 The adapter uses the already peer-tested Rust Companion broker. Physical Apple
 TV validation still needs its address, advertised Companion port, tvOS version
 and the PIN displayed during pairing. No Apple ID password is needed.
+
+## Device deployment smoke check (2026-09-09)
+
+The combined GUI and configuration daemon, including the Apple TV screen,
+Android broker recovery fixes and LG power settings, were deployed atomically
+after their remote SHA-256 hashes matched the build artifacts:
+
+- GUI: `ec815337b8a17e8fcfda32cf939779eb967f040aa87a68abb21dc767c343ee66`
+- Daemon: `98ca7c9209f20a82880d93702879b30a548d4bc4da6f916e67b270d0487753da`
+
+The GUI heartbeat advanced from 613 to 615 and the configuration server returned
+HTTP 200 on port 8090. Deployment preserved configuration and required no reboot
+or kernel flash. This verifies software startup only: physical Apple TV pairing
+and controls remain untested, and built-in IR transmission is not hardware-ready.
