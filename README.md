@@ -81,6 +81,17 @@ The adb-era tools (`tools/backup.sh`, `flash.sh`, `boot-android.sh`,
 and are kept for the record; `boot-android.sh` now refuses unless told
 Android has been put back on p9.
 
+### Local build cache maintenance
+
+Kernel builds run on Ollie. Rust host debug caches can grow by many gigabytes
+across the independent workspaces. After a completed development milestone, run
+`tools/clean-build-cache.sh` to inspect them, then
+`tools/clean-build-cache.sh --apply` to remove regenerable debug compilation caches.
+The script refuses cleanup during a Rust build and preserves standalone debug
+executables, release/ARM builds, the active browser-preview cache, toolchains,
+and everything under `build/` (including private device and recovery backups).
+The next debug build will take longer. Do not delete `build/` wholesale.
+
 ## Recovering a bad boot
 
 * After init starts, it writes `boot-recovery` to the BCB and clears it after
