@@ -1,5 +1,7 @@
 # Activity button mappings
 
+![Physical button editor](activity-buttons.png)
+
 In the web UI, open **Activities**, choose an activity, and use **Physical
 buttons**. Click a key in the remote illustration, choose a press type, then
 select **Device function**, a device, and its function. **Save button mapping**

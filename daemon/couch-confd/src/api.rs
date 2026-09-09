@@ -764,7 +764,7 @@ impl Api {
             #[serde(default)]
             steps: Vec<Action>,
             #[serde(default)]
-            buttons: Vec<couch_model::buttons::Binding>,
+            buttons: Option<Vec<couch_model::buttons::Binding>>,
         }
         let incoming: Body = match parse(body) {
             Ok(v) => v,
@@ -778,7 +778,7 @@ impl Api {
             act.room = incoming.room;
             act.source = incoming.source;
             act.steps = incoming.steps;
-            act.buttons = incoming.buttons;
+            if let Some(buttons) = incoming.buttons {act.buttons = buttons;}
             Some(())
         })
     }
@@ -1041,6 +1041,10 @@ mod activity_mapping_tests {
         let mut activity=api.with(|s|s.config().activities[0].clone());
         activity.buttons=vec![couch_model::buttons::Binding{button:couch_model::buttons::Button::Ok,gesture:couch_model::buttons::Gesture::Long,action:Some(Action::new("living-kodi","home"))}];
         let reply=api.replace_activity(&serde_json::to_vec(&activity).unwrap(),None,activity.id.as_str());assert_eq!(reply.status,200);
+        assert_eq!(api.with(|s|s.config().activities[0].buttons.clone()),activity.buttons);
+        // Older clients do not know the buttons field: a rename must preserve it.
+        let mut legacy=serde_json::to_value(&activity).unwrap();legacy.as_object_mut().unwrap().remove("buttons");
+        let reply=api.replace_activity(&serde_json::to_vec(&legacy).unwrap(),None,activity.id.as_str());assert_eq!(reply.status,200);
         assert_eq!(api.with(|s|s.config().activities[0].buttons.clone()),activity.buttons);
         let original=std::fs::read(dir.join("config.json")).unwrap();
         activity.buttons[0].action.as_mut().unwrap().command="bad-command".into();

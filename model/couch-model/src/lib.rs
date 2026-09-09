@@ -206,7 +206,7 @@ pub struct Activity {
     #[serde(default)]
     pub source: Option<DeviceId>,
     /// Overrides apply only while this activity screen is open.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub buttons: Vec<buttons::Binding>,
     #[serde(default)]
     pub steps: Vec<Action>,

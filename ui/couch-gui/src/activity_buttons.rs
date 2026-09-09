@@ -41,20 +41,7 @@ impl Controller {
         let (reply, out) = mpsc::sync_channel(8);
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
-        std::thread::spawn(move || {
-            let mut denon = HashMap::new();
-            let mut tv = HashMap::new();
-            while let Ok(r) = rx.recv() {
-                if r.generation != current.load(Ordering::SeqCst)
-                    || r.at.elapsed() > Duration::from_millis(750)
-                {
-                    continue;
-                }
-                if let Err(error) = execute(&r.config, &r.action, &mut denon, &mut tv) {
-                    let _ = reply.try_send((r.generation, error));
-                }
-            }
-        });
+        std::thread::spawn(move || worker(rx, reply, current));
         Self {
             context: String::new(),
             config: Arc::new(Config::default()),
@@ -175,6 +162,38 @@ impl Controller {
             .last()
     }
 }
+// An idle recv() would retain an AVR's scarce control socket forever after
+// leaving an activity. Observe cancellation even when no new keys arrive.
+fn worker(
+    rx: mpsc::Receiver<Request>,
+    reply: mpsc::SyncSender<(u64, String)>,
+    current: Arc<AtomicU64>,
+) {
+    let mut denon = HashMap::new();
+    let mut tv = HashMap::new();
+    let mut generation = current.load(Ordering::SeqCst);
+    loop {
+        let request = rx.recv_timeout(Duration::from_millis(100));
+        let now = current.load(Ordering::SeqCst);
+        if now != generation {
+            denon.clear();
+            tv.clear();
+            generation = now;
+        }
+        let r = match request {
+            Ok(r) => r,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => return,
+        };
+        if r.generation != generation || r.at.elapsed() > Duration::from_millis(750) {
+            continue;
+        }
+        if let Err(error) = execute(&r.config, &r.action, &mut denon, &mut tv) {
+            let _ = reply.try_send((r.generation, error));
+        }
+    }
+}
+
 fn execute(
     config: &Config,
     action: &Action,
@@ -432,5 +451,87 @@ mod tests {
         p.repeat = false;
         c.handle_press(&p);
         assert_eq!(rx.try_recv().unwrap().action.command, "mute");
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    #[test]
+    fn leaving_an_activity_releases_the_avr_socket_without_another_key() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (observed, events) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = Vec::new();
+            let mut b = [0];
+            loop {
+                match socket.read(&mut b).unwrap() {
+                    0 => {
+                        observed.send("closed").unwrap();
+                        break;
+                    }
+                    _ => {
+                        if b[0] == b'\r' {
+                            let q = String::from_utf8(std::mem::take(&mut line)).unwrap();
+                            assert!(q == "MVUP" || q == "MV?");
+                            socket.write_all(b"MV275\r").unwrap();
+                            if q == "MV?" {
+                                observed.send("command").unwrap();
+                            }
+                        } else {
+                            line.push(b[0]);
+                        }
+                    }
+                }
+            }
+        });
+        let mut config = Config::default();
+        config.rooms.push(couch_model::Room {
+            id: "room".into(),
+            name: "Room".into(),
+            icon: None,
+            devices: vec![couch_model::Device::new(
+                "avr".into(),
+                "AVR",
+                couch_model::DeviceKind::Speaker,
+            )
+            .with_integration(Integration::Denon {
+                host: "127.0.0.1".into(),
+                port,
+            })],
+        });
+        let (tx, rx) = mpsc::sync_channel(8);
+        let (reply, _out) = mpsc::sync_channel(8);
+        let current = Arc::new(AtomicU64::new(1));
+        let shared = current.clone();
+        let thread = std::thread::spawn(move || worker(rx, reply, shared));
+        tx.send(Request {
+            generation: 1,
+            at: Instant::now(),
+            config: Arc::new(config),
+            action: Action::new("avr", "volume-up"),
+        })
+        .unwrap();
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "command"
+        );
+        current.store(2, Ordering::SeqCst);
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "closed"
+        );
+        drop(tx);
+        thread.join().unwrap();
+        server.join().unwrap();
     }
 }
