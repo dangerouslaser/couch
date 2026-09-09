@@ -1,0 +1,151 @@
+"""Source/loader/selection gate for a future physical read-only MTK backend.
+
+No concrete USB backend is enabled here. Tests inject a backend that never opens
+USB. A backend must claim an exact candidate before starting its DA handshake.
+"""
+from contextlib import contextmanager
+from dataclasses import dataclass
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+from couch_install import InstallError, REPO, regular, require
+from mtk_readonly import ConnectedMtkReader, REVIEWED_REVISION
+
+DOWNLOAD_PIDS = frozenset((0x0003, 0x6000, 0x2000, 0x2001, 0x20ff, 0x3000))
+
+
+@dataclass(frozen=True)
+class Candidate:
+    bus: int
+    address: int
+    ports: tuple
+    vid: int
+    pid: int
+
+
+@dataclass(frozen=True)
+class ReadPolicy:
+    # Uploading a DA to RAM is active device interaction, despite read-only flash.
+    allow_ram_loader: bool = True
+    allow_flash_writes: bool = False
+    allow_reset: bool = False
+    allow_security_bypass: bool = False
+    allow_reconnect: bool = False
+    skip_watchdog_changes: bool = True
+
+
+def source_pin(checkout):
+    checkout = Path(checkout).resolve()
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(checkout), *args], stderr=subprocess.PIPE)
+    require(git("rev-parse", "HEAD").decode().strip() == REVIEWED_REVISION, "Unreviewed mtkclient checkout")
+    tracked = {}
+    for record in git("ls-tree", "-rz", "--full-tree", "HEAD", "--", "mtkclient").split(b"\0"):
+        if not record:
+            continue
+        metadata, filename = record.split(b"\t", 1)
+        mode, kind, oid = metadata.decode().split()
+        name = filename.decode()
+        if not name.endswith(".py"):
+            continue
+        require(kind == "blob" and mode in ("100644", "100755"), "Unexpected Python source type")
+        path = regular(checkout / name)
+        data = path.read_bytes()
+        blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        require(blob == oid, f"Pinned source differs: {name}")
+        tracked[path.resolve()] = hashlib.sha256(data).hexdigest()
+    actual = {path.resolve() for path in (checkout / "mtkclient").rglob("*.py")}
+    require(tracked and actual == set(tracked), "Untracked or missing mtkclient Python source")
+    return tracked
+
+
+def verify_loaded_sources(pinned):
+    for name, module in tuple(sys.modules.items()):
+        if name != "mtkclient" and not name.startswith("mtkclient."):
+            continue
+        filename = getattr(module, "__file__", None)
+        require(filename, "Unverifiable loaded mtkclient module")
+        if filename.endswith(".pyc"):
+            filename = importlib.util.source_from_cache(filename)
+        path = Path(filename).resolve()
+        require(path in pinned and hashlib.sha256(regular(path).read_bytes()).hexdigest() == pinned[path],
+                f"Loaded mtkclient module is outside the source pin: {name}")
+
+
+def loader_bytes(path, expected_sha256):
+    require(isinstance(expected_sha256, str) and len(expected_sha256) == 64
+            and all(c in "0123456789abcdef" for c in expected_sha256), "Invalid approved loader hash")
+    path = regular(path)
+    require(0 < path.stat().st_size <= 64 * 1024 * 1024, "Invalid loader size")
+    data = path.read_bytes()
+    require(hashlib.sha256(data).hexdigest() == expected_sha256, "Loader differs from approved hash")
+    return data
+
+
+@contextmanager
+def exclusive_lock(directory):
+    try:
+        import fcntl
+    except ImportError as error:
+        raise InstallError("Installer locking currently requires Linux or macOS") from error
+    directory = Path(directory).absolute()
+    require(not directory.is_symlink() and not directory.resolve().is_relative_to(REPO), "Use a private lock directory outside the repository")
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.stat()
+    require(info.st_uid == os.getuid() and info.st_mode & 0o077 == 0, "Lock directory must be owned and private")
+    fd = os.open(directory / "usb-session.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+                and info.st_mode & 0o077 == 0, "Invalid installer lock file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise InstallError("Another installer session holds the USB lock") from error
+        yield
+    finally:
+        # Do not unlink: a waiter may already hold the inode. Closing releases
+        # flock even on failure; kernel process cleanup handles a crash.
+        os.close(fd)
+
+
+def select_candidate(observed, expected):
+    matches = [item for item in observed if item.vid == 0x0e8d and item.pid in DOWNLOAD_PIDS]
+    require(len(matches) == 1, "Expected exactly one MediaTek download candidate")
+    require(matches[0] == expected and expected.bus is not None and expected.address is not None,
+            "USB candidate changed or lacks a stable session address")
+    return matches[0]
+
+
+@contextmanager
+def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory):
+    """Gate an explicitly supplied backend; not exposed as a hardware CLI command.
+
+    Factory must be side-effect-free until claim(), and expose enumerate(),
+    claim(Candidate), claimed_candidate(), start_readonly(bytes, ReadPolicy),
+    close(reset=False). start_readonly returns the connected upstream Mtk object.
+    The backend must not rediscover a different target or invoke configure_da's
+    generic reset/security fallback. No production backend satisfies this yet.
+    """
+    with exclusive_lock(lock_directory):
+        pinned = source_pin(checkout)
+        verify_loaded_sources(pinned)
+        data = loader_bytes(loader, loader_sha256)
+        backend = backend_factory(Path(checkout).resolve())
+        try:
+            # Check module provenance again after the factory's imports, before
+            # claiming any USB interface or invoking any protocol operation.
+            verify_loaded_sources(pinned)
+            candidate = select_candidate(backend.enumerate(), expected)
+            backend.claim(candidate)
+            require(backend.claimed_candidate() == candidate, "Backend claimed a different USB device")
+            mtk = backend.start_readonly(data, ReadPolicy())
+            verify_loaded_sources(pinned)
+            yield ConnectedMtkReader(mtk, REVIEWED_REVISION)
+        finally:
+            backend.close(reset=False)
