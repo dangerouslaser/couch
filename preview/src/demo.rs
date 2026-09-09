@@ -1,5 +1,5 @@
 //! Local fixtures driving the unmodified production Slint components.
-use crate::{App, ChoiceItem, LiveActivity, PlayerChoice, RoomRow, SceneCell};
+use crate::{App, ChoiceItem, LiveActivity, PlayerChoice, RoomRow, SceneCell, TvChoice};
 use slint::{ComponentHandle, Model, ModelRc, SharedPixelBuffer, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -144,6 +144,14 @@ impl Demo {
         self.clear(app);
         if app.get_chooser_shown() {
             app.set_chooser_shown(false);
+        } else if app.get_tv_shown() {
+            app.set_tv_panel(0);
+            app.set_tv_shown(false);
+            if self.room.is_some() {
+                app.invoke_focus_light();
+            } else {
+                app.invoke_focus_home();
+            }
         } else if app.get_player_shown() {
             app.set_player_shown(false);
             if self.room.is_some() {
@@ -260,7 +268,9 @@ pub fn configure(app: &App) {
         SharedPixelBuffer::clone_from_slice(art.as_raw(), 480, 800),
     ));
     app.set_player_has_art(true);
-    app.set_player_logo(png(include_bytes!("../../docs/mockups/kodi-activity/assets/clearlogo.png")));
+    app.set_player_logo(png(include_bytes!(
+        "../../docs/mockups/kodi-activity/assets/clearlogo.png"
+    )));
     app.set_player_has_logo(true);
     let d = Rc::new(RefCell::new(Demo {
         app: app.as_weak(),
@@ -284,6 +294,48 @@ pub fn configure(app: &App) {
                 }
             })
         });
+    app.on_tv_action(|action| {
+        let action = action.to_string();
+        later(move |d, a| match action.as_str() {
+            "close" => d.back(a),
+            "dismiss" => a.set_tv_panel(0),
+            "apps" | "inputs" => {
+                let apps = action == "apps";
+                a.set_tv_choices(ModelRc::new(VecModel::from(if apps {
+                    vec![TvChoice {
+                        action: if a.get_tv_apple() {
+                            "app:com.apple.TVWatchList"
+                        } else {
+                            "app:https://www.youtube.com/"
+                        }
+                        .into(),
+                        title: if a.get_tv_apple() { "TV" } else { "YouTube" }.into(),
+                        detail: if a.get_tv_android() {
+                            "Configured shortcut"
+                        } else if a.get_tv_apple() {
+                            "Open on Apple TV"
+                        } else {
+                            "App"
+                        }
+                        .into(),
+                    }]
+                } else {
+                    vec![TvChoice {
+                        action: "input:HDMI_1".into(),
+                        title: "HDMI 1".into(),
+                        detail: "Connected".into(),
+                    }]
+                })));
+                a.set_tv_panel(if apps { 2 } else { 1 });
+            }
+            "picture" => a.set_tv_panel(3),
+            "sound" => a.set_tv_panel(4),
+            _ => {
+                a.set_tv_panel(0);
+                a.set_tv_status("Example control sent".into());
+            }
+        });
+    });
     app.on_open_room(|i| later(move |d, a| d.open_room(a, i as usize)));
     app.on_open_strip(|| later(|d, a| d.player(a)));
     app.on_open_scenes(|| later(|d, a| d.scenes(a)));
@@ -410,13 +462,29 @@ pub fn remote_button(name: &str) {
     let _ = slint::invoke_from_event_loop(move || dispatch_button(&name));
 }
 fn dispatch_button(name: &str) {
+    let in_tv = DEMO.with(|s| {
+        s.borrow()
+            .as_ref()
+            .and_then(|d| d.borrow().app.upgrade())
+            .is_some_and(|a| a.get_tv_shown())
+    });
+    if in_tv
+        && [
+            "play", "mute", "menu", "power", "red", "green", "blue", "yellow",
+        ]
+        .contains(&name)
+    {
+        let action = if name == "mute" { "toggle-mute" } else { name }.to_string();
+        later(move |_, a| a.invoke_tv_action(action.into()));
+        return;
+    }
     match name {
         "home" => {
             let in_player = DEMO.with(|s| {
                 s.borrow()
                     .as_ref()
                     .and_then(|d| d.borrow().app.upgrade())
-                    .is_some_and(|a| a.get_player_shown())
+                    .is_some_and(|a| a.get_player_shown() || a.get_tv_shown())
             });
             if !in_player {
                 later(|d, a| {
@@ -492,7 +560,7 @@ fn dispatch_button(name: &str) {
 pub fn state_json() -> String {
     let mut result = "{}".to_string();
     with(|d, a| {
-        result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row());
+        result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{},\"tv\":{},\"tv_panel\":{},\"android_tv\":{},\"apple_tv\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row(),a.get_tv_shown(),a.get_tv_panel(),a.get_tv_android(),a.get_tv_apple());
     });
     result
 }
@@ -515,6 +583,52 @@ pub fn documentation_screen(name: &str) {
                 "scenes" => {
                     d.open_room(a, 0);
                     d.scene(a, 2);
+                }
+                "android-tv" | "android-apps" | "webos" | "webos-inputs" | "apple-tv"
+                | "apple-apps" => {
+                    d.open_room(a, 0);
+                    let android = name.starts_with("android");
+                    let apple = name.starts_with("apple");
+                    a.set_tv_android(android);
+                    a.set_tv_apple(apple);
+                    a.set_tv_title(
+                        if android {
+                            "Living room Android TV"
+                        } else if apple {
+                            "Living room Apple TV"
+                        } else {
+                            "Living room LG TV"
+                        }
+                        .into(),
+                    );
+                    a.set_tv_source(
+                        if android {
+                            "Android / Google TV"
+                        } else if apple {
+                            "Apple TV"
+                        } else {
+                            "HDMI 1"
+                        }
+                        .into(),
+                    );
+                    a.set_tv_status(
+                        if apple {
+                            "Connected · Companion"
+                        } else {
+                            "TV on · Volume 12"
+                        }
+                        .into(),
+                    );
+                    a.set_tv_sound("TV speakers".into());
+                    a.set_tv_picture("Cinema".into());
+                    a.set_tv_shown(true);
+                    a.invoke_focus_tv();
+                    if name == "android-apps" || name == "apple-apps" {
+                        a.invoke_tv_action("apps".into());
+                    }
+                    if name == "webos-inputs" {
+                        a.invoke_tv_action("inputs".into());
+                    }
                 }
                 "kodi" | "chapters" => {
                     d.open_room(a, 0);

@@ -10,7 +10,7 @@ const base=process.env.SITE_URL||'http://127.0.0.1:8098/';
 const generate=!process.argv.includes('--check-only');
 const root=path.resolve(__dirname,'../..');
 const output=path.join(root,'site/usage/screenshots');
-const fixtures={home:{room:null,player:false},room:{room:0,player:false},brightness:{room:0,brightness:true,level:61},scenes:{room:0,level:10},kodi:{player:true,panel:0},chapters:{player:true,panel:1}};
+const fixtures={home:{room:null,player:false},room:{room:0,player:false},brightness:{room:0,brightness:true,level:61},scenes:{room:0,level:10},kodi:{player:true,panel:0},chapters:{player:true,panel:1},"android-tv":{tv:true,android_tv:true,tv_panel:0},"android-apps":{tv:true,android_tv:true,tv_panel:2},webos:{tv:true,android_tv:false,tv_panel:0},"webos-inputs":{tv:true,android_tv:false,tv_panel:1},"apple-tv":{tv:true,apple_tv:true,tv_panel:0},"apple-apps":{tv:true,apple_tv:true,tv_panel:2}};
 (async()=>{
  const browser=await chromium.launch();
  const errors=[];
@@ -45,7 +45,7 @@ const fixtures={home:{room:null,player:false},room:{room:0,player:false},brightn
   page.on('pageerror',e=>errors.push(e.message));
   const failures=[];
   page.on('response',r=>{if(r.status()>=400)failures.push(`${r.status()} ${r.url()}`)});
-  for(const slug of ['','rooms.html','lights.html','kodi.html']){
+  for(const slug of ['','rooms.html','lights.html','kodi.html','android-tv.html','webos.html','apple-tv.html']){
    for(const width of [1440,390,320]){
     await page.setViewportSize({width,height:1000});
     await page.goto(new URL(`usage/${slug}`,base).href);
@@ -60,10 +60,21 @@ const fixtures={home:{room:null,player:false},room:{room:0,player:false},brightn
     }
    }
   }
+  for(const width of [1440,390,320]){
+   await page.setViewportSize({width,height:1000});
+   await page.goto(new URL('integrations.html',base).href);
+   assert.equal(await page.locator('.integration-cards article').count(),8);
+   assert.equal(await page.getByRole('navigation',{name:'Main navigation'}).getByRole('link',{name:'Integrations',exact:true}).count(),1);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`integrations overflow at ${width}`);
+   await page.goto(base);
+   assert.equal(await page.locator('.integration-inner li').count(),5);
+   assert.equal(await page.getByRole('link',{name:'And more',exact:false}).getAttribute('href'),'integrations.html');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`landing navigation overflow at ${width}`);
+  }
   await page.setViewportSize({width:1440,height:1100});
   await page.goto(new URL('usage/lights.html',base).href);
   await page.screenshot({path:path.join(require('node:os').tmpdir(),'couch-usage-lights.png'),fullPage:true});
   assert.deepEqual(errors,[]);assert.deepEqual(failures,[]);
-  console.log(`PASS: ${generate?'six production Slint screenshots generated; ':''}four usage pages, button tables, images, local links and desktop/mobile layouts.`);
+  console.log(`PASS: ${generate?'twelve production Slint screenshots generated; ':''}seven usage pages, integrations directory, button tables, images, local links and desktop/mobile layouts.`);
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});
