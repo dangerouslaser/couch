@@ -1,6 +1,6 @@
 # Couch USB installer
 
-Status: experimental installer policy engine and simulation CLI. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. No live USB session, flash operation, recovery boot, or identity extraction has been validated for this implementation.
+Status: experimental installer policy engine, simulation CLI, and read-only connected-session adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. No live USB session, flash operation, recovery boot, or identity extraction has been validated for this implementation.
 
 ## Intended experience
 
@@ -53,7 +53,7 @@ python3 -m unittest discover -s tools/installer -v
 
 The `plan` command is a dry run and writes nothing. Repeat `simulate` with `--resume` to verify a completed journal or continue after a simulated interruption. These tests cover wrong targets/layouts, prohibited writes, bad hashes, backup/readback failures, partial writes, corrupted backups, identity changes, write ordering and resume.
 
-The reviewed suite has 21 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Simulation is single-process only; it does not yet lock a device against a concurrent installer. Do not treat the simulator as a hardware-ready transaction manager.
+The reviewed suite has 31 tests, including CLI checks that `plan` leaves all fixture files unchanged and `install` refuses before constructing a transport. Adapter tests cover GPT CRCs and disagreement between valid copies, bounded reads, short responses, target confirmation, and independent identity readback. Simulation is single-process only; it does not yet lock a device against a concurrent installer. Do not treat the simulator as a hardware-ready transaction manager.
 
 Optional descriptor-only discovery requires PyUSB and a libusb backend. Install them in a development virtual environment following the host's package instructions, then run:
 
@@ -76,9 +76,19 @@ Before enabling physical installation:
 - Add authenticated release manifests, trustworthy signing-key distribution, download verification and storage-size handling. SHA-256 here detects corruption, **not publisher authenticity**. Full-size raw images are intentionally conservative and inefficient; sparse/ext4 expansion needs a separately verified implementation.
 - Exercise unplug/reconnect and recovery on a dedicated test unit, then implement same-device restore and post-boot identity/health verification. Protect the entire transaction against concurrent installer sessions. Only after those checks should `install` be connected to hardware writes.
 
-## Next integration milestone: read-only hardware adapter
+## Read-only adapter progress
 
-Implement a separate adapter with `connect`, `describe`, `read_partition` and `close` operations first. Keep writing unavailable in that milestone. `describe` must return hardware-derived chip/storage identifiers, capacity and the complete partition table; discovery descriptors cannot supply those guarantees. Reads must be bounded to the observed partition and streamed to disk, with transport errors stopping the operation.
+`tools/installer/mtk_readonly.py` now implements `ConnectedMtkReader` for an **already established** MTK download-agent session. It checks MT6580/eMMC metadata, records a storage identifier derived from the observed CID, validates both GPT headers and entry arrays with CRCs, requires matching copies, and bounds reads to the observed user-storage partitions. `backup_identity` writes private identity/calibration backups and verifies each with a second read. Its report explicitly says the model is unverified and identity fields have not been decoded. The storage identifier is not the vendor Device ID.
+
+The adapter exposes no write, erase, reboot, loader-upload or USB-discovery method. The caller owns and must close the existing session, including after constructor failures. It is not connected to `install`, and passing a revision string does not authenticate imported Python code or a download agent. Session establishment still needs a controlled integration harness that verifies the actual loaded checkout and loader, locks the target, and handles cleanup and disconnects.
+
+The existing Ollie checkout was inspected at upstream commit `60e07f3b343a4469389f15967626d63e049968d4`; no USB operation was run. Its legacy in-memory reader calculates remaining bytes incorrectly after the first packet. The adapter limits calls to one 1 MiB packet and requires exact response lengths. Its independent output path also avoids the upstream asynchronous file writer. These are source-level compatibility checks, not hardware validation. [Reviewed legacy reader](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_lib.py#L1131)
+
+Do not call upstream `configure_da` as though it were passive discovery: it can upload a loader, attempt security handling and reset paths. Those operations must be reviewed and controlled before the connection harness is enabled. [Reviewed session setup](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/mtk_da_handler.py#L136)
+
+## Next integration milestone: establish and validate a session
+
+Implement session establishment and cleanup around the read-only adapter. Keep writing unavailable in that milestone. Pin and verify the actual upstream files and download agent, reject multiple candidate devices, and distinguish USB enumeration from a held download session. The existing reader obtains chip/storage identifiers, capacity and the complete GPT from the session; none of this proves HA100 model identity by itself.
 
 Validate one continuous USB session on the HA100: observe the reboot window, establish the download-agent session, enumerate the layout, read identity partitions twice, and compare hashes. Compare decoded Device ID/MAC values with values recorded from that same remote. Record the upstream commit, loader hash and host USB dependencies with the results. Repeat connection and disconnect tests before adding writes.
 
