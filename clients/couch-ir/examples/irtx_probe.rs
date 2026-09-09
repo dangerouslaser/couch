@@ -6,14 +6,27 @@ use std::time::Instant;
 
 use couch_ir::{abi, pwm};
 
-fn waveform(zero_us: Option<u32>, pulse: bool) -> Result<Vec<u32>, &'static str> {
+fn carrier_clocks(carrier: u32) -> Result<u32, &'static str> {
+    if !(10_000..=100_000).contains(&carrier) {
+        return Err("--carrier must be between 10000 and 100000 Hz");
+    }
+    let denominator = carrier * 3;
+    Ok((26_000_000 + denominator / 2) / denominator)
+}
+
+fn waveform(zero_us: Option<u32>, pulse: bool, carrier: u32) -> Result<Vec<u32>, &'static str> {
+    let clocks = u64::from(carrier_clocks(carrier)?);
+    let clocks_per_word = clocks * 32;
     let (word_count, trailer) = if let Some(us) = zero_us {
         if !(1..=1_000_000).contains(&us) {
             return Err("--zero-us must be between 1 and 1000000");
         }
-        (((u64::from(us) * 26 + 7295) / 7296) as usize, us)
+        (
+            ((u64::from(us) * 26 + clocks_per_word - 1) / clocks_per_word) as usize,
+            us,
+        )
     } else {
-        (1, 281)
+        (1, ((clocks_per_word + 25) / 26) as u32)
     };
     let mut words = vec![0; word_count + 1];
     if pulse {
@@ -29,10 +42,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut zero = false;
     let mut pulse = false;
     let mut zero_us = None;
+    let mut carrier = 38000;
+    let mut carrier_seen = false;
     let mut modes = 0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            "--carrier" => {
+                if carrier_seen {
+                    return Err("--carrier supplied more than once".into());
+                }
+                carrier = args.next().ok_or("--carrier needs Hz")?.parse::<u32>()?;
+                carrier_seen = true;
+            }
             "--zero" => {
                 zero = true;
                 modes += 1;
@@ -61,10 +83,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if modes > 1 {
         return Err("choose exactly one waveform mode".into());
     }
-    let words = waveform(zero_us, pulse)?;
+    let clocks = carrier_clocks(carrier)?;
+    let words = waveform(zero_us, pulse, carrier)?;
     let wave_bytes = (words.len() - 1) * 4;
-    let expected_us = (wave_bytes as u64 * 8 * 228 + 25) / 26;
-    println!("carrier=38000 sample_clocks=228 sample_us=8.769231");
+    let expected_us = (wave_bytes as u64 * 8 * u64::from(clocks) + 25) / 26;
+    println!(
+        "carrier={carrier} sample_clocks={clocks} sample_us={:.6}",
+        f64::from(clocks) / 26.0
+    );
     println!("operation={} waveform_words={} first_word={:08x} waveform_bytes={} trailer_us={} dma_us={}",
         if pulse { "pulse" } else if zero { "zero" } else { "query" },
         words.len() - 1, words[0], wave_bytes, words[words.len() - 1], expected_us);
@@ -85,7 +111,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if solution != 1 {
         return Err("expected Couch PWM-only solution 1; no write attempted".into());
     }
-    let mut carrier = 38000;
     abi::ioctl_u32(
         file.as_raw_fd(),
         abi::IRTX_IOC_SET_CARRIER_FREQ,
@@ -132,7 +157,7 @@ mod tests {
             (500000, 1782, 500057),
             (1000000, 3564, 1000114),
         ] {
-            let words = waveform(Some(us), false).unwrap();
+            let words = waveform(Some(us), false, 38000).unwrap();
             assert_eq!(words.len(), count + 1);
             assert!(words[..count].iter().all(|word| *word == 0));
             assert_eq!(words[count], us);
@@ -143,14 +168,33 @@ mod tests {
 
     #[test]
     fn invalid_durations_are_rejected_before_opening_device() {
-        assert!(waveform(Some(0), false).is_err());
-        assert!(waveform(Some(1_000_001), false).is_err());
-        assert!(waveform(Some(u32::MAX), false).is_err());
+        assert!(waveform(Some(0), false, 38000).is_err());
+        assert!(waveform(Some(1_000_001), false, 38000).is_err());
+        assert!(waveform(Some(u32::MAX), false, 38000).is_err());
     }
 
     #[test]
     fn original_probes_keep_exact_single_word_payloads() {
-        assert_eq!(waveform(None, false).unwrap(), [0, 281]);
-        assert_eq!(waveform(None, true).unwrap(), [0x4924_9249, 281]);
+        assert_eq!(waveform(None, false, 38000).unwrap(), [0, 281]);
+        assert_eq!(waveform(None, true, 38000).unwrap(), [0x4924_9249, 281]);
+    }
+    #[test]
+    fn carrier_controls_zero_wave_geometry_and_bounds() {
+        for (carrier, clocks) in [(36000, 241), (38000, 228), (40000, 217)] {
+            assert_eq!(carrier_clocks(carrier).unwrap(), clocks);
+            let words = waveform(Some(68000), false, carrier).unwrap();
+            let ticks = (words.len() - 1) as u64 * 32;
+            let duration_clocks = ticks * u64::from(clocks);
+            assert!(duration_clocks >= 68000 * 26);
+            assert!(duration_clocks < 68000 * 26 + u64::from(clocks) * 32);
+            assert!(words[..words.len() - 1].iter().all(|word| *word == 0));
+            assert_eq!(words.last(), Some(&68000));
+        }
+        for carrier in [0, 9999, 100001, u32::MAX] {
+            assert!(carrier_clocks(carrier).is_err());
+            assert!(waveform(None, false, carrier).is_err());
+        }
+        assert!(carrier_clocks(10000).is_ok());
+        assert!(carrier_clocks(100000).is_ok());
     }
 }

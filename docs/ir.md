@@ -8,6 +8,8 @@ waveform generator and `/dev/irtx` transport.
 
 Kernel `9b699dde` is live and its guarded completion path passed two separate
 zero-word writes (2,136 and 2,149 µs) and one 281 µs carrier-burst write (2,154 µs).
+Longer all-zero transfers also passed: 68 ms requested, 976-byte write returned
+in 69,482 µs; 500 ms requested, 7,132-byte write returned in 501,744 µs.
 GUI heartbeats advanced and no TX errors were logged. These establish bounded
 DMA completion and repeated-write cleanup; **optical emission and actual target
 control remain unvalidated**.
@@ -207,6 +209,12 @@ operations; `--dry-run` opens nothing for any mode.
   words for at least that duration, plus the separate trailer. Inputs are bounded
   to 1–1,000,000 µs. These exercise longer DMA without intentional carrier marks;
   no repeat loop is built in. Add `--dry-run` to inspect lengths without hardware.
+- `--carrier 36000`, `--carrier 38000` (default), or `--carrier 40000` changes
+  the queried descriptor's carrier and computes sample clocks, buffer length
+  and padded duration consistently. The accepted range matches the driver:
+  10,000–100,000 Hz. For example, `--zero-us 68000 --carrier 36000 --dry-run`
+  verifies the payload without opening the device. These zero-wave checks do
+  not measure the emitted optical carrier.
 - The two original probes send exactly eight bytes in **one syscall with no retry**, even on EINTR
   or a short write. At 228 clocks per sample the actual waveform lasts about
   281 µs. Logs flush before the write and report return value, errno and elapsed
