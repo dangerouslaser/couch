@@ -31,6 +31,61 @@ pub fn page_index(current: usize, delta: i32, count: usize) -> usize {
         (current as i64 + delta as i64).rem_euclid(count as i64) as usize
     }
 }
+// A generation owns its provider leases. Polling also releases idle leases when
+// the view closes: no subsequent command is required to wake this worker.
+fn command_worker<S: Default>(
+    work: mpsc::Receiver<Request>,
+    reply: mpsc::Sender<(u64, Result<(), String>)>,
+    current: Arc<AtomicU64>,
+    mut execute: impl FnMut(&Request, &mut S) -> Result<(), String>,
+) {
+    use std::time::Duration;
+    let mut caches = S::default();
+    let mut generation = current.load(Ordering::SeqCst);
+    let mut config: Option<Arc<Config>> = None;
+    loop {
+        let request = work.recv_timeout(Duration::from_millis(100));
+        let now = current.load(Ordering::SeqCst);
+        if now != generation {
+            caches = S::default();
+            config = None;
+            generation = now;
+        }
+        let request = match request {
+            Ok(request) => request,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        if request.generation != generation {
+            continue;
+        }
+        if request.at.elapsed() > Duration::from_millis(750) {
+            let _ = reply.send((
+                generation,
+                Err("Command expired while waiting. Try again.".into()),
+            ));
+            continue;
+        }
+        // Opening a different configuration normally advances the generation;
+        // also defend against accidental reuse of a generation with a new snapshot.
+        if config
+            .as_ref()
+            .is_some_and(|old| !Arc::ptr_eq(old, &request.config))
+        {
+            caches = S::default();
+        }
+        config = Some(request.config.clone());
+        let result = execute(&request, &mut caches);
+        if current.load(Ordering::SeqCst) != generation {
+            // An already-sent command cannot be recalled, but its connection is
+            // released immediately when it completes after navigation.
+            caches = S::default();
+            config = None;
+        }
+        let _ = reply.send((generation, result));
+    }
+}
+
 impl Pages {
     pub fn new() -> Self {
         let (tx, work) = mpsc::sync_channel::<Request>(1);
@@ -38,27 +93,20 @@ impl Pages {
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
         std::thread::spawn(move || {
-            while let Ok(request) = work.recv() {
-                if current.load(Ordering::SeqCst) != request.generation {
-                    continue;
-                }
-                if request.at.elapsed() > std::time::Duration::from_millis(750) {
-                    let _ = reply.send((
-                        request.generation,
-                        Err("Command expired while waiting. Try again.".into()),
-                    ));
-                    continue;
-                }
-                // Drop provider leases after each command rather than keeping a
-                // receiver/TV connection alive after the custom screen closes.
-                let result = crate::activity_buttons::execute(
-                    &request.config,
-                    &request.action,
-                    &mut HashMap::new(),
-                    &mut HashMap::new(),
-                );
-                let _ = reply.send((request.generation, result));
-            }
+            command_worker(
+                work,
+                reply,
+                current,
+                |request, caches: &mut (HashMap<_, _>, HashMap<_, _>, HashMap<_, _>)| {
+                    crate::activity_buttons::execute(
+                        &request.config,
+                        &request.action,
+                        &mut caches.0,
+                        &mut caches.1,
+                        &mut caches.2,
+                    )
+                },
+            );
         });
         Self {
             config: None,
@@ -186,6 +234,78 @@ impl Pages {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_worker_reuses_leases_and_releases_on_close_or_config_change() {
+        use std::time::{Duration, Instant};
+        struct Lease(Arc<AtomicU64>);
+        impl Drop for Lease {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let created = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let generation = Arc::new(AtomicU64::new(1));
+        let (tx, work) = mpsc::sync_channel(1);
+        let (reply, rx) = mpsc::channel();
+        let (c, d, g) = (created.clone(), dropped.clone(), generation.clone());
+        let worker = std::thread::spawn(move || {
+            command_worker(work, reply, g, |_, cache: &mut Option<Lease>| {
+                if cache.is_none() {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    *cache = Some(Lease(d.clone()));
+                }
+                Ok(())
+            });
+        });
+        let config = Arc::new(Config::default());
+        let send = |config: Arc<Config>, generation| {
+            tx.send(Request {
+                at: Instant::now(),
+                generation,
+                config,
+                action: Action::new("fixture", "power-on"),
+            })
+            .unwrap();
+            let (got, result) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(got, generation);
+            result.unwrap();
+        };
+        send(config.clone(), 1);
+        send(config, 1);
+        assert_eq!(
+            created.load(Ordering::SeqCst),
+            1,
+            "two commands share one lease"
+        );
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        send(Arc::new(Config::default()), 1);
+        assert_eq!(created.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            1,
+            "new config releases old lease"
+        );
+        generation.store(2, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while dropped.load(Ordering::SeqCst) != 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            2,
+            "idle close needs no extra command"
+        );
+        send(Arc::new(Config::default()), 2);
+        drop(tx);
+        worker.join().unwrap();
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            3,
+            "worker shutdown releases its lease"
+        );
+    }
+
     #[test]
     fn source_switching_preserves_activity_and_back_closes_custom_pages() {
         if std::env::var_os("COUCH_TEST_PAGE_SOURCE").is_none() {
