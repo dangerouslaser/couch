@@ -232,3 +232,44 @@ The candidate's minimum valid frame is eight bytes including the trailer.
 - Verify display PWM, touch and wake remain stable during and after sending.
 - Provision verified LG toggle/discrete codes before enabling IR power actions;
   a default preference is not a bundled, validated code database.
+
+## Offline library and imports
+
+The configuration server embeds a pinned, source-attributed library. Browse it
+through the web UI by brand, device type and model, assign source commands to
+remote functions, then save a named local codeset. Existing IR devices can be
+reassigned without replacing their room or device identity. LG power setup
+uses the same picker but only accepts `power`, `power-on` and `power-off`.
+Importing, browsing and saving never transmit. An explicit installed-command
+Test request sends one press with no retry; a successful driver write is not
+proof that an appliance received the signal.
+
+Authenticated endpoints are `GET /api/ir/catalog`, `GET /api/ir/catalog/:id`,
+`POST /api/ir/import` (`format`, `name`, `text`), and
+`GET/PUT /api/ir/codesets/:id` (`text` on PUT). `GET /api/ir/codesets` lists local
+sets. `POST /api/ir/codesets/:id/test` takes an exact installed `command` name.
+Catalog responses distinguish supported commands and unsupported reasons,
+include source/license details, and report `physically_verified: false`.
+`blaster_available` means `/dev/irtx` is registered; it does not mean optical
+output or appliance compatibility has been tested.
+
+Local files live beside configuration in `ir/<id>.codeset` (normally
+`/opt/couch/ir`). IDs use lowercase letters, digits, hyphens and underscores,
+at most 64 characters. Writes are atomic; traversal and symlink reads are
+rejected. A codeset is at most 256 KiB with 256 unique command names.
+Existing `<button> <protocol> <address> <command>` lines remain supported.
+Raw captures use `<button> raw <carrier-hz> <comma-separated-microseconds>`:
+20–60 kHz, 1–1024 positive alternating mark/space durations, at most 500 ms.
+The transmitter uses 33% duty cycle; incompatible imported raw duty cycles
+are rejected rather than changed silently.
+
+Flipper `.ir` Version 1 imports use four-byte little-endian addresses/commands.
+NEC, compatible NECext, RC5/RC6, SIRC12/15/20 and Samsung32 map to Couch
+encoders; other parsed protocols remain visible but cannot be assigned.
+Flipper NECext carries a 16-bit command: conversion requires its second byte
+to be the first byte's inverse, because Couch generates that inverse itself.
+See the [official Flipper format](https://github.com/flipperdevices/flipperzero-firmware/blob/dev/documentation/file_formats/InfraredFileFormats.md)
+and [NEC decoder](https://github.com/flipperdevices/flipperzero-firmware/blob/dev/lib/infrared/encoder_decoder/nec/infrared_decoder_nec.c).
+The initial 44-model catalog's licensing boundary and refresh procedure are
+recorded in [catalog provenance](../daemon/couch-confd/assets/ir/README.md).
+User imports are local data; importing does not grant redistribution rights.
