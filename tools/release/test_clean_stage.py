@@ -5,7 +5,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from clean_stage import build, StageError
+from clean_stage import artifact_destination, build, StageError
 
 
 class CleanStageTests(unittest.TestCase):
@@ -27,6 +27,24 @@ class CleanStageTests(unittest.TestCase):
         return {'schema': 1, 'source_commit': 'a'*40, 'source_date_epoch': 1234567890,
                 'alpine': {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                            'version': '3.21.7', 'architecture': 'armv7'}, 'artifacts': []}
+
+    def test_only_named_recovery_cgi_scripts_are_allowed(self):
+        for name in ('save', 'setpw', 'scan', 'enroll'):
+            self.assertEqual(artifact_destination('opt/couch/www/cgi-bin/' + name),
+                             'opt/couch/www/cgi-bin/' + name)
+        for name in ('debug', 'authorized_keys', '../enroll', 'nested/enroll'):
+            with self.assertRaises(StageError):
+                artifact_destination('opt/couch/www/cgi-bin/' + name)
+
+    def test_cgi_script_requires_executable_mode(self):
+        source = self.root / 'scan'; source.write_bytes(b'#!/bin/busybox sh\n')
+        spec = self.fixture()
+        spec['artifacts'] = [{'source': 'scan', 'destination': 'opt/couch/www/cgi-bin/scan',
+                              'sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'mode': 0o644}]
+        with self.assertRaisesRegex(StageError, 'executable'):
+            build(spec, self.root)
+        spec['artifacts'][0]['mode'] = 0o755
+        build(spec, self.root)
 
     def test_reproducible_and_empty_onboarding_config(self):
         spec = self.fixture()

@@ -18,6 +18,7 @@ import tarfile
 REPO = Path(__file__).resolve().parents[2]
 BINARIES = frozenset(('couch-gui', 'couch-confd', 'couch-kodi', 'couch-webos',
     'couch-hue', 'couch-ha', 'couch-denon', 'couch-ir', 'couch-voice', 'fbcon'))
+RECOVERY_CGI = frozenset(('save', 'setpw', 'scan', 'enroll'))
 GENERATED = {
     'opt/couch/config.json': b'{"schema_version":1}\n',
     'etc/hostname': b'couch\n',
@@ -68,6 +69,7 @@ def artifact_destination(name):
     path = PurePosixPath(name)
     allowed = (path.parent == PurePosixPath('opt/couch') and
         (path.name in BINARIES or path.name.endswith('.sh')))
+    allowed |= path.parent == PurePosixPath('opt/couch/www/cgi-bin') and path.name in RECOVERY_CGI
     allowed |= name.startswith('opt/couch/www/') and path.suffix in ('.html', '.css', '.js', '.svg', '.png', '.woff2', '.wasm')
     require(allowed, 'Artifact is not an explicitly supported Couch runtime file')
     return name
@@ -121,6 +123,8 @@ def build(spec, source_root=REPO):
         require(name not in entries, 'Artifact overwrites existing input')
         mode = artifact.get('mode', 0o755)
         require(mode in (0o644, 0o755), 'Unsupported artifact mode')
+        if PurePosixPath(name).parent == PurePosixPath('opt/couch/www/cgi-bin'):
+            require(mode == 0o755, 'Recovery CGI scripts must be executable')
         require(b'PRIVATE KEY-----' not in content and b'openssh-key-v1\0' not in content, 'Private key material in artifact')
         entries[name] = (tarfile.REGTYPE, mode, '', content)
         inputs.append({'source': artifact['source'], 'destination': name, 'sha256': artifact['sha256']})

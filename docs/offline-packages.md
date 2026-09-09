@@ -21,6 +21,6 @@ Validation on Ollie resolved 26 packages, verified every signature, and passed t
 
 ## Remaining assembly work
 
-The clean staging tarball and this closure remain separate inputs. A later reviewed assembler must install packages in an isolated ARM-compatible rootfs, account for package scripts/triggers and base-library upgrades, normalize and rescan generated state, and build/sign partition images. Preserve first-use SSH host-key generation and empty onboarding configuration. Do not use the old provisioning script's `--allow-untrusted` fallback for releases.
+The clean staging specification and this closure can now be combined with `prepare_rootfs.py`; see [clean release staging](releases.md#assemble-offline-packages). It installs packages/scripts in an isolated ARM-compatible root, then normalizes and rescans the archive. Building and signing partition images remains a separate step. Preserve first-use SSH host-key generation and empty onboarding configuration. Do not use the old provisioning script's `--allow-untrusted` fallback for releases.
 
-Recovery portal assembly also needs an explicit allowlist for the extensionless `stage2/www/cgi-bin/*` scripts: the current clean stager rejects those destinations. Vendor licensing/calibration handling, observed partition layouts and real recovery/boot validation remain release gates. Neither the staging tarball nor this APK cache is flashable.
+The clean stager explicitly allows the four reviewed extensionless recovery CGI destinations and requires executable modes. Vendor licensing/calibration handling, observed partition layouts and real recovery/boot validation remain release gates. Neither the staging tarball nor this APK cache is flashable.
