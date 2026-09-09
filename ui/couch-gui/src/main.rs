@@ -752,8 +752,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && *key == slint::platform::Key::Return)
             }) {
                 let text = SharedString::from(char::from(key));
-                window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-                window.dispatch_event(WindowEvent::KeyReleased { text });
+                tv_controls.physical_input(press.repeat, || {
+                    window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+                    window.dispatch_event(WindowEvent::KeyReleased { text });
+                });
             }
         }
 
