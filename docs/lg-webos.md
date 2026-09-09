@@ -54,8 +54,23 @@ to enter the native Slint control screen:
 | Red / Green / Blue / Yellow | Matching TV color key |
 | Return to Couch (touch) | Exit TV control mode |
 
-The screen omits the touch D-pad. Touch buttons provide TV Home, explicit mute/unmute, play/pause and
-reconnect. TV navigation has no per-key acknowledgement. Volume status is
+The screen implements the selected Cinema (A) direction with a source/app hero,
+icon-only play/pause/rewind/fast-forward, and touch input, app, picture and sound
+cards. It slides in and out as a full-screen view. There are no touch duplicates
+for physical navigation, power, home, mute, volume or color buttons. The touch
+back arrow returns to Couch; physical Back always controls the TV.
+
+Current input/app names come from this TV's input and app lists. The source and
+sound output refresh every five seconds while idle. No movie artwork, title or
+timeline is invented: linking a Kodi player explicitly to a TV input is still
+needed for the rich linked-player version of the design. Play/pause and transport
+commands depend on the active app/input. Sound choices include internal speakers
+and HDMI ARC/eARC; rejection is displayed without assuming a successful change.
+Picture-mode reads are optional; where direct modes are unavailable the card
+explains using TV settings. A settings-app launch is offered only when the TV's
+own app list includes it. No blind picture-mode or calibration writes are sent.
+
+Volume status is
 read after volume commands and every five seconds while idle. The native
 controller owns persistent encrypted control/navigation sockets on a worker;
 it does not block rendering. Its input queue is bounded, old queued keys

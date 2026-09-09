@@ -51,7 +51,10 @@ fn target(config: &Config, id: &str) -> Result<Target, String> {
     };
     match config.resolve_integration(&device.integration) {
         Some(Integration::Kodi { host, port }) => Ok(Target {
-            connection: match &device.integration { Integration::Connection{connection_id,..}=>connection_id.to_string(),_=>String::new() },
+            connection: match &device.integration {
+                Integration::Connection { connection_id, .. } => connection_id.to_string(),
+                _ => String::new(),
+            },
             host,
             port,
             name,
@@ -61,10 +64,14 @@ fn target(config: &Config, id: &str) -> Result<Target, String> {
     }
 }
 fn kodi_client(t: &Target) -> Kodi {
-    if let Ok(s) = couch_kodi::settings::Settings::load(&crate::connections::file(&t.connection,"kodi")) {
-        if s.host == t.host && s.http_control { return s.client(); }
+    if let Ok(s) =
+        couch_kodi::settings::Settings::load(&crate::connections::file(&t.connection, "kodi"))
+    {
+        if s.host == t.host && s.http_control {
+            return s.client();
+        }
     }
-    Kodi::tcp(&t.host,t.port)
+    Kodi::tcp(&t.host, t.port)
 }
 fn seconds(v: &Value) -> f64 {
     ["hours", "minutes", "seconds", "milliseconds"]
@@ -140,7 +147,7 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
             Ok((g, Request::Command(method, params, item))) if g == generation => {
                 let result = (|| {
                     let c = client.as_ref().ok_or("Kodi is unavailable")?;
-                    if method.starts_with("Input.") {
+                    if method.starts_with("Input.") || method == "Application.SetMute" {
                         c.call(&method, params)
                             .map_err(|_| "Kodi rejected that input")?;
                     } else if method == "Application.SetVolume" {
@@ -253,12 +260,30 @@ impl Controller {
         self.error_until = Some(Instant::now() + Duration::from_secs(4));
     }
     fn open(&mut self, app: &App, id: &str) {
-        if let Some(config) = std::fs::read(home::path("config.json")).ok().and_then(|b|serde_json::from_slice::<Config>(&b).ok()) {
-            let source = config.activities.iter().find(|a|a.id.as_str()==id).and_then(|a|a.source.as_ref());
-            if let Some((_, device)) = config.devices().find(|(_,d)|Some(&d.id)==source) {
-                if matches!(config.resolve_integration(&device.integration),Some(Integration::WebOs)) {
-                    let connection=match &device.integration {Integration::Connection{connection_id,..}=>connection_id.to_string(),_=>config.connections.iter().find(|c|c.provider==couch_model::Provider::WebOs).map(|c|c.id.to_string()).unwrap_or_default()};
-                    app.invoke_open_tv(connection.as_str().into(),device.name.as_str().into());
+        if let Some(config) = std::fs::read(home::path("config.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
+        {
+            let source = config
+                .activities
+                .iter()
+                .find(|a| a.id.as_str() == id)
+                .and_then(|a| a.source.as_ref());
+            if let Some((_, device)) = config.devices().find(|(_, d)| Some(&d.id) == source) {
+                if matches!(
+                    config.resolve_integration(&device.integration),
+                    Some(Integration::WebOs)
+                ) {
+                    let connection = match &device.integration {
+                        Integration::Connection { connection_id, .. } => connection_id.to_string(),
+                        _ => config
+                            .connections
+                            .iter()
+                            .find(|c| c.provider == couch_model::Provider::WebOs)
+                            .map(|c| c.id.to_string())
+                            .unwrap_or_default(),
+                    };
+                    app.invoke_open_tv(connection.as_str().into(), device.name.as_str().into());
                     return;
                 }
             }
@@ -270,6 +295,7 @@ impl Controller {
         app.set_player_shown(true);
         app.set_player_panel(0);
         app.set_player_ready(false);
+        app.set_player_connected(false);
         app.set_player_message("".into());
         app.set_player_title("Connecting to Kodi…".into());
         app.set_player_fanart(slint::Image::default());
@@ -390,6 +416,11 @@ impl Controller {
         app.set_player_panel(panel);
         app.invoke_focus_player();
     }
+    pub fn navigation_pending(&self, app: &App) -> bool {
+        self.input.borrow().iter().any(|(action, _)| {
+            action.starts_with("open:") || action == "back" && app.get_player_panel() == 0
+        })
+    }
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
         for (action, value) in inputs {
@@ -443,14 +474,11 @@ impl Controller {
                     "Player.Seek",
                     json!({"value":{"seconds":value as i64}}),
                 ),
+                "mute" => self.send(app, "Application.SetMute", json!({"mute":"toggle"})),
                 "volume" => self.send(app, "Application.SetVolume", json!({"delta":value as i64})),
                 "chapters" => self.panel(app, 1),
                 "audio" => self.panel(app, 2),
                 "subtitles" => self.panel(app, 3),
-                "tv" => {
-                    app.set_player_panel(4);
-                    app.invoke_focus_player();
-                }
                 "choose" => self.choose(app, value as usize),
                 "chapter-step" => {
                     if let Some(s) = &self.snapshot {
@@ -500,6 +528,7 @@ impl Controller {
                         }
                         self.at = Instant::now();
                         app.set_player_ready(s.playing.is_some());
+                        app.set_player_connected(true);
                         if let Some(p) = &s.playing {
                             app.set_player_title(title(p).into());
                             app.set_player_paused(
@@ -549,7 +578,7 @@ impl Controller {
                             }
                         } else {
                             app.set_player_title(
-                                "Ready when you are. Choose something on your TV.".into(),
+                                "Connected to Kodi.\nUse the remote to choose something on your TV.".into(),
                             );
                             app.set_player_has_logo(false);
                             app.set_player_has_art(false);
@@ -564,6 +593,7 @@ impl Controller {
                         }
                         self.snapshot = None;
                         app.set_player_ready(false);
+                        app.set_player_connected(false);
                         app.set_player_title(e.into());
                         app.set_player_has_logo(false);
                         app.set_player_has_art(false);
@@ -607,6 +637,34 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn physical_keys_control_kodi_without_opening_an_overlay() {
+        // Slint is configured as single-threaded on this target. Run this
+        // window test separately from the scene-controller window fixture.
+        if std::env::var_os("COUCH_TEST_KODI_KEYS").is_none() {
+            let out=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","activity::tests::physical_keys_control_kodi_without_opening_an_overlay"])
+                .env("COUCH_TEST_KODI_KEYS","1").output().unwrap();
+            assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        use slint::{ComponentHandle, platform::{Key, WindowEvent}};
+        let window=crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480,800)).unwrap();
+        let app=App::new().unwrap();
+        let actions=Rc::new(RefCell::new(Vec::new()));let received=actions.clone();
+        app.on_player_action(move |name,_|received.borrow_mut().push(name.to_string()));
+        app.set_player_shown(true);app.set_player_connected(true);app.show().unwrap();app.invoke_focus_player();
+        for playing in [false,true] {
+            app.set_player_ready(playing);
+            for key in [Key::UpArrow,Key::DownArrow,Key::LeftArrow,Key::RightArrow,Key::Return,Key::Escape,Key::Home,Key::F14] {
+                let text=char::from(key).to_string().into();
+                window.dispatch_event(WindowEvent::KeyPressed{text});
+            }
+            assert_eq!(&*actions.borrow(), &["Input.Up","Input.Down","Input.Left","Input.Right","Input.Select","Input.Back","Input.Home","mute"]);
+            actions.borrow_mut().clear();assert_eq!(app.get_player_panel(),0);
+        }
+        app.hide().unwrap();
+    }
     #[test]
     fn clocks_and_source_validation() {
         assert_eq!(clock(3661.), "1:01:01");

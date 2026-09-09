@@ -1,6 +1,6 @@
-import { Television } from "screens/tv.slint";
+import { Television, TvChoice } from "screens/tv.slint";
 import { Cinema, PlayerChoice } from "screens/cinema.slint";
-export { PlayerChoice }
+export { PlayerChoice, TvChoice }
 import { Theme } from "theme.slint";
 import { StatusBar } from "components/status_bar.slint";
 import { VolumeOverlay } from "components/volume_overlay.slint";
@@ -121,10 +121,16 @@ export component App inherits Window {
     in-out property <string> tv-title;
     in-out property <string> tv-status;
     in-out property <string> tv-error;
+    in-out property <string> tv-source;
+    in-out property <string> tv-sound;
+    in-out property <string> tv-picture;
+    in-out property <int> tv-panel;
+    in-out property <[TvChoice]> tv-choices;
     public function focus-tv(){television.take-focus();}
     callback player-action(string,float);
     in-out property <bool> player-shown: false;
     in-out property <bool> player-ready: false;
+    in-out property <bool> player-connected: false;
     in-out property <bool> player-paused: false;
     in-out property <bool> player-can-seek: false;
     in-out property <bool> player-has-art: false;
@@ -371,13 +377,14 @@ export component App inherits Window {
         visible:root.tv-shown;shown:root.tv-shown;
         width:parent.width;height:parent.height;
         title:root.tv-title;status:root.tv-status;error:root.tv-error;
+        source-name:root.tv-source;sound:root.tv-sound;picture:root.tv-picture;panel:root.tv-panel;choices:root.tv-choices;
         action(name)=>{root.tv-action(name);}
     }
     cinema := Cinema {
         visible:root.player-shown;
         shown:root.player-shown;
         width:parent.width;height:parent.height;
-        ready:root.player-ready;paused:root.player-paused;can-seek:root.player-can-seek;
+        ready:root.player-ready;connected:root.player-connected;paused:root.player-paused;can-seek:root.player-can-seek;
         has-art:root.player-has-art;has-logo:root.player-has-logo;
         fanart:root.player-fanart;logo:root.player-logo;
         activity:root.player-activity;room:root.player-room;title:root.player-title;

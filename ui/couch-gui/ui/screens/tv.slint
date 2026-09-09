@@ -1,10 +1,22 @@
 import { Theme } from "../theme.slint";
-component TvButton inherits Rectangle {
-    in property <string> label;
+export struct TvChoice { action:string, title:string, detail:string }
+component Tile inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <image> icon;
+    callback activate();
+    background:#ffffff0d;border-radius:18px;
+    Image {x:18px;y:16px;width:24px;height:24px;source:root.icon;colorize:Theme.accent;}
+    Text {x:18px;y:48px;width:parent.width - 36px;height:30px;text:root.title;font-size:21px;color:#f4eff8;font-weight:600;}
+    Text {x:18px;y:81px;width:parent.width - 36px;height:26px;text:root.detail;font-size:17px;color:#bbb0c6;overflow:elide;}
+    TouchArea {clicked=>{root.activate();}}
+}
+component IconButton inherits Rectangle {
+    in property <image> icon;
     in property <bool> primary;
     callback activate();
-    border-radius:16px;background:root.primary ? Theme.accent : #27242d;
-    Text {text:root.label;color:root.primary ? #ffffff : #eeecf1;font-size:22px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;width:parent.width;height:parent.height;}
+    background:root.primary ? Theme.accent : #ffffff0d;border-radius:30px;
+    Image {x:(parent.width - 28px)/2;y:(parent.height - 28px)/2;width:28px;height:28px;source:root.icon;colorize:root.primary ? #17111d : #f6f0fb;}
     TouchArea {clicked=>{root.activate();}}
 }
 export component Television inherits Rectangle {
@@ -12,22 +24,46 @@ export component Television inherits Rectangle {
     in property <string> title;
     in property <string> status;
     in property <string> error;
+    in property <string> source-name;
+    in property <string> sound;
+    in property <string> picture;
+    in property <int> panel;
+    in property <[TvChoice]> choices;
     callback action(string);
     public function take-focus(){keys.focus();}
-    background:#111014;
-    Text {x:24px;y:26px;width:parent.width - 48px;height:44px;text:root.title;color:#ffffff;font-size:30px;font-weight:700;overflow:elide;}
-    Text {x:24px;y:80px;width:parent.width - 48px;height:32px;text:root.status;color:#c4bfcf;font-size:22px;}
-    Text {x:24px;y:125px;width:parent.width - 48px;height:48px;text:"D-pad, OK and Back control your TV";color:#c4bfcf;font-size:20px;wrap:word-wrap;}
-    Rectangle {x:24px;y:195px;width:parent.width - 48px;height:150px;background:#211e27;border-radius:18px;
-        Text {x:20px;y:18px;width:parent.width - 40px;height:parent.height - 36px;text:"Use your remote’s buttons for power, home, mute, volume, channels and color controls.";color:#c4bfcf;font-size:23px;wrap:word-wrap;}
+    background:#17111e;
+    Rectangle {x:0px;y:0px;width:parent.width;height:425px;background:@linear-gradient(145deg,#382746,#17111e);}
+    IconButton {x:24px;y:24px;width:48px;height:48px;icon:@image-url("../../../../assets/lucide/arrow-left.svg");activate=>{root.action("close");}}
+    Text {x:88px;y:27px;width:parent.width - 112px;height:27px;text:root.title;font-size:20px;color:#f5effa;font-weight:600;overflow:elide;}
+    Text {x:88px;y:58px;width:parent.width - 112px;height:25px;text:root.status;font-size:16px;color:#bcb0c8;overflow:elide;}
+    Image {x:32px;y:146px;width:52px;height:52px;source:@image-url("../../../../assets/lucide/tv.svg");colorize:Theme.accent;}
+    Text {x:32px;y:220px;width:parent.width - 64px;height:25px;text:"NOW ON YOUR TV";font-size:16px;letter-spacing:2px;color:Theme.accent;}
+    Text {x:32px;y:256px;width:parent.width - 64px;height:108px;text:root.source-name;font-size:40px;font-weight:700;wrap:word-wrap;overflow:elide;color:#fbf8ff;}
+    Text {x:32px;y:370px;width:parent.width - 64px;height:32px;text:"Playback controls depend on the active app";font-size:16px;color:#bbaeC7;}
+    for icon[i] in [@image-url("../../../../assets/lucide/rewind.svg"),@image-url("../../../../assets/lucide/play.svg"),@image-url("../../../../assets/lucide/pause.svg"),@image-url("../../../../assets/lucide/fast-forward.svg")]: IconButton {
+        x:40px+i*102px;y:424px;width:88px;height:64px;icon:icon;primary:i==1;
+        activate=>{root.action(i==0 ? "rewind" : i==1 ? "play" : i==2 ? "pause" : "forward");}
     }
-    for name[i] in ["TV Back","TV Home","TV Menu","Mute","Unmute","Reconnect","Play","Pause"]: TvButton {
-        x:24px+mod(i,3)*148px;y:395px+floor(i/3)*72px;width:136px;height:52px;label:name;
-        activate=>{root.action(i==0 ? "back" : i==1 ? "home" : i==2 ? "menu" : i==3 ? "mute" : i==4 ? "unmute" : i==5 ? "retry" : i==6 ? "play" : "pause");}
+    Tile {x:24px;y:514px;width:210px;height:120px;title:"Input";detail:root.source-name;icon:@image-url("../../../../assets/lucide/hdmi-port.svg");activate=>{root.action("inputs");}}
+    Tile {x:246px;y:514px;width:210px;height:120px;title:"Picture";detail:root.picture;icon:@image-url("../../../../assets/lucide/sliders-horizontal.svg");activate=>{root.action("picture");}}
+    Tile {x:24px;y:646px;width:210px;height:120px;title:"Sound output";detail:root.sound;icon:@image-url("../../../../assets/lucide/speaker.svg");activate=>{root.action("sound");}}
+    Tile {x:246px;y:646px;width:210px;height:120px;title:"Apps";detail:"Open on TV";icon:@image-url("../../../../assets/lucide/layout-grid.svg");activate=>{root.action("apps");}}
+    if root.panel>0: Rectangle {width:parent.width;height:parent.height;background:#00000088;TouchArea {clicked=>{root.action("dismiss");}}}
+    if root.panel>0: Rectangle {x:0px;y:180px;width:parent.width;height:parent.height - 180px;background:#241b2e;border-radius:24px;
+        Text {x:26px;y:24px;width:parent.width - 110px;height:36px;text:root.panel==1 ? "Choose an input" : root.panel==2 ? "TV apps" : root.panel==3 ? "Picture" : "Sound output";font-size:27px;color:#ffffff;font-weight:600;}
+        IconButton {x:parent.width - 70px;y:20px;width:44px;height:44px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("dismiss");}}
+        Text {x:26px;y:80px;width:parent.width - 52px;height:84px;wrap:word-wrap;text:root.panel==3 ? "Picture-mode changes are available through your TV’s on-screen settings." : root.choices.length==0 ? "No choices available. Reconnect to refresh." : "Select by touch. Physical buttons continue to control the TV.";font-size:19px;color:#c7b9d2;}
+        Flickable {x:24px;y:176px;width:parent.width - 48px;height:parent.height - 198px;viewport-height:root.choices.length*82px;viewport-width:self.width;
+            for item[i] in root.choices: Rectangle {x:0px;y:i*82px;width:parent.width;height:74px;background:#ffffff0e;border-radius:12px;
+                Text {x:16px;y:10px;width:parent.width - 32px;height:29px;text:item.title;font-size:21px;color:#ffffff;overflow:elide;}
+                Text {x:16px;y:43px;width:parent.width - 32px;height:22px;text:item.detail;font-size:16px;color:#bfb2cd;overflow:elide;}
+                TouchArea {clicked=>{root.action(item.action);}}
+            }
+        }
     }
-    TvButton {x:24px;y:parent.height - 88px;width:parent.width - 48px;height:64px;label:"Return to Couch";activate=>{root.action("close");}}
-    if root.error!="": Rectangle {x:18px;y:172px;width:parent.width - 36px;height:135px;background:#432a42;border-radius:14px;
-        Text {x:16px;y:12px;width:parent.width - 32px;height:parent.height - 24px;text:root.error;wrap:word-wrap;color:#ffffff;font-size:20px;}
+    if root.error!="": Rectangle {x:24px;y:112px;width:parent.width - 48px;height:230px;background:#34263e;border-radius:18px;
+        Text {x:20px;y:16px;width:parent.width - 40px;height:138px;text:root.error;wrap:word-wrap;color:#ffffff;font-size:20px;}
+        Rectangle {x:20px;y:170px;width:parent.width - 40px;height:44px;background:Theme.accent;border-radius:12px;Text {width:parent.width;height:parent.height;text:"Reconnect";color:#17111e;horizontal-alignment:center;vertical-alignment:center;font-size:20px;}TouchArea {clicked=>{root.action("retry");}}}
     }
     keys:=FocusScope {enabled:root.shown;key-pressed(e)=>{
         if(e.text==Key.UpArrow){root.action("up");}

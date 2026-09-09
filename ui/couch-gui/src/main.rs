@@ -895,8 +895,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if swallow {
                 continue;
             }
-            if press.menu == Some(true) && app.get_tv_shown() && !app.get_pair_shown() {
-                app.invoke_tv_action("menu".into());
+            if press.menu == Some(true) && !app.get_pair_shown() {
+                if app.get_tv_shown() {app.invoke_tv_action("menu".into());}
+                else if app.get_player_shown() {app.invoke_player_action("Input.ContextMenu".into(),0.);}
             }
             // Hold to talk. The key is not routed into the UI: it opens the
             // microphone and nothing else, so there is no screen on which it
@@ -1206,8 +1207,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        let was_activity = (app.get_player_shown(), app.get_tv_shown());
+        let activity_navigation = activity_controls.navigation_pending(&app) || tv_controls.navigation_pending();
+        if activity_navigation {screen.snapshot();}
         activity_controls.poll(&app);
         tv_controls.poll(&app);
+        if activity_navigation && was_activity != (app.get_player_shown(), app.get_tv_shown()) {
+            dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
+            slint::platform::update_timers_and_animations();
+            if let Some(us) = screen.render_offscreen(&window) {
+                frames += 1; render_us += us; frame_max = frame_max.max(us);
+                let entering = app.get_player_shown() || app.get_tv_shown();
+                let cost = screen.slide(if entering {Arrive::FromRight} else {Arrive::FromLeft}, &[], SLIDE);
+                frames += cost.frames; render_us += cost.work_us; wait_us += cost.wait_us;
+                frame_max = frame_max.max(cost.max_us);
+                println!("couch-gui: activity slide {} ({} frames)", if entering {"in"} else {"out"},cost.frames);
+            }
+            slint::platform::update_timers_and_animations();
+        }
         if feedback_page(&app) != last_feedback_page {
             dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
         }

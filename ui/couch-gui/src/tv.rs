@@ -1,6 +1,8 @@
 //! LG TV control: one background owner, bounded input, no network on the UI thread.
-use crate::{home, App};
+use crate::{home, App, TvChoice};
 use couch_webos::{Button, Client, Playback, Settings};
+use serde_json::json;
+use slint::{ModelRc, VecModel};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -11,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Command {
     Key(Button),
     Volume(bool),
@@ -21,8 +23,24 @@ enum Command {
     Power,
     Play(bool),
     Retry,
+    Rewind(bool),
+    Input(String),
+    App(String),
+    Sound(String),
 }
 fn command(name: &str) -> Option<Command> {
+    if let Some(id) = name.strip_prefix("input:") {
+        return Some(Command::Input(id.into()));
+    }
+    if let Some(id) = name.strip_prefix("app:") {
+        return Some(Command::App(id.into()));
+    }
+    if let Some(id) = name.strip_prefix("sound:") {
+        return ["tv_speaker", "external_arc"]
+            .contains(&id)
+            .then(|| Command::Sound(id.into()));
+    }
+
     Some(match name {
         "power" => Command::Power,
         "toggle-mute" => Command::ToggleMute,
@@ -47,16 +65,18 @@ fn command(name: &str) -> Option<Command> {
         "play" => Command::Play(true),
         "pause" => Command::Play(false),
         "retry" => Command::Retry,
+        "rewind" => Command::Rewind(false),
+        "forward" => Command::Rewind(true),
         _ => return None,
     })
 }
-fn execute(c: &mut Client, action: Command) -> couch_webos::Result<()> {
+fn execute(c: &mut Client, action: &Command) -> couch_webos::Result<()> {
     match action {
-        Command::Key(key) => c.button(key),
+        Command::Key(key) => c.button(*key),
         Command::Volume(true) => c.volume_up(),
         Command::Volume(false) => c.volume_down(),
-        Command::Channel(up) => c.channel(up),
-        Command::Mute(on) => c.mute(on),
+        Command::Channel(up) => c.channel(*up),
+        Command::Mute(on) => c.mute(*on),
         Command::Power => c.power_off(),
         Command::ToggleMute => {
             let status = c.volume()?;
@@ -71,12 +91,25 @@ fn execute(c: &mut Client, action: Command) -> couch_webos::Result<()> {
                 .ok_or(couch_webos::Error::Protocol)?;
             c.mute(!muted)
         }
-        Command::Play(play) => c.playback(if play {
+        Command::Play(play) => c.playback(if *play {
             Playback::Play
         } else {
             Playback::Pause
         }),
         Command::Retry => Ok(()),
+        Command::Rewind(forward) => c.playback(if *forward {
+            Playback::FastForward
+        } else {
+            Playback::Rewind
+        }),
+        Command::Input(id) => c.select_input(id),
+        Command::App(id) => c.launch_app(id),
+        Command::Sound(output) => c
+            .request(
+                "ssap://com.webos.service.apiadapter/audio/changeSoundOutput",
+                json!({"output":output}),
+            )
+            .map(|_| ()),
     }
 }
 fn volume(c: &mut Client) -> couch_webos::Result<String> {
@@ -101,7 +134,7 @@ fn volume(c: &mut Client) -> couch_webos::Result<String> {
 }
 // Bind the learned wake address to this exact pairing endpoint. It is private
 // device state, not part of exported room configuration.
-fn remember_wake(settings: &Settings, credentials:&std::path::Path) {
+fn remember_wake(settings: &Settings, credentials: &std::path::Path) {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let Ok(address) = settings.address() else {
         return;
@@ -143,7 +176,7 @@ fn remember_wake(settings: &Settings, credentials:&std::path::Path) {
         let _ = std::fs::remove_file(tmp);
     }
 }
-fn wake_tv(settings: &Settings, credentials:&std::path::Path) -> Result<(), String> {
+fn wake_tv(settings: &Settings, credentials: &std::path::Path) -> Result<(), String> {
     let saved = std::fs::read(credentials.with_file_name("webos-wake.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -161,10 +194,9 @@ fn power(
     client: &mut Option<Client>,
     active: &AtomicU64,
     generation: u64,
-    credentials:&std::path::Path,
+    credentials: &std::path::Path,
 ) -> Result<String, String> {
-    let settings =
-        Settings::load(credentials).map_err(|e| e.to_string())?;
+    let settings = Settings::load(credentials).map_err(|e| e.to_string())?;
     if client.is_none() {
         match Client::connect(&settings) {
             Ok(c) => *client = Some(c),
@@ -172,7 +204,7 @@ fn power(
                 if active.load(Ordering::SeqCst) != generation {
                     return Ok(String::new());
                 }
-                wake_tv(&settings,credentials)?;
+                wake_tv(&settings, credentials)?;
                 return Ok("Wake requested…".into());
             }
             Err(e) => return Err(e.to_string()),
@@ -181,7 +213,7 @@ fn power(
     if active.load(Ordering::SeqCst) != generation {
         return Ok(String::new());
     }
-    remember_wake(&settings,credentials);
+    remember_wake(&settings, credentials);
     let status = client
         .as_mut()
         .unwrap()
@@ -194,7 +226,7 @@ fn power(
         return Ok(String::new());
     }
     if state != "Active" {
-        wake_tv(&settings,credentials)?;
+        wake_tv(&settings, credentials)?;
         *client = None;
         return Ok("Wake requested…".into());
     }
@@ -208,21 +240,118 @@ fn power(
     Ok("TV powered off · Press Power to wake".into())
 }
 struct Work {
-    connection:String,
+    connection: String,
     generation: u64,
     action: Command,
     at: Instant,
 }
+#[derive(Default, Clone)]
+struct Details {
+    sources: Vec<(String, String)>,
+    source: String,
+    sound: String,
+    picture: String,
+    choices: Vec<(String, String, String)>,
+    settings_app: Option<String>,
+}
+fn details(c: &mut Client) -> Details {
+    let inputs = c.inputs().unwrap_or_default();
+    let foreground = c.foreground_app().unwrap_or_default();
+    let apps = c.apps().unwrap_or_default();
+    let app = foreground["appId"].as_str().unwrap_or("");
+    let devices = inputs["devices"].as_array().cloned().unwrap_or_default();
+    let launches = apps["launchPoints"].as_array().cloned().unwrap_or_default();
+    let source = devices
+        .iter()
+        .find(|d| d["appId"] == app)
+        .and_then(|d| d["label"].as_str())
+        .or_else(|| {
+            launches
+                .iter()
+                .find(|d| d["id"] == app)
+                .and_then(|d| d["title"].as_str())
+        })
+        .or(foreground["appName"].as_str())
+        .unwrap_or(if app.is_empty() {
+            "Source unavailable"
+        } else {
+            app
+        })
+        .to_string();
+    let mut choices = Vec::new();
+    let mut sources = Vec::new();
+    for d in &devices {
+        if let (Some(id), Some(label)) = (d["appId"].as_str(), d["label"].as_str()) {
+            sources.push((id.into(), label.into()));
+        }
+    }
+    for d in &launches {
+        if let (Some(id), Some(label)) = (d["id"].as_str(), d["title"].as_str()) {
+            if !sources.iter().any(|(key, _)| key == id) {
+                sources.push((id.into(), label.into()));
+            }
+        }
+    }
+    for d in devices {
+        if let Some(id) = d["id"].as_str() {
+            choices.push((
+                format!("input:{id}"),
+                d["label"].as_str().unwrap_or(id).into(),
+                if d["connected"] == true {
+                    "Connected"
+                } else {
+                    "No signal reported"
+                }
+                .into(),
+            ));
+        }
+    }
+    let mut settings_app = None;
+    for d in launches {
+        if let (Some(id), Some(title)) = (d["id"].as_str(), d["title"].as_str()) {
+            if id == "com.palm.app.settings" || id == "com.webos.app.settings" {
+                settings_app = Some(id.into());
+            }
+            choices.push((format!("app:{id}"), title.into(), "App".into()));
+        }
+    }
+    let sound = c
+        .request(
+            "ssap://com.webos.service.apiadapter/audio/getSoundOutput",
+            json!({}),
+        )
+        .ok()
+        .and_then(|v| v["soundOutput"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    let picture = c
+        .request(
+            "ssap://settings/getSystemSettings",
+            json!({"category":"picture","keys":["pictureMode"]}),
+        )
+        .ok()
+        .and_then(|v| v["settings"]["pictureMode"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    Details {
+        sources,
+        source,
+        sound,
+        picture,
+        choices,
+        settings_app,
+    }
+}
 struct Event {
+    details: Option<Details>,
     generation: u64,
     status: Result<String, String>,
 }
 fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<AtomicU64>) {
-    let mut credentials=home::path("webos-connection.json");
+    let mut credentials = home::path("webos-connection.json");
     let mut client = None;
     let mut generation = 0;
     let mut refreshed = Instant::now();
     let mut waking: Option<Instant> = None;
+    let mut view: Option<Details> = None;
     loop {
         let work = match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(w) => Some(w),
@@ -234,6 +363,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             client = None;
             generation = current;
             waking = None;
+            view = None;
         }
         if let Some(w) = work {
             if w.generation != current
@@ -243,11 +373,18 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             {
                 continue;
             }
-            credentials=crate::connections::file(&w.connection,"webos");
-            if !w.connection.is_empty() && !crate::connections::config().is_some_and(|c|c.connection(&couch_model::Id::new(&w.connection)).is_some_and(|c|c.provider==couch_model::Provider::WebOs)) {continue;}
+            credentials = crate::connections::file(&w.connection, "webos");
+            if !w.connection.is_empty()
+                && !crate::connections::config().is_some_and(|c| {
+                    c.connection(&couch_model::Id::new(&w.connection))
+                        .is_some_and(|c| c.provider == couch_model::Provider::WebOs)
+                })
+            {
+                continue;
+            }
             if matches!(w.action, Command::Power) {
                 waking = None;
-                let result = power(&mut client, &active, generation,&credentials);
+                let result = power(&mut client, &active, generation, &credentials);
                 if result.as_deref() == Ok("Wake requested…") {
                     waking = Some(Instant::now() + Duration::from_secs(30));
                 }
@@ -255,6 +392,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                     client = None;
                 }
                 let _ = tx.try_send(Event {
+                    details: None,
                     generation,
                     status: result,
                 });
@@ -266,7 +404,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                     let settings = Settings::load(&credentials)?;
                     let mut connected = Client::connect(&settings)?;
                     connected.prepare_input()?;
-                    remember_wake(&settings,&credentials);
+                    remember_wake(&settings, &credentials);
                     client = Some(connected);
                 }
                 // Opening or closing another screen cancels queued keys, including
@@ -278,7 +416,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                     return Ok(String::new());
                 }
                 let c = client.as_mut().unwrap();
-                execute(c, w.action)?;
+                execute(c, &w.action)?;
                 if matches!(
                     w.action,
                     Command::Volume(_) | Command::Mute(_) | Command::ToggleMute | Command::Retry
@@ -294,9 +432,24 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 }
             }
             let _ = tx.try_send(Event {
+                details: None,
                 generation,
                 status: result.map_err(|e| e.to_string()),
             });
+            if matches!(
+                w.action,
+                Command::Retry | Command::Input(_) | Command::App(_) | Command::Sound(_)
+            ) {
+                if let Some(c) = client.as_mut() {
+                    let fresh = details(c);
+                    view = Some(fresh.clone());
+                    let _ = tx.try_send(Event {
+                        generation,
+                        status: Ok(String::new()),
+                        details: Some(fresh),
+                    });
+                }
+            }
             refreshed = Instant::now();
         } else if current != 0 && waking.is_some() && refreshed.elapsed() > Duration::from_secs(2) {
             let connected = Settings::load(&credentials)
@@ -313,12 +466,14 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 client = Some(c);
                 waking = None;
                 let _ = tx.try_send(Event {
+                    details: None,
                     generation,
                     status: result,
                 });
             } else if waking.is_some_and(|until| Instant::now() >= until) {
                 waking = None;
                 let _ = tx.try_send(Event {
+                    details: None,
                     generation,
                     status: Err(
                         "TV did not wake. Enable network/mobile power-on in the LG TV settings"
@@ -330,10 +485,40 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
         } else if current != 0 && refreshed.elapsed() > Duration::from_secs(5) {
             if let Some(c) = client.as_mut() {
                 let result = volume(c);
+                if result.is_ok() {
+                    if let Some(v) = view.as_mut() {
+                        let foreground = c.foreground_app().ok();
+                        let app_id = foreground.as_ref().and_then(|f| f["appId"].as_str());
+                        v.source = app_id
+                            .map(|id| {
+                                v.sources
+                                    .iter()
+                                    .find(|(key, _)| key == id)
+                                    .map(|(_, name)| name.as_str())
+                                    .unwrap_or(id)
+                            })
+                            .unwrap_or("Source unavailable")
+                            .into();
+                        v.sound = c
+                            .request(
+                                "ssap://com.webos.service.apiadapter/audio/getSoundOutput",
+                                json!({}),
+                            )
+                            .ok()
+                            .and_then(|s| s["soundOutput"].as_str().map(str::to_string))
+                            .unwrap_or_default();
+                        let _ = tx.try_send(Event {
+                            generation,
+                            status: Ok(String::new()),
+                            details: Some(v.clone()),
+                        });
+                    }
+                }
                 if result.is_err() {
                     client = None;
                 }
                 let _ = tx.try_send(Event {
+                    details: None,
                     generation,
                     status: result.map_err(|e| e.to_string()),
                 });
@@ -343,7 +528,9 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     }
 }
 pub struct Controller {
-    connection:String,
+    choices: Vec<(String, String, String)>,
+    settings_app: Option<String>,
+    connection: String,
     input: Rc<RefCell<Vec<String>>>,
     tx: mpsc::SyncSender<Work>,
     rx: mpsc::Receiver<Event>,
@@ -354,7 +541,7 @@ impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
         let q = input.clone();
-        app.on_open_tv(move |id,name| q.borrow_mut().push(format!("open:{id}/{name}")));
+        app.on_open_tv(move |id, name| q.borrow_mut().push(format!("open:{id}/{name}")));
         let q = input.clone();
         app.on_tv_action(move |action| q.borrow_mut().push(action.to_string()));
         let (tx, requests) = mpsc::sync_channel(8);
@@ -363,7 +550,9 @@ impl Controller {
         let current = active.clone();
         std::thread::spawn(move || worker(requests, events, current));
         Self {
-            connection:String::new(),
+            choices: Vec::new(),
+            settings_app: None,
+            connection: String::new(),
             input,
             tx,
             rx,
@@ -371,14 +560,26 @@ impl Controller {
             generation: 0,
         }
     }
+    pub fn navigation_pending(&self) -> bool {
+        self.input
+            .borrow()
+            .iter()
+            .any(|action| action.starts_with("open:") || action == "close")
+    }
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
         for action in inputs {
             let action = if let Some(target) = action.strip_prefix("open:") {
-                let (connection,name)=target.split_once('/').unwrap_or(("",target));
-                self.connection=connection.into();
+                let (connection, name) = target.split_once('/').unwrap_or(("", target));
+                self.connection = connection.into();
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
+                self.choices.clear();
+                self.settings_app = None;
+                app.set_tv_source("Connecting…".into());
+                app.set_tv_sound("Checking…".into());
+                app.set_tv_picture("Checking…".into());
+                app.set_tv_panel(0);
                 app.set_tv_title(name.into());
                 app.set_tv_status("Connecting to TV…".into());
                 app.set_tv_error("".into());
@@ -388,6 +589,58 @@ impl Controller {
             } else {
                 action.as_str()
             };
+            if action == "dismiss" {
+                app.set_tv_panel(0);
+                continue;
+            }
+            if ["inputs", "apps", "picture", "sound"].contains(&action) {
+                let panel = match action {
+                    "inputs" => 1,
+                    "apps" => 2,
+                    "picture" => 3,
+                    _ => 4,
+                };
+                let mut rows: Vec<TvChoice> = self
+                    .choices
+                    .iter()
+                    .filter(|(id, _, _)| {
+                        if panel == 1 {
+                            id.starts_with("input:")
+                        } else {
+                            panel == 2 && id.starts_with("app:")
+                        }
+                    })
+                    .map(|(id, title, detail)| TvChoice {
+                        action: id.as_str().into(),
+                        title: title.as_str().into(),
+                        detail: detail.as_str().into(),
+                    })
+                    .collect();
+                if panel == 3 {
+                    if let Some(id) = &self.settings_app {
+                        rows.push(TvChoice {
+                            action: format!("app:{id}").into(),
+                            title: "Open TV settings".into(),
+                            detail: "Adjust picture on your TV".into(),
+                        });
+                    }
+                }
+                if panel == 4 {
+                    for (id, name) in [
+                        ("tv_speaker", "TV speakers"),
+                        ("external_arc", "HDMI ARC / eARC"),
+                    ] {
+                        rows.push(TvChoice {
+                            action: format!("sound:{id}").into(),
+                            title: name.into(),
+                            detail: "TV support required".into(),
+                        });
+                    }
+                }
+                app.set_tv_choices(ModelRc::new(VecModel::from(rows)));
+                app.set_tv_panel(panel);
+                continue;
+            }
             if action == "close" {
                 self.active.store(0, Ordering::SeqCst);
                 app.set_tv_shown(false);
@@ -403,10 +656,12 @@ impl Controller {
                 continue;
             }
             if let Some(action) = command(action) {
+                app.set_tv_panel(0);
                 if self
                     .tx
                     .try_send(Work {
-                        connection:self.connection.clone(),                        generation: self.generation,
+                        connection: self.connection.clone(),
+                        generation: self.generation,
                         action,
                         at: Instant::now(),
                     })
@@ -419,6 +674,25 @@ impl Controller {
         while let Ok(event) = self.rx.try_recv() {
             if event.generation != self.active.load(Ordering::SeqCst) || !app.get_tv_shown() {
                 continue;
+            }
+            if let Some(view) = event.details {
+                app.set_tv_source(view.source.into());
+                app.set_tv_sound(
+                    match view.sound.as_str() {
+                        "tv_speaker" => "TV speakers",
+                        "external_arc" => "HDMI ARC / eARC",
+                        "" => "Unavailable",
+                        v => v,
+                    }
+                    .into(),
+                );
+                app.set_tv_picture(if view.picture.is_empty() {
+                    "On your TV".into()
+                } else {
+                    view.picture.into()
+                });
+                self.choices = view.choices;
+                self.settings_app = view.settings_app;
             }
             match event.status {
                 Ok(status) => {
