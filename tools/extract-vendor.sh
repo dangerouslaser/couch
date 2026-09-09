@@ -51,10 +51,19 @@ if docker info >/dev/null 2>&1; then
               && [ -s "/w/'"$OUT"'/vendor/$f" ] && ok=$((ok+1)) || echo "  missing vendor/$f"
         done
         for d in '"$VENDOR_DIRS"'; do
-            debugfs -R "rdump /$d /w/'"$OUT"'/vendor" /img/vendor.img >/dev/null 2>&1 \
+            parent=/w/'"$OUT"'/vendor/$(dirname "$d")
+            mkdir -p "$parent"
+            debugfs -R "rdump /$d $parent" /img/vendor.img >/dev/null 2>&1 \
               && ok=$((ok+1)) || echo "  missing vendor/$d/"
         done
+        for d in '"$SYSTEM_DIRS"'; do
+            parent=/w/'"$OUT"'/system/$(dirname "$d")
+            mkdir -p "$parent"
+            debugfs -R "rdump /$d $parent" /img/system.img >/dev/null 2>&1 \
+              && ok=$((ok+1)) || echo "  missing system/$d/"
+        done
         for f in '"$SYSTEM_FILES"'; do
+            mkdir -p "/w/'"$OUT"'/system/$(dirname "$f")"
             debugfs -R "dump /$f /w/'"$OUT"'/system/$f" /img/system.img >/dev/null 2>&1 \
               && [ -s "/w/'"$OUT"'/system/$f" ] && ok=$((ok+1)) || echo "  optional system/$f absent"
         done

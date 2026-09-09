@@ -49,3 +49,7 @@ Validation on Ollie installed 19 additional packages over the pinned base, execu
 ## Prepare a raw userdata filesystem
 
 `prepare_ext4.py` now turns packaged staging into an exact-size regular ext4 file using explicit observed geometry and a pinned offline filesystem-tool cache. It validates the filesystem without loop mounts or host rootfs extraction. See [userdata image preparation](userdata-image.md) for commands, reproducibility evidence and the remaining noninstallable release gates.
+
+## Inventory the actual Couch payload
+
+`runtime_inventory.py` now prepares the explicit GUI/daemon/script/portal/notice artifact list, verifies embedded web assets and reports vendor/boot provenance gaps. See [runtime payload inventory](runtime-payload.md). Its clean Couch staging spec replaces the earlier fixture-only payload; `clean_runtime_ready` does not mean the complete release is installable.

@@ -18,6 +18,7 @@ import tarfile
 REPO = Path(__file__).resolve().parents[2]
 BINARIES = frozenset(('couch-gui', 'couch-confd', 'couch-kodi', 'couch-webos',
     'couch-hue', 'couch-ha', 'couch-denon', 'couch-ir', 'couch-voice', 'fbcon'))
+LICENSE_FILES = frozenset(('Lato-OFL.txt', 'Inter-OFL.txt', 'Lucide-ISC.txt'))
 RECOVERY_CGI = frozenset(('save', 'setpw', 'scan', 'enroll'))
 GENERATED = {
     'opt/couch/config.json': b'{"schema_version":1}\n',
@@ -69,6 +70,7 @@ def artifact_destination(name):
     path = PurePosixPath(name)
     allowed = (path.parent == PurePosixPath('opt/couch') and
         (path.name in BINARIES or path.name.endswith('.sh')))
+    allowed |= path.parent == PurePosixPath('opt/couch/licenses') and path.name in LICENSE_FILES
     allowed |= path.parent == PurePosixPath('opt/couch/www/cgi-bin') and path.name in RECOVERY_CGI
     allowed |= name.startswith('opt/couch/www/') and path.suffix in ('.html', '.css', '.js', '.svg', '.png', '.woff2', '.wasm')
     require(allowed, 'Artifact is not an explicitly supported Couch runtime file')
