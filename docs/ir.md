@@ -290,6 +290,27 @@ These all-zero transfers emit no intentional carrier marks and cannot establish
 optical carrier, polarity or LED power. Scope/receiver evidence or a responding
 target is still needed before declaring IR control working.
 
+## Measured completion timing
+
+On diagnostic kernel `b3c10e0e`, individually issued zero transfers produced:
+
+| DMA bytes | Expected µs | Setup µs | First completion µs | Guard completion µs | Write return µs |
+|---|---:|---:|---:|---:|---:|
+| 972 | 68,190 | 22 | 68,905 | 68,905 | 72,190 |
+| 7,128 | 500,057 | 25 | 500,554 | 500,554 | 503,986 |
+
+GUI heartbeats advanced through both transfers. The first counter observation
+scales with waveform length at the intended 26 MHz rate; it does not show the
+previously considered 66 MHz acceleration. These measurements validate all-zero
+sample timing, not optical carrier modulation or LED power.
+
+The original HA100 Android IR service launches the standard consumer-IR HAL.
+Its board init file only changes `/dev/irtx` permissions/ownership; the extracted
+HAL has no GPIO/sysfs power path evident. The stock kernel contains a board-specific
+MT6580 PWM IR driver. Comparing its actual probe/write/ioctl machine code with
+Couch is the remaining software-only route to finding omitted output setup.
+The generic donor driver and matching pinmux alone do not establish LED wiring.
+
 ## Remaining hardware checks
 
 - Confirm PWM0 reaches the IR LED and its idle polarity is correct.
