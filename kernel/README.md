@@ -47,6 +47,28 @@ What the delta on top of wiko_k300 is (one commit, 541 files, ~19MB):
 from the device backup, adjusted for this tree, with the connectivity stack
 built in.
 
+## IR bringup candidate
+
+The isolated Ollie branch `couch-irtx-bringup` at `3dee4cfb` adds the waveform
+ABI correction on top of the validated motion kernel `e581fb14`. The base
+checkout and existing normal output remain unchanged. Reproduce it with:
+
+```sh
+KTREE=/home/bryan/couch-kernel/irtx-worktree \
+KOUT=/home/bryan/couch-kernel/out-irtx-normal kernel/build.sh normal
+```
+
+The only resulting config change is `CONFIG_MTK_IRTX_PWM_SUPPORT=y`.
+`build/couch-irtx.img` preserves the verified `build/couch-motion.img` DTB and
+ramdisk; its adjacent JSON records the input and output hashes.
+`build/irtx-normal-manifest.json` records clean source, compiler and kernel
+hashes. These local build products are not an installer release.
+
+After coordinated deployment, first verify boot/display/touch/wake and the
+read-only IR registration/ioctl path. Physical emission needs a separate,
+measured test with recovery access available, because earlier transmission
+attempts hung the device. Driver probe itself does not emit IR.
+
 ## Building
 
 **All kernel compilation runs on Ollie**, an i9-14900K Linux server. From the
@@ -133,10 +155,12 @@ Touch is now provided by `couch_tlsc6x` with bounded report retries and no
 firmware-update path. The keypad EINT mux and production panel setup are live.
 Apply the mail patches in `patches/series` order on top of `7a0e5e8f`.
 
-The PWM IR implementation remains **diagnostic-only**: a minimal transmit hung
-the device even after clock-ordering changes. The normal profile disables it,
-and stage2 removes the stale stock node when no driver is registered. Do not
-interpret driver probe success as a validated transmitter.
+The normal profile now builds the corrected PWM IR driver as a **bringup
+candidate**. The previous revision hung during a minimal transmission. The
+candidate fixes carrier-scaled sample timing, excludes the duration trailer
+from DMA, keeps carrier state per descriptor and waits for the PWM provider.
+It has not yet passed a physical transmission test. Do not interpret driver
+probe success as a validated transmitter; see [IR](../docs/ir.md).
 
 The boot-health gate requires advancing local GUI heartbeats before clearing
 the recovery BCB. It does not protect failures before init arms the BCB.
@@ -145,4 +169,4 @@ See [Slint performance](../docs/slint-performance.md) and
 [GPU experiments](../docs/gpu-acceleration.md) for current optimization work.
 Unplugged suspend, thermal/battery measurements, and full IR transmission remain
 unvalidated. Kernel source is committed on Ollie and backed up separately; this
-repository currently has no configured publishing remote.
+repository and kernel have separate configured GitHub publishing remotes.

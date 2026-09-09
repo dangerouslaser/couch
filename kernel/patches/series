@@ -6,3 +6,4 @@ ha100-irtx-clock.patch
 ha100-touch-reset.patch
 ha100-pwm-resume.patch
 ha100-motion.patch
+ha100-irtx-waveform.patch

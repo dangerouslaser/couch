@@ -1,0 +1,197 @@
+From 3dee4cfb9a2c909fbab34043ba73e40af4c3da18 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Wed, 9 Sep 2026 18:45:14 -0400
+Subject: [PATCH] irtx: match Couch carrier-scaled waveform ABI
+
+---
+ .../misc/mediatek/irtx/mt6580/couch_irtx.c    | 102 ++++++++++++++----
+ 1 file changed, 84 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+index 3976b10e..6e8bc16d 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -6,6 +6,9 @@
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+ #include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/slab.h>
++#include <linux/math64.h>
+ #include <linux/miscdevice.h>
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
+@@ -30,47 +33,93 @@ struct couch_irtx {
+ 	bool invert;
+ };
+ 
++/* Couch's solution-1 ABI uses carrier-scaled samples and a final duration
++ * word. The old vendor one-microsecond driver is not compatible with it. */
++struct ir_file {
++	struct couch_irtx *ir;
++	unsigned int carrier;
++};
++
++static int ir_open(struct inode *inode, struct file *file)
++{
++	struct miscdevice *misc = file->private_data;
++	struct ir_file *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++	ctx->ir = container_of(misc, struct couch_irtx, misc);
++	ctx->carrier = 38000;
++	file->private_data = ctx;
++	return nonseekable_open(inode, file);
++}
++
++static int ir_release(struct inode *inode, struct file *file)
++{
++	kfree(file->private_data);
++	return 0;
++}
++
+ static long ir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ {
++	struct ir_file *ctx = file->private_data;
+ 	unsigned int carrier;
+ 	if (cmd == IRTX_GET_SOLUTION)
+ 		return put_user(1, (unsigned int __user *)arg);
+-	/* Solution 1 includes the carrier in the bitstream; check, don't retune. */
+-	if (cmd == IRTX_SET_CARRIER) {
+-		if (get_user(carrier, (unsigned int __user *)arg))
+-			return -EFAULT;
+-		return carrier >= 10000 && carrier <= 100000 ? 0 : -EINVAL;
+-	}
+-	return -ENOTTY;
++	if (cmd != IRTX_SET_CARRIER)
++		return -ENOTTY;
++	if (get_user(carrier, (unsigned int __user *)arg))
++		return -EFAULT;
++	if (carrier < 10000 || carrier > 100000)
++		return -EINVAL;
++	if (mutex_lock_interruptible(&ctx->ir->lock))
++		return -ERESTARTSYS;
++	ctx->carrier = carrier;
++	mutex_unlock(&ctx->ir->lock);
++	return 0;
+ }
+ 
+ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 			size_t count, loff_t *pos)
+ {
+-	struct miscdevice *misc = file->private_data;
+-	struct couch_irtx *ir = container_of(misc, struct couch_irtx, misc);
++	struct ir_file *ctx = file->private_data;
++	struct couch_irtx *ir = ctx->ir;
+ 	dma_addr_t physical;
+ 	u8 *wave;
+ 	unsigned long deadline;
+ 	unsigned int i, finish = ir->pwm.pwm_no * 2;
++	u32 duration, clocks, actual_us;
++	size_t wave_bytes = count - sizeof(u32);
+ 	int ret;
+ 
+ 	/* BUF0_SIZE counts whole 32-bit words minus one. Reject padding ambiguity. */
+-	if (!count || count > IRTX_MAX_BYTES || count % 4)
++	if (count < 8 || count > IRTX_MAX_BYTES || count % 4)
+ 		return -EINVAL;
+ 	if (mutex_lock_interruptible(&ir->lock))
+ 		return -ERESTARTSYS;
+-	wave = dma_alloc_coherent(ir->dev, count, &physical, GFP_KERNEL);
++	/* Bound both declared and actual DMA duration; never trust the trailer
++	 * as a DMA length or timeout. Partial final words add at most 32 ticks. */
++	if (copy_from_user(&duration, buf + wave_bytes, sizeof(duration))) {
++		ret = -EFAULT;
++		goto unlock;
++	}
++	clocks = DIV_ROUND_CLOSEST(26000000U, ctx->carrier * 3);
++	actual_us = div_u64((u64)wave_bytes * 8 * clocks + 25, 26);
++	if (!duration || duration > 1000000 || actual_us > 1001100) {
++		ret = -EINVAL;
++		goto unlock;
++	}
++	ir->pwm.PWM_MODE_MEMORY_REGS.HDURATION = clocks - 1;
++	ir->pwm.PWM_MODE_MEMORY_REGS.LDURATION = clocks - 1;
++	wave = dma_alloc_coherent(ir->dev, wave_bytes, &physical, GFP_KERNEL);
+ 	if (!wave) {
+ 		ret = -ENOMEM;
+ 		goto unlock;
+ 	}
+-	if (copy_from_user(wave, buf, count)) {
++	if (copy_from_user(wave, buf, wave_bytes)) {
+ 		ret = -EFAULT;
+ 		goto free;
+ 	}
+ 	if (ir->invert)
+-		for (i = 0; i < count; i++)
++		for (i = 0; i < wave_bytes; i++)
+ 			wave[i] = ~wave[i];
+ 
+ 	wake_lock(&ir->awake);
+@@ -79,17 +128,17 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	mt_pwm_26M_clk_enable_hal(1);
+ 	mt_set_intr_ack(finish);
+ 	mt_set_intr_ack(finish + 1);
+-	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_BASE_ADDR = (u32 *)physical;
+-	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_SIZE = count / 4 - 1;
++	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_BASE_ADDR = physical;
++	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_SIZE = wave_bytes / 4 - 1;
+ 	ret = pwm_set_spec_config(&ir->pwm);
+ 	if (ret) {
+ 		/* MTK HAL errors are not all Linux errno values. */
+ 		ret = -EIO;
+ 		goto stop;
+ 	}
+-	/* Each bit is one microsecond. Poll completion without enabling an
++	/* Poll completion without enabling an
+ 	 * unhandled shared PWM interrupt. Allow scheduling slack, never forever. */
+-	deadline = jiffies + msecs_to_jiffies(DIV_ROUND_UP(count * 8, 1000) + 50);
++	deadline = jiffies + msecs_to_jiffies(DIV_ROUND_UP(actual_us, 1000) + 50);
+ 	for (;;) {
+ 		if (mt_get_intr_status(finish + 1) > 0) {
+ 			ret = -EIO;
+@@ -113,7 +162,7 @@ stop:
+ 	mt_pwm_disable(ir->pwm.pwm_no, ir->pwm.pmic_pad);
+ 	wake_unlock(&ir->awake);
+ free:
+-	dma_free_coherent(ir->dev, count, wave, physical);
++	dma_free_coherent(ir->dev, wave_bytes, wave, physical);
+ unlock:
+ 	mutex_unlock(&ir->lock);
+ 	return ret;
+@@ -121,6 +170,8 @@ unlock:
+ 
+ static const struct file_operations ir_fops = {
+ 	.owner = THIS_MODULE,
++	.open = ir_open,
++	.release = ir_release,
+ 	.write = ir_write,
+ 	.unlocked_ioctl = ir_ioctl,
+ 	.llseek = no_llseek,
+@@ -129,8 +180,23 @@ static const struct file_operations ir_fops = {
+ static int ir_probe(struct platform_device *pdev)
+ {
+ 	struct couch_irtx *ir;
++	struct device_node *node;
++	struct platform_device *provider;
++	bool ready;
+ 	u32 channel, invert = 0;
+ 	int ret;
++	/* The vendor PWM API has global MMIO state populated by its probe. */
++	node = of_find_compatible_node(NULL, NULL, "mediatek,PWM");
++	if (!node)
++		return -ENODEV;
++	provider = of_find_device_by_node(node);
++	of_node_put(node);
++	if (!provider)
++		return -EPROBE_DEFER;
++	ready = platform_get_drvdata(provider) != NULL;
++	put_device(&provider->dev);
++	if (!ready)
++		return -EPROBE_DEFER;
+ 	if (of_property_read_u32(pdev->dev.of_node, "pwm_ch", &channel) || channel >= 5)
+ 		return -EINVAL;
+ 	of_property_read_u32(pdev->dev.of_node, "pwm_data_invert", &invert);
+-- 
+2.43.0
+
