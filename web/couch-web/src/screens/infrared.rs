@@ -3,11 +3,44 @@ use crate::{api, App};
 use leptos::{prelude::*, task::spawn_local};
 use serde_json::{json, Value};
 
+// A catalog is immutable for the lifetime of the served bundle. Coalesce the
+// first request when several device editors mount together; retry after errors.
+type CatalogCallback = Box<dyn FnOnce(Result<Value, api::ApiError>)>;
+thread_local! {
+    static CATALOG: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
+    static CATALOG_WAITERS: std::cell::RefCell<Vec<CatalogCallback>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+fn load_catalog(callback: impl FnOnce(Result<Value, api::ApiError>) + 'static) {
+    let cached = CATALOG.with(|c| c.borrow().clone());
+    if let Some(value) = cached {
+        callback(Ok(value));
+        return;
+    }
+    let start = CATALOG_WAITERS.with(|waiters| {
+        let mut waiters = waiters.borrow_mut();
+        waiters.push(Box::new(callback));
+        waiters.len() == 1
+    });
+    if start {
+        spawn_local(async move {
+            let result = api::ha("GET", "/api/ir/catalog", None).await;
+            if let Ok(value) = &result {
+                CATALOG.with(|c| *c.borrow_mut() = Some(value.clone()));
+            }
+            let waiters = CATALOG_WAITERS.with(|w| std::mem::take(&mut *w.borrow_mut()));
+            for callback in waiters {
+                callback(result.clone());
+            }
+        });
+    }
+}
+
 pub fn library(app: App, output: RwSignal<String>, power_only: bool) -> AnyView {
     let catalog = RwSignal::new(Vec::<Value>::new());
     let brand = RwSignal::new(String::new());
     let kind = RwSignal::new(String::new());
     let selected = RwSignal::new(String::new());
+    let search = RwSignal::new(String::new());
     let commands = RwSignal::new(Vec::<Value>::new());
     let busy = RwSignal::new(true);
     let message = RwSignal::new(String::new());
@@ -15,8 +48,7 @@ pub fn library(app: App, output: RwSignal<String>, power_only: bool) -> AnyView 
     let import_text = RwSignal::new(String::new());
     let import_format = RwSignal::new("flipper".to_string());
     let import_name = RwSignal::new("Imported remote".to_string());
-    spawn_local(async move {
-        let result = api::ha("GET", "/api/ir/catalog", None).await;
+    load_catalog(move |result| {
         if busy.try_get_untracked().is_none() {
             return;
         }
@@ -73,8 +105,9 @@ pub fn library(app: App, output: RwSignal<String>, power_only: bool) -> AnyView 
             <label class="field">"Device type"<select aria-label="IR library device type" prop:value=move ||kind.get() disabled=move ||busy.get()||brand.get().is_empty() on:change=move |e|{kind.set(event_target_value(&e));selected.set(String::new());commands.set(Vec::new());}>
                 <option value="">"All device types"</option>{move ||catalog.get().iter().filter(|v|v["brand"].as_str()==Some(brand.get().as_str())).filter_map(|v|v["device_type"].as_str()).map(str::to_string).collect::<std::collections::BTreeSet<_>>().into_iter().map(|s|view!{<option value=s.clone()>{s.clone()}</option>}).collect_view()}
             </select></label>
+            {super::connections::field("Search models",search,"Filter this brand’s models")}
             <label class="field">"Model / codeset"<select aria-label="IR model" disabled=move ||busy.get()||brand.get().is_empty() prop:value=move ||selected.get() on:change=move |e|{let id=event_target_value(&e);selected.set(id.clone());if !id.is_empty(){fetch(format!("/api/ir/catalog/{id}"),None);}}>
-                <option value="">"Choose a model"</option>{move ||catalog.get().into_iter().filter(|v|v["brand"].as_str()==Some(brand.get().as_str())&&(kind.get().is_empty()||v["device_type"].as_str()==Some(kind.get().as_str()))).map(|v|{let id=v["id"].as_str().unwrap_or("").to_string();let label=format!("{} — {} supported commands",v["model"].as_str().unwrap_or(&id),v["supported_commands"]);view!{<option value=id>{label}</option>}}).collect_view()}
+                <option value="">"Choose a model"</option>{move ||catalog.get().into_iter().filter(|v|v["brand"].as_str()==Some(brand.get().as_str())&&(kind.get().is_empty()||v["device_type"].as_str()==Some(kind.get().as_str())) && v["model"].as_str().unwrap_or("").to_lowercase().contains(&search.get().to_lowercase())).map(|v|{let id=v["id"].as_str().unwrap_or("").to_string();let label=format!("{} — {} supported commands",v["model"].as_str().unwrap_or(&id),v["supported_commands"]);view!{<option value=id>{label}</option>}}).collect_view()}
             </select></label>
             <details><summary>"Import your own remote codes"</summary>
                 {super::connections::field("Import name",import_name,"Remote model")}

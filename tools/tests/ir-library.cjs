@@ -12,11 +12,12 @@ const assert=require('node:assert/strict');
  const browser=await chromium.launch();
  try {
   const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  const writes=[];const stored={};
+  const writes=[];const stored={};let catalogReads=0;
+  const extras=Array.from({length:5500},(_,i)=>({id:`extra-${i}`,brand:`Brand ${Math.floor(i/100)}`,device_type:"TV",model:`Model ${i}`,supported_commands:8}));
   await page.route('**/api/config',r=>r.fulfill({json:config}));
   await page.route('**/api/ir/**',r=>{
    const path=new URL(r.request().url()).pathname;const method=r.request().method();
-   if(path==='/api/ir/catalog')return r.fulfill({json:{source:{name:'Fixture library',license:'CC0'},codesets:[{id:'lg-tv',brand:'LG',device_type:'TV',model:'Example TV',supported_commands:2},{id:'sony-avr',brand:'Sony',device_type:'Audio',model:'Example receiver',supported_commands:1}]}});
+   if(path==='/api/ir/catalog'){catalogReads++;return r.fulfill({json:{source:{name:'Fixture library',license:'CC0'},codesets:[{id:'lg-tv',brand:'LG',device_type:'TV',model:'Example TV',supported_commands:2},{id:'sony-avr',brand:'Sony',device_type:'Audio',model:'Example receiver',supported_commands:1},...extras]}});}
    if(path==='/api/ir/catalog/lg-tv')return r.fulfill({json:{commands:[{name:'Power',supported:true,code:'Power nec 4 8'},{name:'On',supported:true,code:'On nec 4 9'},{name:'Unsupported',supported:false,reason:'Unsupported protocol fixture'}]}});
    if(path==='/api/ir/import')return r.fulfill({json:{commands:[{name:'Imported Off',supported:true,code:'Off raw 38000 9000,4500,560,560'}]}});
    if(path.startsWith('/api/ir/codesets/')){const id=path.split('/').pop();if(method==='PUT'){stored[id]=r.request().postDataJSON().text;writes.push(stored[id]);}return r.fulfill({json:{id,text:stored[id]||'',commands:[]}});}
@@ -32,6 +33,7 @@ const assert=require('node:assert/strict');
   await page.getByLabel('IR brand',{exact:true}).selectOption('LG');
   assert.equal(await page.getByLabel('IR model',{exact:true}).locator('option').count(),2);
   await page.getByLabel('IR library device type',{exact:true}).selectOption('TV');
+  await page.getByLabel('Search models',{exact:true}).fill('Example');
   await page.getByLabel('IR model',{exact:true}).selectOption('lg-tv');
   await page.getByText('Unavailable: Unsupported protocol fixture',{exact:true}).waitFor();
   await page.getByLabel('Assign Power (1)',{exact:true}).selectOption('toggle');
@@ -62,6 +64,7 @@ const assert=require('node:assert/strict');
   for(let i=0;i<30&&config.revision<14;i++)await page.waitForTimeout(10);
   assert.equal(writes[1],'toggle nec 4 10');
   assert.equal(config.revision,14);
+  assert.equal(catalogReads,1,"Room editor rerenders must reuse the catalog metadata");
 
   config={...config,connections:[{id:'lg',name:'LG TV',provider:{kind:'web-os'}}],rooms:[]};
   let powerSave;
