@@ -27,18 +27,19 @@
         <p class="development">IN DEVELOPMENT <span>Running on development hardware. Installer in progress.</span></p>
       </div>
       <figure class="preview">
-        <div class="home-screen" id="demo" role="region" aria-label="Interactive Couch demo">
-          <div class="screen-status"><span>9:41</span><span class="area-title" id="demo-title">HOME</span><div class="indicators" aria-hidden="true"><span class="icon icon-wifi"></span><span class="icon icon-battery-medium"></span></div></div>
-          <div id="demo-viewport"><noscript><p class="demo-empty">Enable JavaScript to explore the demo.</p></noscript></div>
-          <div class="demo-toast" id="demo-toast" role="status" aria-live="polite"></div>
-          <button class="demo-sleep" id="demo-sleep" hidden aria-label="Wake the demo screen"><span class="icon icon-power" aria-hidden="true"></span><span>Screen asleep</span><small>Tap here or press Power to wake</small></button>
+        <div class="device-shell" aria-label="Interactive Couch remote">
+          <div class="device-face">
+            <div class="slint-screen" id="demo" role="region" aria-label="Couch Slint screen">
+              <iframe id="slint-demo" src="preview.html" title="Couch touchscreen with example devices" scrolling="no"></iframe>
+              <div id="demo-loading" role="status">Loading couch.</div>
+              <button id="demo-sleep" hidden aria-label="Wake screen"></button>
+            </div>
+            <div class="device-buttons" role="group" aria-label="Physical remote controls">
+              <div class="device-system"><button type="button" data-remote="back" aria-label="Back" ><span class="icon icon-chevron-left" aria-hidden="true"></span></button><button type="button" data-remote="home" aria-label="Home" ><span class="icon icon-house" aria-hidden="true"></span></button><button type="button" data-remote="power" aria-label="Power" ><span class="icon icon-power" aria-hidden="true"></span></button></div>
+            </div>
+          </div>
         </div>
-        <div class="demo-controls" role="group" aria-label="Remote buttons">
-          <button type="button" data-remote="home"><span class="icon icon-house" aria-hidden="true"></span><span>Home</span></button>
-          <button type="button" data-remote="power" aria-label="Put demo screen to sleep"><span class="icon icon-power" aria-hidden="true"></span><span>Power</span></button>
-          <button type="button" data-remote="back"><span class="icon icon-arrow-left" aria-hidden="true"></span><span>Back</span></button>
-        </div>
-        <figcaption>INTERACTIVE DEMO<span>Scroll rooms, toggle lights, and try scenes.<br>Example devices; changes stay in this page.</span></figcaption>
+        <p id="demo-summary" class="sr-only" aria-live="polite"></p>
       </figure>
     </section>
     <section class="integrations" aria-label="Integrations under development"><div class="wrap integration-inner"><p>INTEGRATIONS</p><ul><li>Kodi</li><li>Philips Hue</li><li>Home Assistant</li><li>LG webOS</li><li>Denon</li></ul></div></section>
@@ -60,7 +61,7 @@
     </section>
     <section class="project wrap" aria-labelledby="project-title"><div><p class="eyebrow">PROJECT STATUS</p><h2 id="project-title">Early development.</h2><p>The OS and integrations are running on development hardware. The USB installer is still experimental, and there is no ready-to-flash public release. The application and kernel repositories contain the source, build instructions, and current development notes.</p></div><div class="project-links"><a href="https://github.com/dangerouslaser/couch">Couch source <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a><a href="https://github.com/dangerouslaser/couch-kernel">Linux kernel <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a><a href="https://github.com/dangerouslaser/couch/issues">Report an issue <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></div></section>
   </main>
-  <footer class="wrap"><span class="brand">couch.</span><p>An independent project for the Sanytron Astrion HA100.<br>Not affiliated with the device or integration manufacturers.</p><div class="licenses"><a href="assets/INTER-LICENSE.txt">Inter font license</a><a href="assets/lucide/LICENSE">Lucide icon license</a></div></footer>
+  <footer class="wrap"><span class="brand">couch.</span><p>An independent project for the Sanytron Astrion HA100.<br>Not affiliated with the device or integration manufacturers.</p><div class="licenses"><a href="assets/INTER-LICENSE.txt">Inter font license</a><a href="assets/lucide/LICENSE">Lucide icon license</a><a href="wasm/LATO-OFL.txt">Lato font license</a><a href="credits.html">Artwork credits</a></div></footer>
 <script src="demo.js" defer></script>
 </body>
 </html>

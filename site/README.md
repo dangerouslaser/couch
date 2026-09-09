@@ -1,23 +1,17 @@
 # Couch landing page
 
-Static GitHub Pages site; publish this directory as the artifact root. No build step or third-party JavaScript dependencies. `demo.js` implements the interactive preview with local sample state. All URLs are relative so project Pages paths work.
+GitHub Pages publishes this directory after building the production Slint UI for WebAssembly. Run `tools/build-preview.sh`, then `python3 -m http.server 8098 --directory site` to preview it locally.
 
-Preview from the repository root with `python3 -m http.server 8098 --directory site`.
+`preview.html` hosts the exact `ui/couch-gui/ui/app.slint` component tree at 480×800 inside a scaled iframe. That isolated frame fixes its pixel ratio to 1 to reproduce the remote’s physical framebuffer and avoid a Winit software-renderer startup mismatch on Retina screens; the rest of the page retains the browser’s normal pixel ratio. `demo.js` supplies the HA100-inspired bezel controls, loading state, simulated display sleep, and an automatic walkthrough. The walkthrough sends the same commands as the buttons, pauses offscreen/in background tabs, and stops permanently on the first interaction with the device. Reduced-motion users get a static, usable screen. `preview/src/demo.rs` supplies example rooms, lights, scenes, and a Kodi movie without linking any device clients or making network requests to devices. UI edits therefore flow into both the remote and website builds.
 
-The palette and typography follow `docs/mockups/webos-activity/`: warm paper `#eeeae5`, ink `#25232c`, muted text `#68626f`, and purple `#c4a2ff`. The Couch wordmark uses Inter at weight 800 and letter spacing −2px. The flat HTML/CSS home-screen example follows `ui/couch-gui/ui/screens/home_hub.slint` and `components/status_bar.slint`: activity strip, room cards, area dots, scenes row. All names and counts are generic example data; no personal device configuration or screenshots are published.
+The interface, fonts, icons, list animations, overlays, and media screen are shared. The bezel ends at Back/Home/Power. In this browser adapter, tapping a row selects and activates it; the physical remote still uses selection plus OK. Mouse wheel, vertical swipes, and arrow keys navigate lists, and Enter remains available as OK. The tap adapter’s hit bounds match the fixed local fixture and are covered by browser tests. Page slides use browser canvas snapshots in place of the host’s framebuffer copies and honor reduced motion. Hardware input drivers, standby timing, and integration latency are not reproduced by the browser backend. This is a UI demonstration, not a hardware performance test. The movie fixture does not stream video; playback controls update local state. Canvas accessibility is limited; HTML controls and a changing screen summary provide a partial alternative.
 
-Inter is bundled under the SIL Open Font License; see `assets/INTER-LICENSE.txt`. Icons are unmodified SVGs copied from `assets/lucide/` in the repository and colored with CSS masks. Their ISC/Feather MIT notices are included in `site/assets/lucide/LICENSE`. No external artwork, analytics, fonts, or scripts are loaded. The demo never calls a device API and does not persist visitor changes. Rooms scroll; lights and brightness, room/global scenes, sample playback, and Home/Power/Back controls respond locally. Navigation honors reduced-motion preferences.
+Build requirements and asset attribution are in `preview/README.md`. Generated `wasm/` files stay out of Git. GitHub Actions builds and deploys them on changes to the site, preview, or production Slint sources/assets.
 
-## Demo checks
-
-With the preview server running on port 8098, run:
+Browser regression check (Playwright installed in the existing review environment):
 
 ```sh
-npm install --prefix build/site-review playwright
-NODE_PATH=build/site-review/node_modules node tools/tests/site-demo.cjs
+NODE_PATH=build/webui-review/node_modules node tools/tests/site-demo.cjs
+# Or verify the published site:
+SITE_URL=https://dangerouslaser.github.io/couch/ NODE_PATH=build/webui-review/node_modules node tools/tests/site-demo.cjs
 ```
-
-Set `SITE_URL` to check the published Pages URL. The checks cover scrolling,
-return-position restoration, light/brightness state, room-scoped scenes,
-playback, sleep/wake, Home/Back, keyboard input, reduced motion and mobile layout.
-Screenshots are written to the system temporary directory.
