@@ -55,7 +55,7 @@ use serde::{Deserialize, Serialize};
 pub mod buttons;
 pub mod commands;
 pub mod activity_setup;
-pub use activity_setup::{ActivitySetup, SequenceStep};
+pub use activity_setup::{ActivityPage, ActivitySetup, ActivityWidget, SequenceStep};
 mod device;
 mod connection;
 mod appearance;

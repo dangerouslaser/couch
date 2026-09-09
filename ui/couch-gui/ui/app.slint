@@ -1,3 +1,5 @@
+import { ActivityPages, ActivityTile } from "screens/activity_pages.slint";
+export { ActivityTile }
 import { Television, TvChoice } from "screens/tv.slint";
 import { Cinema, PlayerChoice } from "screens/cinema.slint";
 export { PlayerChoice, TvChoice }
@@ -114,6 +116,16 @@ export component App inherits Window {
     /// host's to perform once this key's dispatch has returned.
     callback close-chooser();
 
+    in-out property <bool> custom-activity-shown: false;
+    in-out property <bool> custom-activity-available: false;
+    in-out property <bool> custom-activity-source: false;
+    in-out property <bool> custom-activity-busy: false;
+    in-out property <string> custom-activity-title;
+    in-out property <string> custom-activity-status;
+    in-out property <[ActivityTile]> custom-activity-tiles;
+    in-out property <int> custom-activity-page;
+    in-out property <int> custom-activity-count;
+    callback custom-activity-action(string,int);
     callback open-activity(string);
     callback open-activity-ready(string);
     callback end-activity();
@@ -157,7 +169,7 @@ export component App inherits Window {
     in-out property <int> player-panel: 0;
     in-out property <string> player-panel-detail;
     in-out property <[PlayerChoice]> player-choices;
-    public function focus-player(){cinema.take-focus();}
+    public function focus-player(){if(root.custom-activity-shown){custom-pages.take-focus();}else{cinema.take-focus();}}
     in-out property <bool> light-shown: false;
     in-out property <string> light-title;
     in-out property <string> light-detail;
@@ -393,8 +405,8 @@ export component App inherits Window {
         action(name)=>{root.tv-action(name);}
     }
     cinema := Cinema {
-        visible:root.player-shown;
-        shown:root.player-shown;
+        visible:root.player-shown && !root.custom-activity-shown;
+        shown:root.player-shown && !root.custom-activity-shown;
         width:parent.width;height:parent.height;
         ready:root.player-ready;connected:root.player-connected;paused:root.player-paused;can-seek:root.player-can-seek;
         has-art:root.player-has-art;has-logo:root.player-has-logo;
@@ -406,6 +418,20 @@ export component App inherits Window {
         action(name,value)=>{root.player-action(name,value);}
     }
 
+    custom-pages := ActivityPages {
+        visible:root.player-shown && root.custom-activity-shown;
+        shown:root.player-shown && root.custom-activity-shown;
+        width:parent.width; height:parent.height;
+        title:root.custom-activity-title; activity:root.player-activity;
+        tiles:root.custom-activity-tiles; page:root.custom-activity-page; page-count:root.custom-activity-count;
+        has-source:root.custom-activity-source; busy:root.custom-activity-busy; status:root.custom-activity-status;
+        action(name,index)=>{root.custom-activity-action(name,index);}
+    }
+    if root.custom-activity-available && root.active-activity!="" && !root.custom-activity-shown && (root.player-shown || root.tv-shown): Rectangle {
+        x:parent.width - 112px; y:80px; width:88px; height:44px; border-radius:22px; background:Theme.surface;
+        Text { text:"Pages"; color:Theme.text; font-size:18px; horizontal-alignment:center; vertical-alignment:center; }
+        TouchArea { clicked=>{root.player-action("pages",0);} }
+    }
     if root.activity-running && (root.player-shown || root.tv-shown) && !root.activity-busy: Rectangle {
         x: parent.width - 112px; y: 22px; width: 88px; height: 44px;
         background: #171717; border-radius: 22px;

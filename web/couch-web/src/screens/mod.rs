@@ -262,3 +262,5 @@ mod webos;
 mod kodi;
 
 mod remote;
+
+mod activity_pages;

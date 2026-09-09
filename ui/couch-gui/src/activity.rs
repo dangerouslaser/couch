@@ -1,4 +1,6 @@
-//! Cinema activity controller. All Kodi I/O and image decoding stay off Slint.
+//! Full-screen activity controls. Provider I/O stays outside Slint.
+#[path = "activity_pages.rs"]
+mod pages;
 use crate::{App, PlayerChoice};
 use couch_kodi::{
     playback::{Chapter, Playback},
@@ -6,7 +8,7 @@ use couch_kodi::{
 use couch_control::Kodi;
 use couch_model::{Config, Integration};
 use serde_json::{json, Value};
-use slint::{ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -228,6 +230,7 @@ pub struct Controller {
     error_until: Option<Instant>,
     artwork: super::activity_art::Worker,
     art_key: String,
+    pages: pages::Pages,
 }
 impl Controller {
     pub fn new(app: &App) -> Self {
@@ -238,6 +241,8 @@ impl Controller {
         app.on_player_action(move |action, value| {
             queue.borrow_mut().push((action.into(), value as f64))
         });
+        let queue = input.clone();
+        app.on_custom_activity_action(move |action, value| queue.borrow_mut().push((format!("custom:{action}"), value as f64)));
         let (tx, rx) = mpsc::sync_channel(16);
         let (events, receive) = mpsc::sync_channel(4);
         std::thread::spawn(move || worker(rx, events));
@@ -254,14 +259,52 @@ impl Controller {
             error_until: None,
             artwork: super::activity_art::Worker::new(),
             art_key: String::new(),
+            pages: pages::Pages::new(),
         }
     }
     fn error(&mut self, app: &App, text: &str) {
         app.set_player_message(text.into());
         self.error_until = Some(Instant::now() + Duration::from_secs(4));
     }
-    fn open(&mut self, app: &App, id: &str) {
+    fn open_pages(&mut self, app: &App, config: std::sync::Arc<Config>, id: &str) {
+        let Some(activity) = config.activities.iter().find(|a| a.id.as_str() == id).filter(|a| !a.setup.pages.is_empty()) else { return };
+        self.generation += 1;
+        self.busy = false;
+        self.snapshot = None;
+        self.target = None;
+        let _ = self.tx.try_send((self.generation, Request::Close));
+        if app.get_tv_shown() {
+            app.invoke_tv_action("close".into());
+            app.set_tv_shown(false);
+        }
+        app.set_player_shown(true);
+        app.set_player_panel(0);
+        app.set_player_activity(activity.name.as_str().into());
+        self.pages.open(app, config.clone(), id);
+        app.set_custom_activity_available(true);
+        app.invoke_focus_player();
+        // The TV controller consumes its close request later in this frame and
+        // returns focus to the room. Restore the new page focus after that.
+        let weak = app.as_weak();
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            if let Some(app) = weak.upgrade() {
+                if app.get_custom_activity_shown() { app.invoke_focus_player(); }
+            }
+        });
+    }
+    fn open(&mut self, app: &App, id: &str, custom: bool) {
         app.set_active_activity(if id.starts_with("device:") {""}else{id}.into());
+        self.pages.close(app);
+        app.set_custom_activity_available(false);
+        if let Some(config) = crate::connections::config() {
+            if let Some(activity) = config.activities.iter().find(|a| a.id.as_str()==id) {
+                app.set_custom_activity_available(!activity.setup.pages.is_empty());
+                if custom && activity.setup.custom_screen && !activity.setup.pages.is_empty() {
+                    self.open_pages(app, config.clone(), id);
+                    return;
+                }
+            }
+        }
         if let Some(config) = crate::connections::config()
         {
             let source = config
@@ -283,6 +326,7 @@ impl Controller {
                             .map(|c| c.id.to_string())
                             .unwrap_or_default(),
                     };
+                    app.set_player_shown(false);
                     app.invoke_open_tv(connection.as_str().into(), device.name.as_str().into());
                     return;
                 }
@@ -413,14 +457,27 @@ impl Controller {
     }
     pub fn navigation_pending(&self, app: &App) -> bool {
         self.input.borrow().iter().any(|(action, _)| {
-            action.starts_with("open:") || action == "back" && app.get_player_panel() == 0
+            action.starts_with("open:") || action == "pages" || action == "custom:source" || (action == "back" || action == "custom:back") && app.get_player_panel() == 0
         })
     }
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
         for (action, value) in inputs {
             if let Some(id) = action.strip_prefix("open:") {
-                self.open(app, id);
+                self.open(app, id, true);
+                continue;
+            }
+            if action=="pages" {
+                if let Some(config)=crate::connections::config() {
+                    let id=app.get_active_activity().to_string();
+                    self.open_pages(app, config, &id);
+                }
+                continue;
+            }
+            if let Some(custom)=action.strip_prefix("custom:") {
+                if custom=="source" {let id=app.get_active_activity().to_string();self.open(app,&id,false);}
+                else if custom=="back" {app.invoke_player_action("back".into(),0.);}
+                else {self.pages.handle(app,custom,value as i32);}
                 continue;
             }
             if !app.get_player_shown() {
@@ -435,6 +492,7 @@ impl Controller {
                         self.generation += 1;
                         self.busy = false;
                         self.snapshot = None;
+                        self.pages.close(app);
                         app.set_player_shown(false);
                         app.set_player_message("".into());
                         let _ = self.tx.try_send((self.generation, Request::Close));
@@ -497,6 +555,7 @@ impl Controller {
                 _ => {}
             }
         }
+        self.pages.poll(app);
         while let Ok((g, event)) = self.rx.try_recv() {
             if g != self.generation || !app.get_player_shown() {
                 continue;

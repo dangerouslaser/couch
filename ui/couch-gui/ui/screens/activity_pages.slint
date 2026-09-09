@@ -1,0 +1,60 @@
+import { Theme } from "../theme.slint";
+import { MediaBack } from "../widgets/media-back.slint";
+export struct ActivityTile { label: string, detail: string, icon: image }
+export component ActivityPages inherits Rectangle {
+    in property <bool> shown;
+    in property <string> title;
+    in property <string> activity;
+    in property <[ActivityTile]> tiles;
+    in property <int> page;
+    in property <int> page-count;
+    in property <bool> has-source;
+    in property <bool> busy;
+    in property <string> status;
+    callback action(string, int);
+    in-out property <int> selected: 0;
+    changed page => { root.selected = 0; }
+    public function take-focus() { keys.focus(); }
+    background: Theme.bg;
+    MediaBack { x:24px; y:22px; activate => {root.action("back",0);} }
+    Text { x:88px; y:24px; width:270px; height:28px; text:root.title; color:Theme.text; font-size:26px; font-weight:600; overflow:elide; }
+    Text { x:24px; y:86px; width:parent.width - 48px; height:28px; text:root.activity; color:Theme.text-secondary; font-size:18px; overflow:elide; }
+    for tile[i] in root.tiles: Rectangle {
+        x:24px + mod(i,2)*222px; y:142px + floor(i/2)*166px;
+        width:210px; height:150px; border-radius:16px;
+        background:root.selected==i ? Theme.surface-raised : Theme.surface;
+        border-width:root.selected==i ? 3px : 1px;
+        border-color:root.selected==i ? Theme.accent : Theme.border-raised;
+        opacity:root.busy ? 0.55 : 1;
+        Image { source:tile.icon; x:18px; y:17px; width:30px; height:30px; colorize:Theme.accent; }
+        Text { x:18px; y:58px; width:parent.width - 36px; height:52px; text:tile.label; color:Theme.text; font-size:22px; font-weight:600; wrap:word-wrap; overflow:elide; }
+        Text { x:18px; y:116px; width:parent.width - 36px; height:22px; text:tile.detail; color:Theme.text-secondary; font-size:15px; overflow:elide; }
+        TouchArea { enabled:!root.busy; clicked=>{root.selected=i;root.action("command",i);} }
+    }
+    if root.tiles.length==0: Text { x:32px; y:260px; width:parent.width - 64px; height:120px; text:"Add command buttons to this page in the web UI."; color:Theme.text-secondary; font-size:24px; wrap:word-wrap; horizontal-alignment:center; }
+    Text { x:24px; y:654px; width:parent.width - 48px; height:48px; text:root.status; color:Theme.text-secondary; font-size:18px; wrap:word-wrap; overflow:elide; }
+    Rectangle { x:24px; y:720px; width:72px; height:52px; border-radius:14px; background:Theme.surface;
+        Text { text:"‹"; color:Theme.text; font-size:34px; horizontal-alignment:center; vertical-alignment:center; }
+        TouchArea { enabled:root.page-count>1; clicked=>{root.action("page",-1);} }
+    }
+    Text { x:108px; y:730px; width:110px; height:32px; text:(root.page+1) + " / " + root.page-count; color:Theme.text-secondary; font-size:20px; horizontal-alignment:center; }
+    Rectangle { x:232px; y:720px; width:72px; height:52px; border-radius:14px; background:Theme.surface;
+        Text { text:"›"; color:Theme.text; font-size:34px; horizontal-alignment:center; vertical-alignment:center; }
+        TouchArea { enabled:root.page-count>1; clicked=>{root.action("page",1);} }
+    }
+    if root.has-source: Rectangle { x:320px; y:720px; width:136px; height:52px; border-radius:14px; background:Theme.surface;
+        Text { text:"Media"; color:Theme.text; font-size:20px; horizontal-alignment:center; vertical-alignment:center; }
+        TouchArea { clicked=>{root.action("source",0);} }
+    }
+    keys:=FocusScope { enabled:root.shown;
+        key-pressed(e)=>{
+            if(e.text==Key.UpArrow){root.selected=max(0,root.selected - 2);}
+            if(e.text==Key.DownArrow){root.selected=min(max(0,root.tiles.length - 1),root.selected+2);}
+            if(e.text==Key.LeftArrow){if(mod(root.selected,2)==0){root.action("page",-1);}else{root.selected -= 1;}}
+            if(e.text==Key.RightArrow){if(mod(root.selected,2)==1 || root.selected+1>=root.tiles.length){root.action("page",1);}else{root.selected+=1;}}
+            if(e.text==Key.Return && !root.busy && root.tiles.length>0){root.action("command",root.selected);}
+            if(e.text==Key.Escape || e.text==Key.Home){root.action("back",0);}
+            return accept;
+        }
+    }
+}

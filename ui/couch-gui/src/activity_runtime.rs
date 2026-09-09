@@ -149,6 +149,7 @@ impl Controller {
                 continue;
             };
             if start
+                && !(activity.setup.custom_screen && !activity.setup.pages.is_empty())
                 && !activity.source.as_ref().is_some_and(|id| {
                     config
                         .devices()
@@ -164,7 +165,7 @@ impl Controller {
                 })
             {
                 error = Some(
-                    "Choose this activity's main Kodi or TV screen in the web UI before starting."
+                    "Choose custom pages or a main Kodi/TV screen in the web UI before starting."
                         .into(),
                 );
                 continue;
