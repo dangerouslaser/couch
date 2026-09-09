@@ -233,7 +233,7 @@ impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
         let queue = input.clone();
-        app.on_open_activity(move |id| queue.borrow_mut().push((format!("open:{id}"), 0.)));
+        app.on_open_activity_ready(move |id| queue.borrow_mut().push((format!("open:{id}"), 0.)));
         let queue = input.clone();
         app.on_player_action(move |action, value| {
             queue.borrow_mut().push((action.into(), value as f64))

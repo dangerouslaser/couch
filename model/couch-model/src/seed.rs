@@ -200,6 +200,7 @@ pub(crate) fn seed() -> Config {
 
     let activities = vec![
         Activity {
+            setup: Default::default(),
             id: Id::new("watch-tv"),
             name: "Watch TV".to_string(),
             kind: ActivityKind::Video,
@@ -213,6 +214,7 @@ pub(crate) fn seed() -> Config {
             ],
         },
         Activity {
+            setup: Default::default(),
             id: Id::new("kitchen-radio"),
             name: "Kitchen radio".to_string(),
             kind: ActivityKind::Audio,
@@ -222,6 +224,7 @@ pub(crate) fn seed() -> Config {
             steps: vec![Action::new(Id::new("kitchen-sonos"), "play")],
         },
         Activity {
+            setup: Default::default(),
             id: Id::new("study-music"),
             name: "Study music".to_string(),
             kind: ActivityKind::Audio,
@@ -231,6 +234,7 @@ pub(crate) fn seed() -> Config {
             steps: vec![Action::new(Id::new("study-sonos"), "play")],
         },
         Activity {
+            setup: Default::default(),
             id: Id::new("white-noise"),
             name: "White noise".to_string(),
             kind: ActivityKind::Audio,
@@ -240,6 +244,7 @@ pub(crate) fn seed() -> Config {
             steps: vec![Action::new(Id::new("bedroom-sonos"), "play")],
         },
         Activity {
+            setup: Default::default(),
             id: Id::new("front-door"),
             name: "Front door".to_string(),
             kind: ActivityKind::Video,
@@ -252,6 +257,7 @@ pub(crate) fn seed() -> Config {
         // room at once, which only works if the room has more than one thing
         // to run. These are the other two, on devices it already has.
         Activity {
+            setup: Default::default(),
             id: Id::new("living-podcast"),
             name: "Podcast".to_string(),
             kind: ActivityKind::Audio,
@@ -261,6 +267,7 @@ pub(crate) fn seed() -> Config {
             steps: vec![Action::new(Id::new("living-soundbar"), "on")],
         },
         Activity {
+            setup: Default::default(),
             id: Id::new("living-sport"),
             name: "Sport".to_string(),
             kind: ActivityKind::Video,

@@ -115,6 +115,14 @@ export component App inherits Window {
     callback close-chooser();
 
     callback open-activity(string);
+    callback open-activity-ready(string);
+    callback end-activity();
+    callback cancel-activity();
+    in-out property <bool> activity-busy;
+    in-out property <bool> activity-running;
+    in-out property <bool> activity-keep-awake;
+    in-out property <string> activity-progress;
+    in-out property <string> activity-step;
     callback open-tv(string,string);
     callback tv-action(string);
     in-out property <bool> tv-shown: false;
@@ -393,6 +401,25 @@ export component App inherits Window {
         progress:root.player-progress;message:root.player-message;
         panel:root.player-panel;panel-detail:root.player-panel-detail;choices:root.player-choices;
         action(name,value)=>{root.player-action(name,value);}
+    }
+
+    if root.activity-running && (root.player-shown || root.tv-shown) && !root.activity-busy: Rectangle {
+        x: parent.width - 112px; y: 22px; width: 88px; height: 44px;
+        background: #171717; border-radius: 22px;
+        Text { text: "End"; color: #ffffff; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+        TouchArea { clicked => { root.end-activity(); } }
+    }
+    if root.activity-busy: Rectangle {
+        width: parent.width; height: parent.height; background: #101010;
+        VerticalLayout {
+            padding: 36px; alignment: center; spacing: 20px;
+            Text { text: root.activity-progress; color: #ffffff; font-size: 26px; wrap: word-wrap; horizontal-alignment: center; }
+            Text { text: root.activity-step; color: #bbbbbb; font-size: 20px; horizontal-alignment: center; }
+            Rectangle { height: 52px; border-radius: 26px; background: #292929;
+                Text { text: "Cancel"; color: #ffffff; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { clicked => { root.cancel-activity(); } }
+            }
+        }
     }
 
     wifi-setup := WifiSetup {

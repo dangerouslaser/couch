@@ -246,7 +246,7 @@ fn connection_worker(
     }
 }
 
-fn execute(
+pub(crate) fn execute(
     config: &Config,
     action: &Action,
     denon: &mut HashMap<String, couch_control::Denon>,

@@ -23,6 +23,7 @@ mod home;
 mod lights;
 mod scenes;
 mod activity;
+mod activity_runtime;
 mod activity_buttons;
 mod tv;
 mod connections;
@@ -217,6 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene_controls = scenes::Controller::new(&app);
     let mut activity_controls = activity::Controller::new(&app);
     let mut tv_controls = tv::Controller::new(&app);
+    let mut activity_runtime = activity_runtime::Controller::new(&app);
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -650,7 +652,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut back_hold = input::BackHold::default();
     let exit_device = |app: &App| {
-        if app.get_tv_shown() {
+        if app.get_activity_busy() {
+            app.invoke_cancel_activity();
+        } else if app.get_tv_shown() {
             app.invoke_tv_action("close".into());
         } else if app.get_player_shown() {
             app.set_player_panel(0);
@@ -658,7 +662,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     loop {
-        let back_context = if app.get_tv_shown() || app.get_player_shown() {
+        let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() {
             format!("{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_active_activity())
         } else { String::new() };
         back_hold.context(back_context);
@@ -712,7 +716,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if swallow {
                 continue;
             }
+            if app.get_activity_busy() { continue; }
             if !replayed && button_controls.handle(&app,&press) {continue;}
+            if press.code == 60 && app.get_activity_running() && !press.repeat {
+                app.invoke_end_activity();
+                continue;
+            }
             if press.menu == Some(true) && !app.get_pair_shown() {
                 if app.get_tv_shown() {app.invoke_tv_action("menu".into());}
                 else if app.get_player_shown() {app.invoke_player_action("Input.ContextMenu".into(),0.);}
@@ -921,7 +930,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Standby. Anything a person is looking at or waiting on holds
             // the panel awake and restarts the clock; otherwise it dims, then
             // powers down, on the two idle timers.
-            let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown() || app.get_light_shown();
+            let hold = app.get_activity_busy() || app.get_activity_keep_awake() || app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown() || app.get_light_shown();
             let mut idle = now.saturating_sub(last_input);
             // The panel is meant to be showing something in every state but
             // Off. If the driver says it is asleep anyway - it has happened,
@@ -1003,6 +1012,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        if let Some(error) = activity_runtime.poll(&app) { toast(error, 5); }
         let was_activity = (app.get_player_shown(), app.get_tv_shown());
         let activity_navigation = activity_controls.navigation_pending(&app) || tv_controls.navigation_pending();
         if activity_navigation {screen.snapshot();}

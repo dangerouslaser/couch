@@ -76,6 +76,8 @@ struct NewDevice {
 
 #[derive(Debug, Deserialize)]
 struct NewActivity {
+    #[serde(default)]
+    setup: couch_model::ActivitySetup,
     name: String,
     #[serde(default)]
     kind: ActivityKind,
@@ -640,6 +642,7 @@ impl Api {
             let id = cfg.fresh_activity_id(&new.name);
             created = id.clone();
             cfg.activities.push(Activity {
+                setup: new.setup,
                 id,
                 name: new.name,
                 kind: new.kind,
@@ -756,6 +759,8 @@ impl Api {
     fn replace_activity(&self, body: &[u8], if_match: Option<u64>, id: &str) -> Reply {
         #[derive(Deserialize)]
         struct Body {
+            #[serde(default)]
+            setup: Option<couch_model::ActivitySetup>,
             name: String,
             #[serde(default)]
             kind: ActivityKind,
@@ -774,6 +779,7 @@ impl Api {
         let id = Id::new(id);
         self.edit_found(if_match, move |cfg| {
             let act = cfg.activity_mut(&id)?;
+            if let Some(setup) = incoming.setup { act.setup = setup; }
             act.name = incoming.name;
             act.kind = incoming.kind;
             act.room = incoming.room;
@@ -903,6 +909,7 @@ impl Api {
                     let id = cfg.fresh_activity_id(name);
                     created = id.clone();
                     cfg.activities.push(Activity {
+                        setup: Default::default(),
                         id: id.clone(),
                         name: name.clone(),
                         kind: req.kind,
@@ -1034,6 +1041,32 @@ fn read_body(request: &mut Request) -> Result<Vec<u8>, Reply> {
 #[cfg(test)]
 mod activity_mapping_tests {
     use super::*;
+    #[test]
+    fn activity_setup_survives_legacy_update_and_invalid_edit_is_atomic() {
+        use couch_model::{ActivitySetup, SequenceStep};
+        let dir = std::env::temp_dir().join(format!("couch-api-setup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let api = Api::new(Store::open(dir.join("config.json")).unwrap(), Assets::embedded(), Arc::new(Auth::new(dir.join("pin"), true)));
+        let mut activity = api.with(|s| s.config().activities[0].clone());
+        activity.setup = ActivitySetup {
+            devices: vec!["living-kodi".into()],
+            keep_awake: true,
+            on: vec![SequenceStep::Command { action: Action::new("living-kodi", "home") }, SequenceStep::Delay { ms: 250 }],
+            off: vec![SequenceStep::Command { action: Action::new("living-kodi", "stop") }],
+            ..Default::default()
+        };
+        assert_eq!(api.replace_activity(&serde_json::to_vec(&activity).unwrap(), None, activity.id.as_str()).status, 200);
+        let mut legacy = serde_json::to_value(&activity).unwrap();
+        legacy.as_object_mut().unwrap().remove("setup");
+        legacy["name"] = "Renamed by older client".into();
+        assert_eq!(api.replace_activity(&serde_json::to_vec(&legacy).unwrap(), None, activity.id.as_str()).status, 200);
+        assert_eq!(api.with(|s| s.config().activities[0].setup.clone()), activity.setup);
+        let before = std::fs::read(dir.join("config.json")).unwrap();
+        activity.setup.devices.clear();
+        assert_eq!(api.replace_activity(&serde_json::to_vec(&activity).unwrap(), None, activity.id.as_str()).status, 422);
+        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn activity_update_persists_and_validates_physical_bindings() {
         let dir=std::env::temp_dir().join(format!("couch-api-buttons-{}",std::process::id()));

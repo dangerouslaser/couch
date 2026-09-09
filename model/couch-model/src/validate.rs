@@ -196,6 +196,9 @@ impl Config {
         }
 
         for (i, act) in self.activities.iter().enumerate() {
+            if let Err(message) = act.setup.validate(self) {
+                problems.push(Problem { at: alloc::format!("activities[{i}].setup"), message: message.into() });
+            }
             if self.room(&act.room).is_none() {
                 problems.push(Problem {
                     at: alloc::format!("activities[{i}].room"),

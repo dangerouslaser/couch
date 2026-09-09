@@ -54,6 +54,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod buttons;
 pub mod commands;
+pub mod activity_setup;
+pub use activity_setup::{ActivitySetup, SequenceStep};
 mod device;
 mod connection;
 mod appearance;
@@ -198,6 +200,8 @@ pub struct Scene {
 /// The remote shows one of these in its activity strip while it is running.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Activity {
+    #[serde(default)]
+    pub setup: ActivitySetup,
     pub id: ActivityId,
     pub name: String,
     #[serde(default)]
@@ -420,6 +424,7 @@ impl Config {
             scene.steps.retain(|s| &s.device != device);
         }
         for act in &mut self.activities {
+            act.setup.forget_device(device);
             act.steps.retain(|s| &s.device != device);
             for binding in &mut act.buttons {
                 if binding.action.as_ref().is_some_and(|a| &a.device == device) { binding.action = None; }

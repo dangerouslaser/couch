@@ -7,6 +7,7 @@
 
 pub mod activities;
 mod activity_buttons;
+mod activity_sequences;
 pub mod areas;
 mod home_assistant;
 pub mod overview;
