@@ -219,6 +219,9 @@ export component App inherits Window {
     callback wifi-setup-back();
     public function focus-wifi-setup() { wifi-setup.take-focus(); }
     callback setting-change-wifi();
+    callback setting-recovery-wifi();
+    in-out property <image> wifi-setup-qr;
+    in-out property <bool> wifi-setup-has-qr: false;
     callback setting-toggle-ssh();
     // Which tier the settings menu shows (0 root, 1 display, 2 wifi, 3 ssh),
     // owned here so the host can slide between them. Enter and leave are asks.
@@ -430,6 +433,8 @@ export component App inherits Window {
         shown: root.wifi-setup-shown && !root.keyboard-shown;
         title: root.wifi-setup-title;
         detail: root.wifi-setup-detail;
+        qr: root.wifi-setup-qr;
+        has-qr: root.wifi-setup-has-qr;
         items: root.wifi-setup-items;
         activate(i) => { root.wifi-setup-activate(i); }
         back => { root.wifi-setup-back(); }
@@ -468,6 +473,7 @@ export component App inherits Window {
         dim-changed(i) => { root.dim-index = i; root.setting-dim-changed(i); }
         off-changed(i) => { root.off-index = i; root.setting-off-changed(i); }
         change-wifi => { root.setting-change-wifi(); }
+        recovery-wifi => { root.setting-recovery-wifi(); }
         toggle-ssh => { root.setting-toggle-ssh(); }
         enter(n) => { root.settings-enter(n); }
         leave => { root.settings-leave(); }

@@ -8,6 +8,9 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 #[derive(Clone, Copy, PartialEq)]
 enum Step {
     Closed,
+    Welcome,
+    Recovery,
+    Handoff,
     Scan,
     List,
     Ssid,
@@ -21,6 +24,7 @@ enum Step {
 }
 enum Input {
     Start,
+    Recovery,
     Pick(i32),
     Back,
     Text(String),
@@ -33,12 +37,16 @@ pub struct Controller {
     ssid: String,
     password: String,
     secured: bool,
+    onboarding: bool,
+    ip: String,
 }
 impl Controller {
     pub fn install(app: &App) -> Self {
         let input = Rc::new(RefCell::new(VecDeque::new()));
         let queue = input.clone();
         app.on_setting_change_wifi(move || queue.borrow_mut().push_back(Input::Start));
+        let queue = input.clone();
+        app.on_setting_recovery_wifi(move || queue.borrow_mut().push_back(Input::Recovery));
         let queue = input.clone();
         app.on_wifi_setup_activate(move |i| queue.borrow_mut().push_back(Input::Pick(i)));
         let queue = input.clone();
@@ -47,6 +55,9 @@ impl Controller {
         app.on_keyboard_accepted(move |s| queue.borrow_mut().push_back(Input::Text(s.to_string())));
         let queue = input.clone();
         app.on_keyboard_cancelled(move || queue.borrow_mut().push_back(Input::Back));
+        if std::path::Path::new("/tmp/couch.onboarding").exists() {
+            input.borrow_mut().push_back(Input::Start);
+        }
         Self {
             worker: network::Worker::start(),
             input,
@@ -55,9 +66,13 @@ impl Controller {
             ssid: String::new(),
             password: String::new(),
             secured: false,
+            onboarding: std::path::Path::new("/tmp/couch.onboarding").exists(),
+            ip: String::new(),
         }
     }
     fn page(&self, app: &App, title: &str, detail: &str, labels: Vec<(String, String)>) {
+        app.set_wifi_setup_qr(slint::Image::default());
+        app.set_wifi_setup_has_qr(false);
         app.set_settings_shown(false);
         app.set_wifi_setup_shown(true);
         app.set_wifi_setup_title(title.into());
@@ -171,18 +186,55 @@ impl Controller {
             &[],
         );
     }
+    fn welcome(&mut self, app: &App) {
+        self.step = Step::Welcome;
+        self.buttons(
+            app,
+            "Welcome to couch.",
+            "Connect to Wi-Fi here, then add your rooms and devices in the browser.",
+            &["Set up Wi-Fi", "Recovery hotspot", "Set up later"],
+        );
+    }
+    fn handoff(&mut self, app: &App) {
+        self.step = Step::Handoff;
+        let url = format!("http://{}:8090", self.ip);
+        self.buttons(app, "Make it yours", &format!("{url}\nScan from the same Wi-Fi network. Set your clock, then add connections and rooms."), &["Finish"]);
+        if let Some(qr) = crate::qr::render(&url, 180) {
+            app.set_wifi_setup_qr(qr);
+            app.set_wifi_setup_has_qr(true);
+        }
+    }
     fn close(&mut self, app: &App) {
+        if self.onboarding && self.step != Step::Handoff {
+            self.welcome(app);
+            return;
+        }
         self.step = Step::Closed;
         self.password.clear();
         app.set_wifi_setup_shown(false);
-        app.set_settings_shown(true);
+        app.set_settings_shown(!self.onboarding);
+        if self.onboarding {
+            let _ = std::fs::remove_file("/tmp/couch.onboarding");
+            self.onboarding = false;
+            app.invoke_focus_home();
+        }
     }
     pub fn poll(&mut self, app: &App) {
         loop {
             let input = self.input.borrow_mut().pop_front();
             let Some(input) = input else { break };
             match input {
-                Input::Start if self.step == Step::Closed => self.scan(app),
+                Input::Start if self.step == Step::Closed => {
+                    if self.onboarding {
+                        self.welcome(app);
+                    } else {
+                        self.scan(app);
+                    }
+                }
+                Input::Recovery if self.step == Step::Closed => {
+                    self.step = Step::Recovery;
+                    self.buttons(app, "Recovery hotspot", "This disconnects Wi-Fi and opens Couch-Setup for browser-based recovery. Restart the remote to return to normal Wi-Fi.", &["Start hotspot", "Cancel"]);
+                }
                 Input::Back => match self.step {
                     Step::Closed | Step::Cancelling | Step::Saving => {}
                     Step::Tested | Step::Testing | Step::Scan => self.cancel(app),
@@ -206,6 +258,36 @@ impl Controller {
                 Input::Pick(i) if i >= 0 => {
                     let i = i as usize;
                     match self.step {
+                        Step::Welcome => match i {
+                            0 => self.scan(app),
+                            1 => {
+                                self.step = Step::Recovery;
+                                self.buttons(app, "Recovery hotspot", "This opens Couch-Setup for browser-based recovery. Restart the remote to return to local setup.", &["Start hotspot", "Cancel"]);
+                            }
+                            _ => {
+                                self.step = Step::Handoff;
+                                self.close(app);
+                            }
+                        },
+                        Step::Recovery => {
+                            if i == 0 {
+                                match std::fs::write("/tmp/couch.ap-request", "start") {
+                                    Ok(()) => {
+                                        self.onboarding = false;
+                                        self.close(app);
+                                    }
+                                    Err(_) => self.buttons(
+                                        app,
+                                        "Could not start hotspot",
+                                        "Try again or restart the remote.",
+                                        &["Retry", "Cancel"],
+                                    ),
+                                }
+                            } else {
+                                self.close(app);
+                            }
+                        }
+                        Step::Handoff => self.close(app),
                         Step::List => {
                             if let Some(n) = self.networks.get(i).cloned() {
                                 if !n.supported {
@@ -278,11 +360,17 @@ impl Controller {
                 }
                 Event::Scanned(Err(e)) => self.list(app, &e),
                 Event::Tested(Ok((ssid, ip))) => {
+                    self.ip = ip.clone();
                     self.step = Step::Tested;
                     self.buttons(app,"Connection test passed",&format!("{ssid}\nIP address: {ip}\nSave within 60 seconds, or the previous network will be restored. Internet access was not tested."),&["Save network","Cancel & restore"]);
                 }
-                Event::Tested(Err(e)) => self.list(app, &e),
+                Event::Tested(Err(e)) => self.review(app, &e),
                 Event::Saved(Ok(())) => {
+                    let _ = std::fs::write("/tmp/couch.network-ready", "");
+                    if self.onboarding {
+                        self.handoff(app);
+                        continue;
+                    }
                     self.step = Step::Done;
                     self.buttons(
                         app,

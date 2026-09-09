@@ -82,6 +82,7 @@ export component Settings inherits Rectangle {
     callback dim-changed(int);
     callback off-changed(int);
     callback change-wifi();
+    callback recovery-wifi();
     callback toggle-ssh();
     // Enter panel N, or leave the current tier - the host performs these as
     // slides (like the hub's page changes), so it owns the panel and this only
@@ -105,7 +106,7 @@ export component Settings inherits Rectangle {
     function row-count() -> int {
         if (root.panel == 0) { return root.sections.length; }
         if (root.panel == 1) { return 3; }   // brightness, dim, off
-        if (root.panel == 2) { return 1; }   // change network
+        if (root.panel == 2) { return 2; }   // change network
         return 1;                            // ssh toggle
     }
 
@@ -132,7 +133,10 @@ export component Settings inherits Rectangle {
 
     function activate() {
         if (root.panel == 0) { root.enter(root.sel + 1); return; }
-        if (root.panel == 2) { root.change-wifi(); return; }
+        if (root.panel == 2) {
+            if (root.sel == 0) { root.change-wifi(); } else { root.recovery-wifi(); }
+            return;
+        }
         if (root.panel == 3) { root.toggle-ssh(); return; }
         // Display rows have no OK action; left/right do the work.
     }
@@ -226,6 +230,7 @@ export component Settings inherits Rectangle {
                     stepper: false;
                 }
                 SettingsRow { title: "Change network"; value: ">"; stepper: false; }
+                SettingsRow { title: "Recovery hotspot"; value: ">"; stepper: false; }
             }
 
             // SSH: a single toggle.

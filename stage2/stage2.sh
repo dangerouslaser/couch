@@ -244,7 +244,7 @@ if [ "$WIFI" = "1" ]; then
         NETS=$($BB grep -c "^network=" /tmp/wpa.conf 2>/dev/null)
         echo "= known networks: ${NETS:-0}"
 
-        [ "${NETS:-0}" -gt 0 ] && $BB chroot $A /sbin/wpa_supplicant -i wlan0 \
+        $BB chroot $A /sbin/wpa_supplicant -i wlan0 \
             -Dnl80211 -c /tmp/wpa.conf -B >/tmp/wpa.log 2>&1
 
         # Wait for association rather than guessing: a fixed sleep runs dhcp
@@ -280,18 +280,19 @@ if [ "$WIFI" = "1" ]; then
         mark $((BASE+6)) "S6 assoc=$ST ip=${IP:-none}"
     fi
 
-    # No network: bring up the setup portal so WiFi can be configured without a
-    # USB shell. The passphrase is shown on the panel, so setup requires being
-    # able to see the device.
-    if [ -z "$IP" ]; then
+    # Normal boot always keeps the station radio available to the local UI.
+    # Existing credentials mean an outage, not a new installation.
+    SETUP_MODE=$($BB sh "$(dirname "$0")/setup-mode.sh" "${NETS:-0}" "${COUCH_NO_UI:-0}" "${COUCH_SETUP_AP:-0}")
+    if [ "$SETUP_MODE" = recovery ]; then
         $BB sh "$(dirname "$0")/confirm.sh" >/tmp/confirm.log 2>&1 &
         $BB sh "$(dirname "$0")/portal.sh"
-    else
-        # sshd only once we are actually on a network, and only if the user
-        # enrolled a key or set a root password through the setup portal. The
-        # shipped image trusts nobody by default.
-        echo "= $($BB chroot $A /bin/sh /opt/couch/sshd.sh) ${IP:+on $IP:22}"
+    elif [ "$SETUP_MODE" = local ]; then
+        : > /tmp/couch.onboarding
     fi
+    if [ -n "$IP" ]; then
+        echo "= $($BB chroot $A /bin/sh /opt/couch/sshd.sh) on $IP:22"
+    fi
+
 else
     echo "= wifi parked"
 fi
@@ -317,10 +318,9 @@ fi
 # --- the UI ------------------------------------------------------------------
 # Start it last, so anything above still reports to the screen through fbcon.
 # couch-gui takes the panel over when it starts and shows its own splash.
-# Only when we have a network. With no known WiFi the setup portal owns the
-# screen: it prints its SSID and one-time passphrase through fbcon, and the GUI
-# would paint straight over them.
+# With no saved networks the GUI opens local Wi-Fi onboarding.
 GUI="$(dirname "$0")/couch-gui"
+$BB sh "$(dirname "$0")/setup-watch.sh" >/tmp/setup-watch.log 2>&1 &
 # With no network, portal.sh has already left /tmp/couch.setup behind and the
 # GUI reads it at startup, showing the join QR instead of the room UI. Nothing
 # to pass here: a variable set in this loop's environment could never be

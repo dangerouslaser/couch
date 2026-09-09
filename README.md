@@ -521,7 +521,7 @@ owner-specific:
 
 * **no SSH keys** - enrolment happens through the portal or over USB
 * **no WiFi credentials** - read from Android's store on the device at runtime,
-  or entered through the portal and saved to the Alpine partition
+  or entered on the remote and saved to the Alpine partition
 * **no Android property snapshot** - it contained this unit's serial number, and
   it broke WiFi detection anyway
 
