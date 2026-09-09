@@ -47,7 +47,7 @@ impl Function {
         if let Some(id) = value.strip_prefix("input:").filter(|s| valid_id(s)) {
             return Some(Self::Input(id.into()));
         }
-        if let Some(id) = value.strip_prefix("app:").filter(|s| valid_id(s)) {
+        if let Some(id) = value.strip_prefix("app:").filter(|s| valid_id(s) || crate::valid_app_url(s)) {
             return Some(Self::App(id.into()));
         }
         Some(match value {
@@ -140,7 +140,7 @@ impl Function {
                 }
                 _ => false,
             },
-            Self::App(id) => matches!(integration, Integration::WebOs | Integration::AppleTv) && valid_id(id),
+            Self::App(id) => if matches!(integration, Integration::AndroidTv) { crate::valid_app_url(id) } else { matches!(integration, Integration::WebOs | Integration::AppleTv) && valid_id(id) },
             _ => crate::buttons::functions(integration)
                 .iter()
                 .any(|f| f.0 == self.id()),

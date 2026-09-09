@@ -10,6 +10,7 @@ struct Found {
     port: u16,
 }
 pub fn setup(app: App, connection: &Connection) -> AnyView {
+    let shortcut_id = StoredValue::new(connection.id.clone());
     let apple = connection.provider == Provider::AppleTv;
     let kind = if apple { "appletv" } else { "androidtv" };
     let base = StoredValue::new(format!("/api/connections/{}/{kind}", connection.id));
@@ -94,10 +95,11 @@ pub fn setup(app: App, connection: &Connection) -> AnyView {
                         paired.set(true);
                         token.set(String::new());
                         code.set(String::new());
-                        message.set(
+                        message.set(if apple {
                             "Paired. Add this TV to a room, then map its controls in an activity."
-                                .into(),
-                        );
+                        } else {
+                            "Paired. Add this TV to a room and select it on the remote to take control."
+                        }.into());
                     }
                     "pairing" => {
                         token.set(String::new());
@@ -126,14 +128,43 @@ pub fn setup(app: App, connection: &Connection) -> AnyView {
   <p class="dim">{if apple{"Discovery fills in the Companion port. Keep the Apple TV awake while pairing; an Apple ID password is not needed."}else{"Keep Android TV Remote Service enabled. Pairing uses port 6467; ADB and developer mode are not required."}}</p>
   {move ||if token.get().is_empty(){view!{<div class="actions"><button class="primary" disabled=move ||busy.get() on:click=move |_|request("pair-start")>{move ||if paired.get(){"Pair again"}else{"Show pairing code on TV"}}</button><button disabled=move ||busy.get()||!paired.get() on:click=move |_|request("status")>"Test connection"</button></div>}.into_any()}else{view!{<label class="field">"Code shown on the TV"<input aria-label="TV pairing code" autocomplete="off" maxlength=if apple{4}else{6} prop:value=move ||code.get() on:input=move |e|code.set(event_target_value(&e))/></label><div class="actions"><button class="primary" disabled=move ||busy.get() on:click=move |_|request("pair-finish")>"Verify & save pairing"</button><button disabled=move ||busy.get() on:click=move |_|request("pairing")>"Cancel pairing"</button></div>}.into_any()}}
   <p role="status">{move ||message.get()}</p>
+  {move ||if !apple && paired.get(){shortcuts(app,shortcut_id.get_value())}else{().into_any()}}
  }.into_any()
 }
 
 pub(super) fn controls(app: App, base: String) -> AnyView {
+    let android = base.contains("/androidtv");
     let base = StoredValue::new(base);
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
-    view!{<section><p class="dim">"Experimental controls. Add this device to an activity to map physical buttons."</p><div class="actions">{
+    view!{<section><p class="dim">{if android {"Select this device on the remote to take control with its physical buttons."} else {"Experimental controls. Add this device to an activity to map physical buttons."}}</p><div class="actions">{
   [("up","Up"),("down","Down"),("left","Left"),("right","Right"),("ok","OK"),("back","Back"),("home","Home"),("play-pause","Play / pause"),("volume-down","Volume −"),("volume-up","Volume +")].into_iter().map(move |(command,label)|view!{<button disabled=move ||busy.get() on:click=move |_|{if busy.get_untracked(){return}busy.set(true);spawn_local(async move{let result=api::ha("POST",&format!("{}/command",base.get_value()),Some(json!({"command":command}))).await;if busy.try_get_untracked().is_none(){return}match result{Ok(_)=>message.set("Command sent.".into()),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>{label}</button>}).collect_view()
  }</div><p role="status">{move ||message.get()}</p></section>}.into_any()
+}
+
+fn shortcuts(app: App, id: couch_model::Id) -> AnyView {
+    let initial = app
+        .config
+        .get_untracked()
+        .and_then(|c| c.app_shortcuts.get(&id).cloned())
+        .unwrap_or_default();
+    let rows = RwSignal::new(
+        initial
+            .into_iter()
+            .map(|row| (RwSignal::new(row.name), RwSignal::new(row.url)))
+            .collect::<Vec<_>>(),
+    );
+    let endpoint = StoredValue::new(format!("/api/connections/{id}/androidtv/apps"));
+    view!{<section class="creation"><h3>"App shortcuts"</h3>
+      <p class="dim">"Add your favorite apps using their launch links. These are configured shortcuts, not a list of installed apps. Links open only if the TV has an app that handles them. Do not include login credentials."</p>
+      {move ||rows.get().into_iter().enumerate().map(move |(i,(name,url))|view!{<div class="card">
+        <label class="field">"App name"<input aria-label=format!("App {} name",i+1) maxlength="64" prop:value=move ||name.get() on:input=move |e|name.set(event_target_value(&e))/></label>
+        <label class="field">"App launch link"<input aria-label=format!("App {} launch link",i+1) maxlength="2048" placeholder="https://www.youtube.com/" prop:value=move ||url.get() on:input=move |e|url.set(event_target_value(&e))/></label>
+        <div class="actions"><button disabled=i==0 aria-label=format!("Move app {} up",i+1) on:click=move |_|rows.update(|r|{if i>0 && i<r.len(){r.swap(i,i-1)}})>"Move up"</button>
+        <button disabled=move ||i+1>=rows.get().len() aria-label=format!("Move app {} down",i+1) on:click=move |_|rows.update(|r|{if i+1<r.len(){r.swap(i,i+1)}})>"Move down"</button>
+        <button aria-label=format!("Remove app {}",i+1) on:click=move |_|rows.update(|r|{if i<r.len(){r.remove(i);}})>"Remove"</button></div>
+      </div>}).collect_view()}
+      <div class="actions"><button disabled=move ||rows.get().len()>=24 on:click=move |_|rows.update(|r|r.push((RwSignal::new(String::new()),RwSignal::new(String::new()))))>"Add app shortcut"</button>
+      <button class="primary" on:click=move |_|app.run(api::put(endpoint.get_value(),rows.get_untracked().into_iter().map(|(name,url)|couch_model::AppShortcut{name:name.get_untracked(),url:url.get_untracked()}).collect::<Vec<_>>()))>"Save app shortcuts"</button></div>
+    </section>}.into_any()
 }

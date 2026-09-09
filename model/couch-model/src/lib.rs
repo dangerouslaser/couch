@@ -54,6 +54,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod buttons;
 pub mod commands;
+mod app_shortcuts;
+pub use app_shortcuts::{AppShortcut, valid_app_url};
 pub mod activity_setup;
 pub use activity_setup::{ActivityPage, ActivitySetup, ActivityWidget, SequenceStep};
 mod device;
@@ -110,6 +112,8 @@ pub struct Config {
     pub remote: RemoteSettings,
     #[serde(default)]
     pub connections: Vec<Connection>,
+    #[serde(default, skip_serializing_if = "alloc::collections::BTreeMap::is_empty")]
+    pub app_shortcuts: alloc::collections::BTreeMap<Id, Vec<AppShortcut>>,
     #[serde(default)]
     pub areas: Vec<Area>,
     #[serde(default)]
@@ -128,6 +132,7 @@ impl Default for Config {
             appearance: Appearance::default(),
             remote: RemoteSettings::default(),
             connections: Vec::new(),
+            app_shortcuts: Default::default(),
             areas: Vec::new(),
             rooms: Vec::new(),
             scenes: Vec::new(),

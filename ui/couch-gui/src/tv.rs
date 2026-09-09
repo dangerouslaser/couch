@@ -1,8 +1,10 @@
-//! LG TV control: one background owner, bounded input, no network on the UI thread.
+//! TV control: one background owner, bounded input, no network on the UI thread.
+#[path = "tv_android.rs"]
+mod android;
 use crate::{home, App, TvChoice};
+use couch_control::WebOs as Client;
 use couch_webos::{Button, Playback, Settings};
 use serde_json::json;
-use couch_control::WebOs as Client;
 use slint::{ModelRc, VecModel};
 use std::{
     cell::RefCell,
@@ -24,6 +26,8 @@ enum Command {
     Power,
     Play(bool),
     Retry,
+    Next(bool),
+    Stop,
     Rewind(bool),
     Input(String),
     App(String),
@@ -66,6 +70,9 @@ fn command(name: &str) -> Option<Command> {
         "play" => Command::Play(true),
         "pause" => Command::Play(false),
         "retry" => Command::Retry,
+        "next" => Command::Next(true),
+        "previous" => Command::Next(false),
+        "stop" => Command::Stop,
         "rewind" => Command::Rewind(false),
         "forward" => Command::Rewind(true),
         _ => return None,
@@ -86,6 +93,8 @@ fn execute(c: &mut Client, action: &Command) -> couch_control::Result<()> {
             Playback::Pause
         }),
         Command::Retry => Ok(()),
+        Command::Next(_) => Err(couch_control::Error::Rejected),
+        Command::Stop => c.playback(Playback::Stop),
         Command::Rewind(forward) => c.playback(if *forward {
             Playback::FastForward
         } else {
@@ -337,6 +346,8 @@ struct Event {
 fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<AtomicU64>) {
     let mut credentials = home::path("webos-connection.json");
     let mut client = None;
+    let mut android_client = None;
+    let mut android_mode = false;
     let mut generation = 0;
     let mut refreshed = Instant::now();
     let mut waking: Option<Instant> = None;
@@ -350,6 +361,8 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
         let current = active.load(Ordering::SeqCst);
         if current != generation {
             client = None;
+            android_client = None;
+            android_mode = false;
             generation = current;
             waking = None;
             view = None;
@@ -362,13 +375,34 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             {
                 continue;
             }
+            let provider = crate::connections::config().and_then(|c| {
+                c.connection(&couch_model::Id::new(&w.connection))
+                    .map(|c| c.provider.clone())
+            });
+            android_mode = provider == Some(couch_model::Provider::AndroidTv);
+            if android_mode {
+                let result = android::run(&mut android_client, &w, &active);
+                match result {
+                    Ok(Some(event)) => {
+                        let _ = tx.try_send(event);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        android_client = None;
+                        let _ = tx.try_send(Event {
+                            generation,
+                            details: None,
+                            status: Err(error),
+                        });
+                    }
+                }
+                if matches!(w.action, Command::Retry) {
+                    refreshed = Instant::now();
+                }
+                continue;
+            }
             credentials = crate::connections::file(&w.connection, "webos");
-            if !w.connection.is_empty()
-                && !crate::connections::config().is_some_and(|c| {
-                    c.connection(&couch_model::Id::new(&w.connection))
-                        .is_some_and(|c| c.provider == couch_model::Provider::WebOs)
-                })
-            {
+            if !w.connection.is_empty() && provider != Some(couch_model::Provider::WebOs) {
                 continue;
             }
             if matches!(w.action, Command::Power) {
@@ -437,6 +471,23 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                         status: Ok(String::new()),
                         details: Some(fresh),
                     });
+                }
+            }
+            refreshed = Instant::now();
+        } else if current != 0 && android_mode && refreshed.elapsed() >= Duration::from_secs(4) {
+            if let Some(c) = android_client.as_ref() {
+                match android::refresh(c, generation) {
+                    Ok(event) => {
+                        let _ = tx.try_send(event);
+                    }
+                    Err(error) => {
+                        android_client = None;
+                        let _ = tx.try_send(Event {
+                            generation,
+                            details: None,
+                            status: Err(error),
+                        });
+                    }
                 }
             }
             refreshed = Instant::now();
@@ -562,6 +613,11 @@ impl Controller {
             let action = if let Some(target) = action.strip_prefix("open:") {
                 let (connection, name) = target.split_once('/').unwrap_or(("", target));
                 self.connection = connection.into();
+                let android = crate::connections::config().is_some_and(|c| {
+                    c.connection(&couch_model::Id::new(connection))
+                        .is_some_and(|c| c.provider == couch_model::Provider::AndroidTv)
+                });
+                app.set_tv_android(android);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 self.choices.clear();
@@ -584,6 +640,28 @@ impl Controller {
                 continue;
             }
             if ["inputs", "apps", "picture", "sound"].contains(&action) {
+                if app.get_tv_android() && action != "apps" {
+                    app.set_tv_error("This control is only available for LG webOS TVs".into());
+                    continue;
+                }
+                if app.get_tv_android() {
+                    self.choices = crate::connections::config()
+                        .and_then(|c| {
+                            c.app_shortcuts
+                                .get(&couch_model::Id::new(&self.connection))
+                                .cloned()
+                        })
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|app| {
+                            (
+                                format!("app:{}", app.url),
+                                app.name,
+                                "Configured shortcut".into(),
+                            )
+                        })
+                        .collect();
+                }
                 let panel = match action {
                     "inputs" => 1,
                     "apps" => 2,
@@ -704,6 +782,97 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn android_screen_routes_physical_keys_without_an_overlay() {
+        if std::env::var_os("COUCH_TEST_ANDROID_KEYS").is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tv::tests::android_screen_routes_physical_keys_without_an_overlay",
+                ])
+                .env("COUCH_TEST_ANDROID_KEYS", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        use slint::{
+            platform::{Key, WindowEvent},
+            ComponentHandle,
+        };
+        let window =
+            crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480, 800)).unwrap();
+        let app = App::new().unwrap();
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let received = actions.clone();
+        app.on_tv_action(move |name| received.borrow_mut().push(name.to_string()));
+        app.set_tv_android(true);
+        app.set_tv_shown(true);
+        app.show().unwrap();
+        app.invoke_focus_tv();
+        for key in [
+            Key::UpArrow,
+            Key::DownArrow,
+            Key::LeftArrow,
+            Key::RightArrow,
+            Key::Return,
+            Key::Escape,
+            Key::Home,
+            Key::F13,
+            Key::F14,
+            Key::F23,
+            Key::F24,
+            Key::F21,
+            Key::F22,
+        ] {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: char::from(key).to_string().into(),
+            });
+        }
+        assert_eq!(
+            &*actions.borrow(),
+            &[
+                "up",
+                "down",
+                "left",
+                "right",
+                "ok",
+                "back",
+                "home",
+                "power",
+                "toggle-mute",
+                "volume-up",
+                "volume-down",
+                "channel-up",
+                "channel-down"
+            ]
+        );
+        assert_eq!(app.get_tv_panel(), 0);
+        if let Some(path) = std::env::var_os("COUCH_ANDROID_SCREENSHOT") {
+            app.set_tv_title("Android TV".into());
+            app.set_tv_source("MiTV-AFMU0".into());
+            app.set_tv_status("TV on · Volume 12".into());
+            window.draw_if_needed(|renderer| {
+                let mut pixels = vec![slint::Rgb8Pixel::default(); 480 * 800];
+                renderer.render(&mut pixels, 480);
+                let bytes: Vec<u8> = pixels.into_iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+                image::save_buffer(
+                    std::path::Path::new(&path),
+                    &bytes,
+                    480,
+                    800,
+                    image::ColorType::Rgb8,
+                )
+                .unwrap();
+            });
+        }
+        app.hide().unwrap();
+    }
     #[test]
     fn physical_actions_are_explicit_and_back_belongs_to_tv() {
         assert!(matches!(command("back"), Some(Command::Key(Button::Back))));

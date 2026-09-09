@@ -14,9 +14,58 @@ impl Api {
         body: &[u8],
         revision: Option<u64>,
     ) -> Reply {
-        if let [id,"denon",rest @ ..] = path {
-            let settings=self.with(|s|match &s.config().connection(&Id::new(*id))?.provider {Provider::Denon{host,port}=>Some(couch_denon::Settings{host:host.clone(),port:*port}),_=>None});
-            return match settings {Some(settings)=>super::denon::route(method,rest,body,settings),None=>Reply::error(404,"Denon connection not found")};
+        if let [id, "androidtv", "apps"] = path {
+            let id = Id::new(*id);
+            if !self.with(|s| {
+                s.config()
+                    .connection(&id)
+                    .is_some_and(|c| c.provider == Provider::AndroidTv)
+            }) {
+                return Reply::error(404, "Android TV connection not found");
+            }
+            return match method {
+                "GET" => self.with(|s| {
+                    Reply::json(
+                        200,
+                        &s.config()
+                            .app_shortcuts
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                }),
+                "PUT" => {
+                    let apps: Vec<couch_model::AppShortcut> = match parse(body) {
+                        Ok(v) => v,
+                        Err(r) => return r,
+                    };
+                    self.edit_found(revision, move |c| {
+                        if c.connection(&id)?.provider != Provider::AndroidTv {
+                            return None;
+                        }
+                        if apps.is_empty() {
+                            c.app_shortcuts.remove(&id);
+                        } else {
+                            c.app_shortcuts.insert(id, apps);
+                        }
+                        Some(())
+                    })
+                }
+                _ => Reply::error(405, "Use GET or PUT for app shortcuts"),
+            };
+        }
+        if let [id, "denon", rest @ ..] = path {
+            let settings = self.with(|s| match &s.config().connection(&Id::new(*id))?.provider {
+                Provider::Denon { host, port } => Some(couch_denon::Settings {
+                    host: host.clone(),
+                    port: *port,
+                }),
+                _ => None,
+            });
+            return match settings {
+                Some(settings) => super::denon::route(method, rest, body, settings),
+                None => Reply::error(404, "Denon connection not found"),
+            };
         }
         if let [id, kind @ ("hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv"), rest @ ..] =
             path
@@ -129,6 +178,7 @@ impl Api {
                 self.edit_found(revision, move |c| {
                     let at = c.connections.iter().position(|c| c.id == id)?;
                     c.connections.remove(at);
+                    c.app_shortcuts.remove(&id);
                     Some(())
                 })
             }
@@ -153,4 +203,58 @@ pub(super) fn lock_for(path: &std::path::Path) -> std::sync::Arc<std::sync::Mute
     let lock = Arc::new(Mutex::new(()));
     locks.insert(path.into(), Arc::downgrade(&lock));
     lock
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+    #[test]
+    fn shortcuts_are_revisioned_validated_and_deleted_with_connection() {
+        use crate::{assets::Assets, auth::Auth, store::Store};
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!("couch-app-shortcuts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = couch_model::Config::default();
+        config.connections.push(Connection {
+            id: "tv".into(),
+            name: "TV".into(),
+            provider: Provider::AndroidTv,
+        });
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let api = Api::new(
+            Store::open(dir.join("config.json")).unwrap(),
+            Assets::embedded(),
+            Arc::new(Auth::new(dir.join("pin"), true)),
+        );
+        let path = ["tv", "androidtv", "apps"];
+        let body = br#"[{"name":"YouTube","url":"https://www.youtube.com/"}]"#;
+        assert_eq!(
+            api.connection_route("PUT", &path, body, Some(0)).status,
+            200
+        );
+        assert_eq!(
+            api.connection_route("PUT", &path, b"[]", Some(0)).status,
+            409
+        );
+        let invalid = br#"[{"name":"Bad","url":"https://user:secret@host/"}]"#;
+        assert_eq!(
+            api.connection_route("PUT", &path, invalid, Some(1)).status,
+            422
+        );
+        assert_eq!(
+            api.with(|s| s.config().app_shortcuts[&Id::new("tv")].len()),
+            1
+        );
+        assert_eq!(api.connection_route("GET", &path, b"", None).status, 200);
+        assert_eq!(
+            api.connection_route("DELETE", &["tv"], b"", Some(1)).status,
+            200
+        );
+        assert!(api.with(|s| s.config().app_shortcuts.is_empty()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
