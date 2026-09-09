@@ -134,7 +134,13 @@ impl Controller {
                     .activities
                     .iter()
                     .find(|a| a.id.as_str() == context)
-                    .map(|a| a.buttons.iter().filter(|b| !(b.button == Button::Back && b.gesture == Gesture::Long)).cloned().collect())
+                    .map(|a| {
+                        a.buttons
+                            .iter()
+                            .filter(|b| !(b.button == Button::Back && b.gesture == Gesture::Long))
+                            .cloned()
+                            .collect()
+                    })
                     .unwrap_or_default();
                 self.config = config;
             }
@@ -271,6 +277,29 @@ pub(crate) fn execute(
         _ => "",
     };
     match integration {
+        Integration::Ir { codeset } => {
+            let codes = couch_ir::codeset::load(&crate::home::path("ir"), &codeset)
+                .map_err(|e| e.to_string())?;
+            // Each dispatched action is one logical command, without hidden
+            // retries/repeats. Keep RC5/RC6 toggle state per target, including
+            // when activities alternate between different IR devices.
+            static TOGGLES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
+                std::sync::OnceLock::new();
+            let message = {
+                let mut states = TOGGLES
+                    .get_or_init(Default::default)
+                    .lock()
+                    .map_err(|_| "IR command state unavailable")?;
+                let toggle = states.entry(device.id.to_string()).or_insert(false);
+                let message = ir_message(&codes, &command, *toggle)?;
+                *toggle = !*toggle;
+                message
+            };
+            let mut blaster = couch_ir::tx::Irtx::open("/dev/irtx").map_err(|e| e.to_string())?;
+            couch_ir::tx::transmit(&mut blaster, &message, 0)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
         Integration::AndroidTv | Integration::AppleTv => {
             let kind = if matches!(integration, Integration::AppleTv) {
                 "appletv"
@@ -319,7 +348,9 @@ pub(crate) fn execute(
             let c = denon.get_mut(&key).unwrap();
             let result = (|| {
                 use couch_denon::Command as C;
-                if command==F::Mute{return c.toggle_mute().map(|_|());}
+                if command == F::Mute {
+                    return c.toggle_mute().map(|_| ());
+                }
                 let cmd = match command {
                     F::PowerOn => C::Power(true),
                     F::PowerOff => C::Power(false),
@@ -390,7 +421,11 @@ pub(crate) fn execute(
                 let settings = couch_webos::Settings::load(&path).map_err(|e| e.to_string())?;
                 let preference = couch_webos::power::PowerSettings::load(&path, &settings.url)?;
                 if preference.method == couch_webos::power::Method::Ir {
-                    return preference.transmit(if command == F::PowerOn { "power-on" } else { "power-off" });
+                    return preference.transmit(if command == F::PowerOn {
+                        "power-on"
+                    } else {
+                        "power-off"
+                    });
                 }
             }
             if command == F::PowerOn {
@@ -453,9 +488,43 @@ pub(crate) fn execute(
     }
 }
 
+fn ir_message(
+    codes: &couch_ir::codeset::Codeset,
+    command: &F,
+    toggle: bool,
+) -> Result<couch_ir::proto::Message, String> {
+    codes
+        .get(&command.id())
+        .ok_or_else(|| format!("No IR code assigned to {}", command.id()))?
+        .encode(toggle)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn infrared_discrete_power_never_falls_back_to_toggle() {
+        let codes =
+            couch_ir::codeset::Codeset::parse("fixture", "toggle nec 4 8\nvolume-up nec 4 2\n")
+                .unwrap();
+        assert!(ir_message(&codes, &F::Toggle, false).is_ok());
+        assert!(ir_message(&codes, &F::VolumeUp, false).is_ok());
+        assert!(ir_message(&codes, &F::PowerOn, false)
+            .unwrap_err()
+            .contains("No IR code assigned"));
+        assert!(ir_message(&codes, &F::PowerOff, false).is_err());
+    }
+
+    #[test]
+    fn infrared_actions_preserve_rc_toggle_and_exact_assignment() {
+        let codes = couch_ir::codeset::Codeset::parse("fixture", "ok rc5 0 1\n").unwrap();
+        let first = ir_message(&codes, &F::Ok, false).unwrap();
+        let next = ir_message(&codes, &F::Ok, true).unwrap();
+        assert_ne!(format!("{first:?}"), format!("{next:?}"));
+        assert!(ir_message(&codes, &F::Back, false).is_err());
+    }
+
     fn fixture() -> (Controller, mpsc::Receiver<Request>) {
         let (tx, rx) = mpsc::sync_channel(8);
         let (_, out) = mpsc::channel();

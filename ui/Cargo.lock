@@ -920,6 +920,7 @@ dependencies = [
  "couch-denon",
  "couch-ha",
  "couch-hue",
+ "couch-ir",
  "couch-kodi",
  "couch-model",
  "couch-voice",
