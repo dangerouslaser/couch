@@ -26,6 +26,11 @@ mod activity;
 mod activity_buttons;
 mod tv;
 mod connections;
+mod config_snapshot;
+mod input;
+mod navigation;
+use input::{Standby,TouchDisposition,touch_disposition,wake};
+use navigation::Intent;
 mod remote_clock;
 mod activity_art;
 mod icons;
@@ -35,114 +40,17 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::LogicalPosition;
 use slint::{Model, ModelRc, PhysicalSize, SharedString, VecModel};
 
 use keypad::{now_monotonic_us, Keypad};
-use panel::{Arrive, CouchPlatform, Panel, SlideCost, SLIDE};
+use panel::{Arrive, CouchPlatform, Panel, SLIDE};
 use system::Approval;
 
 slint::include_modules!();
 
 const BACKGROUND: u32 = 0x09090b;
-
-/// A page change the UI asked for. The callback that asked records it and
-/// nothing else; the loop performs it once the event that caused it has been
-/// dispatched. A transition renders a frame and draws to the panel, and the
-/// window's `draw_if_needed` cannot be re-entered from inside a Slint
-/// callback - so a callback only ever says what it wants, and the ways the
-/// chooser closes from inside app.slint are callbacks too, for the same
-/// reason.
-#[derive(Copy, Clone, Debug)]
-enum Intent {
-    /// Step the area by this many, wrapping; the sign is the direction.
-    Area(i32),
-    /// Show the chooser. Its content is already set by the time this is asked.
-    OpenChooser,
-    CloseChooser,
-    /// The settings menu, and its tiers - all slid the way the chooser is.
-    OpenSettings,
-    /// Enter a settings panel (1 display, 2 wifi, 3 ssh); slides from the right.
-    SettingsEnter(i32),
-    /// Climb a settings tier, or close from the root; slides from the left.
-    SettingsBack,
-}
-
-/// How much of the panel is on.
-///
-/// Three levels, two timers. Dimmed, the screen is still readable and the
-/// first key acts as it always would; off, the panel is powered down (LCM,
-/// backlight PWM and the touch controller all suspended by the driver) and
-/// the first key only wakes it - a dark remote should not change the house
-/// because someone found the wrong button in the dark. The microphone key is
-/// the exception: holding it in the dark means "talk", so it wakes and records.
-/// A first tap wakes from dim without selecting a target. Full powerdown
-/// suspends the touch controller and still requires a button to wake.
-///
-/// A pairing PIN on screen, a recording in progress, or first-run setup hold
-/// the panel awake: each is something a person is looking at or waiting on.
-///
-/// A second after every wake the backlight is written once more, forced past
-/// the LED layer's deduplication - see `Panel::set_backlight` for the dropped
-/// write that left the panel stuck dim while the LED node said 255.
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum Standby {
-    Active,
-    Dim,
-    Off,
-}
-
-
-#[derive(Debug, PartialEq)]
-enum TouchDisposition {
-    Ignore,
-    Wake,
-    Dispatch,
-}
-
-fn touch_disposition(state: Standby, event: &touch::Event, swallow: &mut bool) -> TouchDisposition {
-    if state == Standby::Off {
-        return TouchDisposition::Ignore;
-    }
-    if *swallow {
-        if matches!(event, touch::Event::Released { .. }) {
-            *swallow = false;
-        }
-        return TouchDisposition::Ignore;
-    }
-    if state == Standby::Dim {
-        if matches!(event, touch::Event::Pressed { .. }) {
-            *swallow = true;
-            return TouchDisposition::Wake;
-        }
-        return TouchDisposition::Ignore;
-    }
-    TouchDisposition::Dispatch
-}
-
-/// Bring the panel back, then bring Slint's clock up to date.
-///
-/// Both the unblank (~430ms of panel re-init) and a backlight write (it goes
-/// through the display's command queue and can block for a frame or more)
-/// happen inside this call, and an animation started afterwards takes its
-/// start time from the tick `update_timers_and_animations` last set - before
-/// the block. A key dispatched straight after a wake then started its ring
-/// animation already most of the way through: two frames instead of ten,
-/// measured. Refreshing the tick here is what makes the first press after a
-/// wake glide like any other.
-fn wake(screen: &mut Panel, level: u8) {
-    let started = now_monotonic_us();
-    if screen.unblank_if_asleep() {
-        println!("couch-gui: standby: panel was asleep, unblanked");
-    }
-    let presented = now_monotonic_us();
-    Panel::set_backlight(level);
-    println!("couch-gui: wake: panel/present={}ms, backlight={}ms",
-             (presented - started) / 1000, (now_monotonic_us() - presented) / 1000);
-    slint::platform::update_timers_and_animations();
-}
 
 fn env_secs(name: &str, default: u64) -> u64 {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
@@ -300,6 +208,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         areas[0].rooms.truncate(n);
     }
 
+    couch_control::use_socket(home::path("control.sock"));
+    config_snapshot::start(home::path("config.json"));
     let mut loaded_home = String::new();
     if let Some((raw, saved, accent)) = home::read(&loaded_home) { home::apply_accent(&app,accent); loaded_home = raw; areas = saved; }
     let mut light_controls = lights::Controller::install(&app);
@@ -449,10 +359,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ask = ask.clone();
         app.on_room_scenes(move || {
             let Some(app) = weak.upgrade() else { return };
-            let Ok(bytes) = std::fs::read(home::path("config.json")) else {
-                return;
-            };
-            let Ok(cfg) = serde_json::from_slice::<couch_model::Config>(&bytes) else {
+            let Some(cfg) = connections::config() else {
                 return;
             };
             let room = couch_model::Id::new(app.get_light_room_id().as_str());
@@ -537,125 +444,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Reports what it cost as frames: B's rasterisation and then one per
     // transition frame, so the five-second line counts them with the rest.
-    let transition = {
-        let areas = areas.clone();
-        let current = current.clone();
-        let put_front = put_front.clone();
-        let report = std::env::var_os("COUCH_REGION").is_some();
-        move |screen: &mut Panel, window: &MinimalSoftwareWindow, app: &App, what: Intent|
-              -> Option<SlideCost> {
-            let chooser = app.get_chooser_shown();
-            let status = (0u32, app.get_status_h().round() as u32);
-            let dots = (app.get_dots_y().round() as u32, app.get_dots_h().round() as u32);
-            let (above, above_and_pager) = ([status], [status, dots]);
-            let from;
-            let keep: &[(u32, u32)];
-            match what {
-                Intent::Area(delta) => {
-                    let cur = current.get();
-                    let next = (cur as i32 + delta).rem_euclid(areas.borrow().len() as i32) as usize;
-                    if next == cur {
-                        return None;
-                    }
-                    current.set(next);
-                    if chooser {
-                        // The hub is off screen behind the chooser (COUCH_SLIDE
-                        // under COUCH_OPEN): change the page where it is. There
-                        // is nothing to see, so nothing to slide.
-                        put_front(app, next);
-                        return None;
-                    }
-                    screen.snapshot();
-                    app.set_ring_hidden(true);
-                    put_front(app, next);
-                    from = if delta > 0 { Arrive::FromRight } else { Arrive::FromLeft };
-                    keep = &above_and_pager[..];
-                }
-                Intent::OpenChooser => {
-                    if chooser {
-                        return None;
-                    }
-                    screen.snapshot();
-                    app.set_ring_hidden(true);
-                    app.set_chooser_shown(true);
-                    from = Arrive::FromRight;
-                    keep = &above[..];
-                }
-                Intent::CloseChooser => {
-                    if !chooser {
-                        return None;
-                    }
-                    screen.snapshot();
-                    app.set_ring_hidden(true);
-                    app.set_chooser_shown(false);
-                    from = Arrive::FromLeft;
-                    keep = &above[..];
-                }
-                Intent::OpenSettings => {
-                    if app.get_settings_shown() {
-                        return None;
-                    }
-                    // Prime settings; Wi-Fi status also refreshes on the service tick.
-                    app.set_wifi_ssid(system::wifi_ssid().into());
-            app.set_wifi_signal(system::wifi_dbm().map(|dbm| format!("{dbm} dBm")).unwrap_or_else(|| "—".into()).into());
-                    app.set_ssh_available(system::ssh_available());
-                    app.set_ssh_on(system::ssh_running());
-                    screen.snapshot();
-                    app.set_settings_panel(0);
-                    app.set_settings_shown(true);
-                    from = Arrive::FromRight;
-                    keep = &above[..];
-                }
-                Intent::SettingsEnter(panel) => {
-                    if !app.get_settings_shown() {
-                        return None;
-                    }
-                    screen.snapshot();
-                    app.set_settings_panel(panel);
-                    from = Arrive::FromRight;
-                    keep = &above[..];
-                }
-                Intent::SettingsBack => {
-                    if !app.get_settings_shown() {
-                        return None;
-                    }
-                    screen.snapshot();
-                    // From a panel, back to the root; from the root, out to the
-                    // hub. Both slide the same way, back the way we came.
-                    if app.get_settings_panel() > 0 {
-                        app.set_settings_panel(0);
-                    } else {
-                        app.set_settings_shown(false);
-                    }
-                    from = Arrive::FromLeft;
-                    keep = &above[..];
-                }
-            }
-            slint::platform::update_timers_and_animations();
-            let mut cost = SlideCost::default();
-            if let Some(us) = screen.render_offscreen(window) {
-                if report {
-                    println!("couch-gui: slide: page B rendered in {us} us");
-                }
-                cost.frames += 1;
-                cost.work_us += us;
-                cost.max_us = us;
-                let slid = screen.slide(from, keep, SLIDE);
-                cost.frames += slid.frames;
-                cost.work_us += slid.work_us;
-                cost.wait_us += slid.wait_us;
-                cost.max_us = cost.max_us.max(slid.max_us);
-            }
-            // The ring's fade takes its start time from the animation tick
-            // at the moment the flag changes, and that tick only advances in
-            // update_timers_and_animations - last called before B, a slide
-            // ago. Advance it first, or the fade begins 180ms in and the ring
-            // pops rather than fades.
-            slint::platform::update_timers_and_animations();
-            app.set_ring_hidden(false);
-            Some(cost)
-        }
-    };
+    let navigator = navigation::Navigator::new(areas.clone(),current.clone(),put_front.clone());
 
     app.show().map_err(|e| format!("show: {e:?}"))?;
 
@@ -670,13 +459,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // thing being dictated is a sentence, so insisting on a hold would be a
     // worse remote - but a hold is what a hand does without being told, and
     // both have to mean the obvious thing.
-    let mut mic_down_at = 0u64;
-    // The menu key's down time, while it is held; None when it is up. A hold on
-    // the home screen opens settings.
-    let mut menu_down_at: Option<u64> = None;
-    const MENU_HOLD_US: u64 = 500_000;
-    let mut mic_latched = false;
-    const LATCH_UNDER_US: u64 = 600_000;
+    let mut physical_input = input::Physical::default();
     let mut pointer = touch::Touch::open();
     println!(
         "couch-gui: touchscreen {}",
@@ -895,11 +678,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The menu key's edges drive the hold-to-open below. Recorded
             // before the wake swallow, so a hold that begins on a dark panel
             // still opens settings once the wake is done.
-            match press.menu {
-                Some(true) => menu_down_at = Some(now_monotonic_us()),
-                Some(false) => menu_down_at = None,
-                None => {}
-            }
+            physical_input.menu_edge(press.menu, now_monotonic_us());
             if swallow {
                 continue;
             }
@@ -911,26 +690,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Hold to talk. The key is not routed into the UI: it opens the
             // microphone and nothing else, so there is no screen on which it
             // means something different.
-            match press.mic {
-                Some(true) => {
-                    if mic_latched {
-                        mic_latched = false;
-                        mic.stop();
-                    } else {
-                        mic_down_at = now_monotonic_us();
-                        mic.start();
-                    }
-                }
-                Some(false) => {
-                    if mic.recording() {
-                        if now_monotonic_us() - mic_down_at < LATCH_UNDER_US {
-                            mic_latched = true;
-                        } else {
-                            mic.stop();
-                        }
-                    }
-                }
-                None => {}
+            match physical_input.microphone(press.mic, now_monotonic_us(), mic.recording()) {
+                input::MicAction::Start => mic.start(),
+                input::MicAction::Stop => mic.stop(),
+                input::MicAction::None => {},
             }
             if let Some(key) = press.key.filter(|key| {
                 !app.get_pair_shown()
@@ -985,13 +748,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if mic.recording() {
             app.set_mic_level(mic.meter());
-        } else if mic_latched {
-            // The capture hit its own limit while latched; the latch must not
-            // outlive it or the next press would only clear a flag.
-            mic_latched = false;
         }
-        if app.get_mic_latched() != mic_latched {
-            app.set_mic_latched(mic_latched);
+        physical_input.sync_microphone(mic.recording());
+        if app.get_mic_latched() != physical_input.latched() {
+            app.set_mic_latched(physical_input.latched());
         }
 
         let now = now_monotonic_us();
@@ -1020,17 +780,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // a modal is already up owns the key, and the hub is what settings sits
         // over. The state it shows - the SSID, whether SSH is up - is read here,
         // once, at open time rather than on the tick.
-        if let Some(t) = menu_down_at {
             let on_home = !app.get_tv_shown() && !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
                 && !app.get_keyboard_shown()
                 && !app.get_chooser_shown()
                 && !app.get_pair_shown()
                 && !app.get_setup_mode()
                 && !app.get_recording();
-            if on_home && now - t >= MENU_HOLD_US {
-                menu_down_at = None;
-                ask(Intent::OpenSettings);
-            }
+        if physical_input.settings_hold_due(now, on_home) {
+            ask(Intent::OpenSettings);
         }
 
         // Clear a toast when its time is up (cheap, every loop).
@@ -1208,7 +965,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(what) = intent.take() {
             dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
-            if let Some(cost) = transition(&mut screen, &window, &app, what) {
+            if let Some(cost) = navigator.transition(&mut screen, &window, &app, what) {
                 frames += cost.frames;
                 render_us += cost.work_us;
                 wait_us += cost.wait_us;

@@ -11,6 +11,7 @@ description = "The Couch remote's on-screen UI"
 # configuration Slint's microcontroller targets use; fonts are embedded at build
 # time by build.rs. The crate itself still uses Rust std normally.
 [dependencies]
+couch-control = { path = "../../clients/couch-control" }
 couch-denon = { path = "../../clients/couch-denon" }
 couch-webos = { path = "../../clients/couch-webos" }
 base64 = "0.22"

@@ -23,15 +23,11 @@ pub fn path(file: &str) -> PathBuf {
     PathBuf::from(root).join(file)
 }
 pub fn read(previous: &str) -> Option<(String, Vec<Area>, [u8; 3])> {
-    let raw = std::fs::read_to_string(path("config.json")).ok()?;
-    if raw == previous {
-        return None;
-    }
-    let config: Config = serde_json::from_str(&raw).ok()?;
-    if config.schema_version != couch_model::SCHEMA_VERSION {
-        return None;
-    }
-    Some((raw, project(&config), config.appearance.rgb()?))
+    let snapshot=crate::config_snapshot::current()?;
+    let raw=snapshot.serial.to_string();
+    if raw==previous{return None}
+    let config=&snapshot.config;
+    Some((raw, project(config), config.appearance.rgb()?))
 }
 fn project(config: &Config) -> Vec<Area> {
     let make = |name: String, ids: Vec<Id>, scene_ids: Vec<Id>, activity_ids: Vec<Id>| {

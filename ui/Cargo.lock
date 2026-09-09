@@ -763,6 +763,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "couch-control"
+version = "0.1.0"
+dependencies = [
+ "couch-denon",
+ "couch-kodi",
+ "couch-webos",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "couch-denon"
 version = "0.1.0"
 dependencies = [
@@ -775,6 +787,7 @@ name = "couch-gui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "couch-control",
  "couch-denon",
  "couch-ha",
  "couch-hue",

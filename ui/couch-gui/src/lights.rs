@@ -1,7 +1,7 @@
 //! Room light controls. Network requests run on one worker, never on Slint's thread.
-use crate::{home, App, ChoiceItem};
+use crate::{App, ChoiceItem};
 use couch_ha::{Command, Light};
-use couch_model::{Config, DeviceKind, Id, Integration};
+use couch_model::{DeviceKind, Id, Integration};
 use slint::{Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
@@ -68,10 +68,7 @@ pub struct Controller {
     last_brightness_send: Instant,
 }
 fn configured(room: &Id) -> Result<Vec<Entry>, String> {
-    let config: Config = serde_json::from_slice(
-        &std::fs::read(home::path("config.json")).map_err(|_| "Cannot read your rooms")?,
-    )
-    .map_err(|_| "Cannot read your rooms")?;
+    let config=crate::connections::config().ok_or("Cannot read your rooms")?;
     let room = config
         .room(room)
         .ok_or("This room was removed; return home to reload")?;
@@ -377,16 +374,12 @@ impl Controller {
         self.generation += 1;
         self.room = Some(room.clone());
         self.busy = None;
-        let title = std::fs::read(home::path("config.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
+        let title = crate::connections::config()
             .and_then(|c| c.room(&room).map(|r| r.name.clone()))
             .unwrap_or_else(|| "Room".into());
         app.set_light_title(title.into());
         app.set_light_room_id(room.as_str().into());
-        let scene_names = std::fs::read(home::path("config.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
+        let scene_names = crate::connections::config()
             .map(|c| {
                 c.scenes
                     .iter()
@@ -482,7 +475,7 @@ impl Controller {
                         app.invoke_open_activity(id.into());continue;
                     }
                     if e.id.starts_with("device:") {
-                        let cfg=std::fs::read(home::path("config.json")).ok().and_then(|b|serde_json::from_slice::<Config>(&b).ok());
+                        let cfg=crate::connections::config();
                         let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
                         if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
                         let tv=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration))).is_some_and(|i|matches!(i,Integration::WebOs));

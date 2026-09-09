@@ -1,5 +1,5 @@
 //! Scene recall and room-scoped channel navigation; network work stays off the GUI thread.
-use crate::{home, App};
+use crate::{App};
 use couch_model::{Config, Id, Provider};
 use slint::ComponentHandle;
 use std::{
@@ -24,12 +24,10 @@ pub struct Controller {
     cursor: HashMap<Id, Id>,
     until: Option<Instant>,
 }
-fn config() -> Result<Config, String> {
-    serde_json::from_slice(
-        &std::fs::read(home::path("config.json")).map_err(|_| "Cannot read scenes")?,
-    )
-    .map_err(|_| "Cannot read scenes".into())
+fn config() -> Result<std::sync::Arc<Config>, String> {
+    crate::connections::config().ok_or_else(||"Cannot read scenes".into())
 }
+
 fn next_scene(ids: &[Id], current: Option<&Id>, delta: i32) -> Option<Id> {
     if ids.is_empty() {
         return None;

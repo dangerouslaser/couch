@@ -57,7 +57,7 @@ impl Clock {
             let mut previous = None;
             loop {
                 let settings = crate::connections::config()
-                    .map(|c| c.remote)
+                    .map(|c| c.remote.clone())
                     .unwrap_or_default();
                 let minute = SystemTime::now()
                     .duration_since(UNIX_EPOCH)

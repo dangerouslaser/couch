@@ -1,9 +1,9 @@
 //! Cinema activity controller. All Kodi I/O and image decoding stay off Slint.
-use crate::{home, App, PlayerChoice};
+use crate::{App, PlayerChoice};
 use couch_kodi::{
     playback::{Chapter, Playback},
-    Kodi,
 };
+use couch_control::Kodi;
 use couch_model::{Config, Integration};
 use serde_json::{json, Value};
 use slint::{ModelRc, VecModel};
@@ -68,7 +68,7 @@ fn kodi_client(t: &Target) -> Kodi {
         couch_kodi::settings::Settings::load(&crate::connections::file(&t.connection, "kodi"))
     {
         if s.host == t.host && s.http_control {
-            return s.client();
+            return Kodi::settings(&s);
         }
     }
     Kodi::tcp(&t.host, t.port)
@@ -152,8 +152,7 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
                             .map_err(|_| "Kodi rejected that input")?;
                     } else if method == "Application.SetVolume" {
                         let delta = params["delta"].as_i64().unwrap_or(0);
-                        let volume = c.volume().map_err(|_| "Cannot read Kodi volume")?;
-                        c.set_volume((volume.volume + delta).clamp(0, 100))
+                        c.volume_step(delta)
                             .map_err(|_| "Cannot change Kodi volume")?;
                     } else {
                         let p = current
@@ -261,9 +260,7 @@ impl Controller {
     }
     fn open(&mut self, app: &App, id: &str) {
         app.set_active_activity(if id.starts_with("device:") {""}else{id}.into());
-        if let Some(config) = std::fs::read(home::path("config.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
+        if let Some(config) = crate::connections::config()
         {
             let source = config
                 .activities
@@ -306,12 +303,7 @@ impl Controller {
         app.set_player_activity("Watch Kodi".into());
         app.set_player_room("".into());
         app.invoke_focus_player();
-        let result = std::fs::read(home::path("config.json"))
-            .map_err(|_| "Cannot read configuration".into())
-            .and_then(|b| {
-                serde_json::from_slice::<Config>(&b).map_err(|_| "Cannot read configuration".into())
-            })
-            .and_then(|c| target(&c, id));
+        let result = crate::connections::config().ok_or_else(||"Cannot read configuration".into()).and_then(|c|target(&c,id));
         match result {
             Ok(t) => {
                 app.set_player_activity(t.name.clone().into());

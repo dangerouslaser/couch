@@ -1,7 +1,8 @@
 //! LG TV control: one background owner, bounded input, no network on the UI thread.
 use crate::{home, App, TvChoice};
-use couch_webos::{Button, Client, Playback, Settings};
+use couch_webos::{Button, Playback, Settings};
 use serde_json::json;
+use couch_control::WebOs as Client;
 use slint::{ModelRc, VecModel};
 use std::{
     cell::RefCell,
@@ -70,7 +71,7 @@ fn command(name: &str) -> Option<Command> {
         _ => return None,
     })
 }
-fn execute(c: &mut Client, action: &Command) -> couch_webos::Result<()> {
+fn execute(c: &mut Client, action: &Command) -> couch_control::Result<()> {
     match action {
         Command::Key(key) => c.button(*key),
         Command::Volume(true) => c.volume_up(),
@@ -78,19 +79,7 @@ fn execute(c: &mut Client, action: &Command) -> couch_webos::Result<()> {
         Command::Channel(up) => c.channel(*up),
         Command::Mute(on) => c.mute(*on),
         Command::Power => c.power_off(),
-        Command::ToggleMute => {
-            let status = c.volume()?;
-            let status = if status["volumeStatus"].is_object() {
-                &status["volumeStatus"]
-            } else {
-                &status
-            };
-            let muted = status["muteStatus"]
-                .as_bool()
-                .or(status["muted"].as_bool())
-                .ok_or(couch_webos::Error::Protocol)?;
-            c.mute(!muted)
-        }
+        Command::ToggleMute => c.toggle_mute(),
         Command::Play(play) => c.playback(if *play {
             Playback::Play
         } else {
@@ -112,7 +101,7 @@ fn execute(c: &mut Client, action: &Command) -> couch_webos::Result<()> {
             .map(|_| ()),
     }
 }
-fn volume(c: &mut Client) -> couch_webos::Result<String> {
+fn volume(c: &mut Client) -> couch_control::Result<String> {
     let v = c.volume()?;
     let v = if v["volumeStatus"].is_object() {
         &v["volumeStatus"]
@@ -200,7 +189,7 @@ fn power(
     if client.is_none() {
         match Client::connect(&settings) {
             Ok(c) => *client = Some(c),
-            Err(couch_webos::Error::Transport | couch_webos::Error::Timeout) => {
+            Err(couch_control::Error::Transport | couch_control::Error::Timeout) => {
                 if active.load(Ordering::SeqCst) != generation {
                     return Ok(String::new());
                 }
@@ -427,7 +416,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 }
             })();
             if let Err(ref error) = result {
-                if !matches!(error, couch_webos::Error::Rejected) {
+                if !matches!(error, couch_control::Error::Rejected) {
                     client = None;
                 }
             }
@@ -453,12 +442,13 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             refreshed = Instant::now();
         } else if current != 0 && waking.is_some() && refreshed.elapsed() > Duration::from_secs(2) {
             let connected = Settings::load(&credentials)
+                .map_err(couch_control::Error::from)
                 .and_then(|s| Client::connect(&s))
                 .and_then(|mut c| {
                     if c.power_state()?["state"] == "Active" {
                         Ok(c)
                     } else {
-                        Err(couch_webos::Error::Timeout)
+                        Err(couch_control::Error::Timeout)
                     }
                 });
             if let Ok(mut c) = connected {
@@ -727,8 +717,38 @@ mod tests {
     }
 }
 
-pub(crate) fn mapped_command(c: &mut Client, name: &str) -> couch_webos::Result<()> {
-    if name == "stop" {return c.playback(Playback::Stop)}
-    let name=match name {"power-off"=>"power","mute"=>"toggle-mute","fast-forward"=>"forward",_=>name};
-    execute(c, &command(name).ok_or(couch_webos::Error::Protocol)?)
+pub(crate) fn mapped_command(
+    c: &mut Client,
+    function: &couch_model::commands::Function,
+) -> couch_control::Result<()> {
+    use couch_model::commands::Function as F;
+    let action = match function {
+        F::Up => Command::Key(Button::Up),
+        F::Down => Command::Key(Button::Down),
+        F::Left => Command::Key(Button::Left),
+        F::Right => Command::Key(Button::Right),
+        F::Ok => Command::Key(Button::Enter),
+        F::Back => Command::Key(Button::Back),
+        F::Home => Command::Key(Button::Home),
+        F::Menu => Command::Key(Button::Menu),
+        F::PowerOff => Command::Power,
+        F::VolumeUp => Command::Volume(true),
+        F::VolumeDown => Command::Volume(false),
+        F::Mute => Command::ToggleMute,
+        F::ChannelUp => Command::Channel(true),
+        F::ChannelDown => Command::Channel(false),
+        F::Red => Command::Key(Button::Red),
+        F::Green => Command::Key(Button::Green),
+        F::Blue => Command::Key(Button::Blue),
+        F::Yellow => Command::Key(Button::Yellow),
+        F::Play => Command::Play(true),
+        F::Pause => Command::Play(false),
+        F::Rewind => Command::Rewind(false),
+        F::FastForward => Command::Rewind(true),
+        F::Input(id) => Command::Input(id.clone()),
+        F::App(id) => Command::App(id.clone()),
+        F::Stop => return c.playback(Playback::Stop),
+        _ => return Err(couch_control::Error::Protocol),
+    };
+    execute(c, &action)
 }

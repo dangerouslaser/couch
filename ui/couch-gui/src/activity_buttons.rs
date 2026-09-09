@@ -1,5 +1,6 @@
 //! Activity overrides: physical timing on the UI thread, device I/O on a worker.
 use crate::{connections, keypad::Press, App};
+use couch_model::commands::Function as F;
 use couch_model::{
     buttons::{Binding, Button, Gesture},
     Action, Config, Integration,
@@ -128,14 +129,14 @@ impl Controller {
             self.pending.clear();
             self.replay.clear();
             self.bindings.clear();
-            if let Some(config) = connections::config().filter(|c| c.validate().is_ok()) {
+            if let Some(config) = connections::config() {
                 self.bindings = config
                     .activities
                     .iter()
                     .find(|a| a.id.as_str() == context)
                     .map(|a| a.buttons.clone())
                     .unwrap_or_default();
-                self.config = Arc::new(config);
+                self.config = config;
             }
             self.context = context;
         }
@@ -169,6 +170,57 @@ fn worker(
     reply: mpsc::SyncSender<(u64, String)>,
     current: Arc<AtomicU64>,
 ) {
+    let mut lanes = HashMap::<String, mpsc::SyncSender<Request>>::new();
+    let mut generation = current.load(Ordering::SeqCst);
+    loop {
+        let work = rx.recv_timeout(Duration::from_millis(100));
+        let now = current.load(Ordering::SeqCst);
+        if generation != now {
+            lanes.clear();
+            generation = now;
+        }
+        let r = match work {
+            Ok(r) => r,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => return,
+        };
+        if r.generation != generation {
+            continue;
+        }
+        let key = r
+            .config
+            .devices()
+            .find(|(_, d)| d.id == r.action.device)
+            .and_then(|(_, d)| match &d.integration {
+                Integration::Connection { connection_id, .. } => Some(connection_id.to_string()),
+                i => r
+                    .config
+                    .resolve_integration(i)
+                    .and_then(|v| serde_json::to_string(&v).ok()),
+            });
+        let Some(key) = key else {
+            let _ = reply.try_send((generation, "Mapped device was removed".into()));
+            continue;
+        };
+        let tx = lanes.entry(key).or_insert_with(|| {
+            let (tx, rx) = mpsc::sync_channel(8);
+            let reply = reply.clone();
+            let current = current.clone();
+            std::thread::spawn(move || connection_worker(rx, reply, current));
+            tx
+        });
+        if tx.try_send(r).is_err() {
+            eprintln!("couch-gui: mapped connection queue full");
+            let _ = reply.try_send((generation, "Device command queue is full".into()));
+        }
+    }
+}
+
+fn connection_worker(
+    rx: mpsc::Receiver<Request>,
+    reply: mpsc::SyncSender<(u64, String)>,
+    current: Arc<AtomicU64>,
+) {
     let mut denon = HashMap::new();
     let mut tv = HashMap::new();
     let mut generation = current.load(Ordering::SeqCst);
@@ -197,8 +249,8 @@ fn worker(
 fn execute(
     config: &Config,
     action: &Action,
-    denon: &mut HashMap<String, couch_denon::Client>,
-    tv: &mut HashMap<String, couch_webos::Client>,
+    denon: &mut HashMap<String, couch_control::Denon>,
+    tv: &mut HashMap<String, couch_control::WebOs>,
 ) -> Result<(), String> {
     let device = config
         .devices()
@@ -208,39 +260,37 @@ fn execute(
     let integration = config
         .resolve_integration(&device.integration)
         .ok_or("Mapped connection was removed")?;
-    if !couch_model::buttons::functions(&integration)
-        .iter()
-        .any(|f| f.0 == action.command)
-    {
-        return Err("Unsupported button function".into());
-    }
+    let command = F::parse(&action.command)
+        .filter(|f| f.supports(&integration))
+        .ok_or("Unsupported button function")?;
     let connection = match &device.integration {
         Integration::Connection { connection_id, .. } => connection_id.as_str(),
         _ => "",
     };
-    let command = action.command.as_str();
     match integration {
         Integration::Denon { host, port } => {
             let key = format!("{host}:{port}");
             if !denon.contains_key(&key) {
                 denon.insert(
                     key.clone(),
-                    couch_denon::Client::connect(&couch_denon::Settings { host, port })
+                    couch_control::Denon::connect(&couch_denon::Settings { host, port })
                         .map_err(|e| e.to_string())?,
                 );
             }
             let c = denon.get_mut(&key).unwrap();
             let result = (|| {
                 use couch_denon::Command as C;
+                if command==F::Mute{return c.toggle_mute().map(|_|());}
                 let cmd = match command {
-                    "power-on" => C::Power(true),
-                    "power-off" => C::Power(false),
-                    "volume-up" => C::VolumeUp,
-                    "volume-down" => C::VolumeDown,
-                    "mute-on" => C::Mute(true),
-                    "mute-off" => C::Mute(false),
-                    "mute" => C::Mute(!c.status()?.muted.ok_or(couch_denon::Error::Protocol)?),
-                    _ => return Err(couch_denon::Error::Invalid),
+                    F::PowerOn => C::Power(true),
+                    F::PowerOff => C::Power(false),
+                    F::VolumeUp => C::VolumeUp,
+                    F::VolumeDown => C::VolumeDown,
+                    F::MuteOn => C::Mute(true),
+                    F::MuteOff => C::Mute(false),
+                    F::Input(ref id) => C::Input(id.clone()),
+
+                    _ => return Err(couch_control::Error::Protocol),
                 };
                 c.command(cmd).map(|_| ())
             })();
@@ -253,30 +303,30 @@ fn execute(
             let c = couch_kodi::settings::Settings::load(&connections::file(connection, "kodi"))
                 .ok()
                 .filter(|s| s.host == host && s.http_control)
-                .map(|s| s.client())
-                .unwrap_or_else(|| couch_kodi::Kodi::tcp(&host, port))
+                .map(|s| couch_control::Kodi::settings(&s))
+                .unwrap_or_else(|| couch_control::Kodi::tcp(&host, port))
                 .with_timeout(Duration::from_secs(2));
             let result = match command {
-                "up" | "down" | "left" | "right" | "ok" | "back" | "home" | "menu" => {
+                F::Up | F::Down | F::Left | F::Right | F::Ok | F::Back | F::Home | F::Menu => {
                     let method = match command {
-                        "up" => "Input.Up",
-                        "down" => "Input.Down",
-                        "left" => "Input.Left",
-                        "right" => "Input.Right",
-                        "ok" => "Input.Select",
-                        "back" => "Input.Back",
-                        "home" => "Input.Home",
+                        F::Up => "Input.Up",
+                        F::Down => "Input.Down",
+                        F::Left => "Input.Left",
+                        F::Right => "Input.Right",
+                        F::Ok => "Input.Select",
+                        F::Back => "Input.Back",
+                        F::Home => "Input.Home",
                         _ => "Input.ContextMenu",
                     };
                     c.call(method, json!({})).map(|_| ())
                 }
-                "volume-up" | "volume-down" => c
+                F::VolumeUp | F::VolumeDown => c
                     .call(
                         "Application.SetVolume",
-                        json!({"volume":if command=="volume-up"{"increment"}else{"decrement"}}),
+                        json!({"volume":if command==F::VolumeUp{"increment"}else{"decrement"}}),
                     )
                     .map(|_| ()),
-                "mute" => c
+                F::Mute => c
                     .call("Application.SetMute", json!({"mute":"toggle"}))
                     .map(|_| ()),
                 _ => {
@@ -285,9 +335,9 @@ fn execute(
                         .map_err(|e| e.to_string())?
                         .ok_or("Kodi has no active playback")?;
                     let (method, params) = match command {
-                        "play-pause" => ("Player.PlayPause", json!({})),
-                        "stop" => ("Player.Stop", json!({})),
-                        "next" => ("Player.GoTo", json!({"to":"next"})),
+                        F::PlayPause => ("Player.PlayPause", json!({})),
+                        F::Stop => ("Player.Stop", json!({})),
+                        F::Next => ("Player.GoTo", json!({"to":"next"})),
                         _ => ("Player.GoTo", json!({"to":"previous"})),
                     };
                     c.player_command(p.player, method, params).map(|_| ())
@@ -296,7 +346,7 @@ fn execute(
             result.map_err(|e| e.to_string())
         }
         Integration::WebOs => {
-            if command == "power-on" {
+            if command == F::PowerOn {
                 let path = connections::file(connection, "webos");
                 let settings = couch_webos::Settings::load(&path).map_err(|e| e.to_string())?;
                 return crate::tv::wake_tv(&settings, &path);
@@ -306,10 +356,10 @@ fn execute(
                     .map_err(|e| e.to_string())?;
                 tv.insert(
                     connection.into(),
-                    couch_webos::Client::connect(&settings).map_err(|e| e.to_string())?,
+                    couch_control::WebOs::connect(&settings).map_err(|e| e.to_string())?,
                 );
             }
-            let result = crate::tv::mapped_command(tv.get_mut(connection).unwrap(), command);
+            let result = crate::tv::mapped_command(tv.get_mut(connection).unwrap(), &command);
             if result.is_err() {
                 tv.remove(connection);
             }
@@ -321,8 +371,8 @@ fn execute(
                 .and_then(|s| s.client())
                 .map_err(|e| e.to_string())?;
             let on = match command {
-                "on" => true,
-                "off" => false,
+                F::On => true,
+                F::Off => false,
                 _ => !c
                     .control_state(raw)
                     .map_err(|e| e.to_string())?
@@ -334,8 +384,8 @@ fn execute(
         Integration::HomeAssistant { entity_id } => {
             let (c, raw) = connections::ha(&entity_id)?;
             let on = match command {
-                "on" => true,
-                "off" => false,
+                F::On => true,
+                F::Off => false,
                 _ => !c
                     .light(&raw)
                     .map_err(|e| e.to_string())?

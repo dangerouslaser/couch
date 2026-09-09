@@ -6,11 +6,10 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-pub fn config() -> Option<Config> {
-    std::fs::read(home::path("config.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+pub fn config() -> Option<Arc<Config>> {
+    crate::config_snapshot::current().map(|s|s.config.clone())
 }
+
 pub fn file(id: &str, prefix: &str) -> PathBuf {
     if id.is_empty() {
         home::path(&format!("{prefix}-connection.json"))
@@ -35,7 +34,7 @@ fn ids(provider: Provider) -> Vec<String> {
     let ids: Vec<_> = config()
         .map(|c| {
             c.connections
-                .into_iter()
+                .iter()
                 .filter(|c| c.provider == provider)
                 .map(|c| c.id.to_string())
                 .collect()
