@@ -6,15 +6,28 @@ waveform generator and `/dev/irtx` transport.
 
 ## Driver status
 
-The running kernel currently disables IR. The new bringup candidate enables
+The first live bringup kernel (`3dee4cfb`) registers `/dev/irtx` and accepts
+the solution/carrier ioctls. A single zero waveform returned ETIMEDOUT after
+53,114 µs; GUI heartbeats advanced and the device did not hang. Optical
+transmission remains unvalidated. The bringup configuration enables
 `CONFIG_MTK_IRTX_PWM_SUPPORT` and uses Couch's `couch_irtx.c` on MT6580. Its
-miscdevice is `/dev/irtx`, dynamic minor, mode **0600**; the stock major and
+miscdevice requests `/dev/irtx`, dynamic minor, mode **0600** (runtime mdev
+currently sets **0660**, observed major/minor 10:61); the stock major and
 `mt_irtx` class must not be hardcoded. Probe waits for the PWM controller and
 does not start a transmission.
 
 The effective device tree confirms `mediatek,irtx-pwm`, `pwm_ch = 0` and
 `pwm_data_invert = 0`; the existing overlay supplies these properties. The PWM
 controller is bound at `11008000.PWM`. Preserve the current DTB and overlay.
+
+A diagnostic follow-up (`146bbaeb`) observes the powered channel on failure:
+PWM enable/clock selection, interrupt enable/status, control and duration
+registers, buffer word count and requested/sent waveform counters. It reads
+only the active channel and shared controller, before acknowledgement and
+clock shutdown. It changes no interrupt enable or transmit behavior.
+`sent_waves=1` with no finish status would support investigating masked status;
+zero progress instead points toward clock/configuration/DMA. Neither is assumed
+in advance. The legacy computed-clock helper is not used as frequency evidence.
 
 An earlier driver revision hung during transmission. Compilation and successful
 probe do **not** validate LED output, carrier frequency, completion interrupts,

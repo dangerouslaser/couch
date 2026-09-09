@@ -1,0 +1,100 @@
+From 146bbaebb3f4a1be73419601cd0f24473debd6aa Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Wed, 9 Sep 2026 18:57:28 -0400
+Subject: [PATCH] irtx: capture powered channel state on failed transmission
+
+---
+ .../mt-plat/mt6580/include/mach/mt_pwm_hal.h  |  2 ++
+ .../misc/mediatek/irtx/mt6580/couch_irtx.c    | 11 ++++++++++
+ drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c | 20 +++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/drivers/misc/mediatek/include/mt-plat/mt6580/include/mach/mt_pwm_hal.h b/drivers/misc/mediatek/include/mt-plat/mt6580/include/mach/mt_pwm_hal.h
+index c288c06d..278ebeb3 100644
+--- a/drivers/misc/mediatek/include/mt-plat/mt6580/include/mach/mt_pwm_hal.h
++++ b/drivers/misc/mediatek/include/mt-plat/mt6580/include/mach/mt_pwm_hal.h
+@@ -171,5 +171,7 @@ void mt_set_pwm_3dlcm_inv_hal(u32 pwm_no, u8 inv);
+ void mt_set_pwm_3dlcm_base_hal(u32 pwm_no);
+ 
+ void mt_pwm_26M_clk_enable_hal(u32 enable);
++/* Caller must hold the channel and shared bus clocks on. */
++void mt_pwm_dump_channel_hal(u32 pwm_no);
+ 
+ #endif
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+index 6e8bc16d..9e1ed7ee 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -18,6 +18,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/wakelock.h>
+ #include <mt-plat/mt_pwm.h>
++#include <mt-plat/mt_pwm_hal_pub.h>
+ #include <mach/mt_pwm_hal.h>
+ 
+ #define IRTX_SET_CARRIER _IOW('R', 0, unsigned int)
+@@ -87,6 +88,7 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	unsigned long deadline;
+ 	unsigned int i, finish = ir->pwm.pwm_no * 2;
+ 	u32 duration, clocks, actual_us;
++	s32 sent_before = 0;
+ 	size_t wave_bytes = count - sizeof(u32);
+ 	int ret;
+ 
+@@ -130,6 +132,7 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	mt_set_intr_ack(finish + 1);
+ 	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_BASE_ADDR = physical;
+ 	ir->pwm.PWM_MODE_MEMORY_REGS.BUF0_SIZE = wave_bytes / 4 - 1;
++	sent_before = mt_get_pwm_send_wavenum_hal(ir->pwm.pwm_no);
+ 	ret = pwm_set_spec_config(&ir->pwm);
+ 	if (ret) {
+ 		/* MTK HAL errors are not all Linux errno values. */
+@@ -156,6 +159,14 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 		usleep_range(500, 1000);
+ 	}
+ stop:
++	if (ret < 0) {
++		dev_err(ir->dev, "TX result=%d carrier=%u clocks=%u waveform_bytes=%zu expected_us=%u sent_before=%d sent_after=%d\n",
++			ret, ctx->carrier, clocks, wave_bytes, actual_us, sent_before,
++			mt_get_pwm_send_wavenum_hal(ir->pwm.pwm_no));
++		/* Observe before ack/disable while MMIO remains powered. Never turn
++		 * on unhandled shared interrupts merely to diagnose a timeout. */
++		mt_pwm_dump_channel_hal(ir->pwm.pwm_no);
++	}
+ 	/* Disable includes MTK's drain delay. No DMA mapping is freed while live. */
+ 	mt_set_intr_ack(finish);
+ 	mt_set_intr_ack(finish + 1);
+diff --git a/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c b/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
+index c4bd384a..80f871e2 100644
+--- a/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
++++ b/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
+@@ -395,6 +395,26 @@ void mt_set_pwm_buf0_size_hal(uint32_t pwm_no, u16 size)
+ 	OUTREG32(reg_buff0_size, size);
+ }
+ 
++/* Only call while this channel and the shared PWM bus clock are powered.
++ * Unlike the legacy full dump, do not read other channels' gated registers.
++ * All fields are ordinary read-only observations, never IRQ acknowledgements. */
++void mt_pwm_dump_channel_hal(u32 pwm_no)
++{
++	unsigned long base;
++	if (pwm_no >= PWM_MAX)
++		return;
++	base = PWM_register[pwm_no];
++	pr_err("couch-pwm channel=%u enable=%08x clock26=%08x irq_enable=%08x irq_status=%08x\n",
++		pwm_no, INREG32(PWM_ENABLE), INREG32(PWM_CK_26M_SEL),
++		INREG32(PWM_INT_ENABLE), INREG32(PWM_INT_STATUS));
++	pr_err("couch-pwm con=%08x high=%08x low=%08x guard=%08x\n",
++		INREG32(base + 4 * PWM_CON), INREG32(base + 4 * PWM_HDURATION),
++		INREG32(base + 4 * PWM_LDURATION), INREG32(base + 4 * PWM_GDURATION));
++	pr_err("couch-pwm buffer_words_minus_one=%08x requested_waves=%08x sent_waves=%08x\n",
++		INREG32(base + 4 * PWM_BUF0_SIZE), INREG32(base + 4 * PWM_WAVE_NUM),
++		INREG32(base + 4 * PWM_SEND_WAVENUM));
++}
++
+ void mt_pwm_dump_regs_hal(void)
+ {
+ 	int i;
+-- 
+2.43.0
+

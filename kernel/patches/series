@@ -7,3 +7,4 @@ ha100-touch-reset.patch
 ha100-pwm-resume.patch
 ha100-motion.patch
 ha100-irtx-waveform.patch
+ha100-irtx-diagnostics.patch
