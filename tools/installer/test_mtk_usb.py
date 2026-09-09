@@ -1,5 +1,6 @@
 import hashlib
 import errno
+import array
 import importlib
 from pathlib import Path
 import signal
@@ -12,7 +13,7 @@ from unittest.mock import patch
 
 from couch_install import InstallError
 from mtk_session import ReadPolicy, read_session
-from mtk_usb import ExactUsbBackend, PinnedImports, bounded_operation, descriptor, strict_handshake
+from mtk_usb import ExactUsbBackend, PinnedImports, bounded_operation, descriptor, strict_handshake, PacketBufferedInput
 from test_mtk_readonly import fake_session
 
 
@@ -40,7 +41,7 @@ class UsbBackendTests(unittest.TestCase):
             return len(data)
         def read(length, **kwargs):
             return bytes([self.handshake_bytes[-1] ^ 0xff if self.handshake_result else 0])
-        interface = Interface([NS(bmAttributes=2, bEndpointAddress=0x81, read=read),
+        interface = Interface([NS(bmAttributes=2, bEndpointAddress=0x81, wMaxPacketSize=64, read=read),
                                NS(bmAttributes=2, bEndpointAddress=2, write=write)])
         self.dev = NS(bus=1, address=2, port_numbers=(3,), idVendor=0x0e8d, idProduct=0x2000,
                       get_active_configuration=lambda: Configuration([interface]),
@@ -218,6 +219,41 @@ class UsbBackendTests(unittest.TestCase):
                 time.sleep(1)
         self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
         self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+
+    def test_packet_reads_keep_surplus_for_next_protocol_request(self):
+        reads = []
+        def read(size, timeout):
+            reads.append((size, timeout))
+            return b"abcdef"
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=read))
+        self.assertEqual(incoming.read(1), b"a")
+        self.assertEqual(incoming.read(3), b"bcd")
+        target = array.array("B", [0, 0])
+        self.assertEqual(incoming.read(target, timeout=0), 2)
+        self.assertEqual(target.tobytes(), b"ef")
+        self.assertEqual(reads, [(64, 1000)])
+
+    def test_full_packet_handshake_still_sends_exactly_four_commands(self):
+        writes, reads = [], []
+        def read(size, timeout):
+            reads.append(size)
+            return b"\x5f\xf5\xaf\xfa"
+        cdc = NS(EP_IN=PacketBufferedInput(NS(wMaxPacketSize=64, read=read)),
+                 EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
+                 set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
+        strict_handshake(cdc)
+        self.assertEqual(writes, [b"\xa0", b"\x0a", b"\x50", b"\x05"])
+        self.assertEqual(reads, [64])
+
+    def test_unsolicited_ready_is_diagnosed_without_discarding_it(self):
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"READY\x5f"))
+        writes = []
+        cdc = NS(EP_IN=incoming, EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
+                 set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
+        with self.assertRaisesRegex(InstallError, "at a0: 52; buffered=454144595f"):
+            strict_handshake(cdc)
+        self.assertEqual(writes, [b"\xa0"])
+        self.assertEqual(incoming.pending, b"EADY\x5f")
 
     def test_pinned_importer_compiles_source_without_using_python_cache(self):
         with tempfile.TemporaryDirectory() as root:

@@ -84,6 +84,37 @@ def descriptor(device):
     return Candidate(device.bus, device.address, tuple(device.port_numbers or ()), device.idVendor, device.idProduct)
 
 
+class PacketBufferedInput:
+    """Read complete USB packets without losing surplus protocol bytes."""
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+        self.pending = bytearray()
+        require(type(endpoint.wMaxPacketSize) is int and 0 < endpoint.wMaxPacketSize <= 1024
+                and endpoint.wMaxPacketSize & (endpoint.wMaxPacketSize - 1) == 0,
+                "Unsupported USB bulk packet size")
+
+    def __getattr__(self, name):
+        return getattr(self.endpoint, name)
+
+    def read(self, size_or_buffer, timeout=None):
+        size = size_or_buffer if isinstance(size_or_buffer, int) else len(size_or_buffer)
+        require(0 <= size <= 1024 * 1024, "USB protocol read exceeds transfer limit")
+        timeout = min(1000, timeout) if timeout is not None and timeout > 0 else 1000
+        while len(self.pending) < size:
+            remaining = size - len(self.pending)
+            packet = self.endpoint.wMaxPacketSize
+            request = ((remaining + packet - 1) // packet) * packet
+            data = bytes(self.endpoint.read(request, timeout=timeout))
+            require(data and len(data) <= request, "Empty or oversized USB packet read")
+            self.pending.extend(data)
+        data = bytes(self.pending[:size])
+        del self.pending[:size]
+        if isinstance(size_or_buffer, int):
+            return data
+        memoryview(size_or_buffer).cast("B")[:size] = data
+        return size
+
+
 def strict_handshake(cdc):
     # No primer byte: an extra A0 can leave an unread 5F and shift every reply.
     cdc.set_line_coding(921600, 0, 8, 1)
@@ -93,7 +124,9 @@ def strict_handshake(cdc):
         require(written == 1, f"Preloader handshake write failed at {byte:02x}")
         reply = cdc.EP_IN.read(1, timeout=500)
         require(len(reply) == 1 and reply[0] == (byte ^ 0xff),
-                f"Preloader handshake echo mismatch at {byte:02x}: {bytes(reply).hex() or 'empty'}")
+                f"Preloader handshake echo mismatch at {byte:02x}: {bytes(reply).hex() or 'empty'}; "
+                f"buffered={bytes(getattr(cdc.EP_IN, 'pending', b''))[:16].hex() or 'none'} "
+                "(no bytes discarded)")
 
 
 class ExactUsbBackend:
@@ -142,7 +175,8 @@ class ExactUsbBackend:
             if len(incoming) == len(outgoing) == 1:
                 candidates.append((interface, incoming[0], outgoing[0]))
         require(len(candidates) == 1, "Expected one CDC data interface with bulk IN/OUT")
-        self.interface, self.ep_in, self.ep_out = candidates[0]
+        self.interface, ep_in, self.ep_out = candidates[0]
+        self.ep_in = PacketBufferedInput(ep_in)
         for number in dict.fromkeys((0, self.interface.bInterfaceNumber)):
             try:
                 active = dev.is_kernel_driver_active(number)

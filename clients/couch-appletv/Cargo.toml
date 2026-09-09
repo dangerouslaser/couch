@@ -1,0 +1,19 @@
+[package]
+name = "couch-appletv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apple TV Companion pairing and control for Couch"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+hkdf = "0.12"
+chacha20poly1305 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.8"
+srp = "0.6"
+uuid = { version = "1", features = ["v4"] }
+num-bigint = "0.4"
+subtle = "2"
