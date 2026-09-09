@@ -1,6 +1,6 @@
 # Couch USB installer
 
-Status: experimental installer policy engine, simulation CLI, and read-only USB adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. Controlled HA100 testing has captured the selected preloader, synchronized, uploaded the approved download agent into RAM and obtained eMMC/RAM metadata. A subsequent controlled session verified both GPT copies, runtime CID and all five identity partitions, then saved and independently verified their 60 MiB backup. USB teardown returned ENOENT afterward; clean teardown, persistent writes and installer recovery remain unvalidated. Separately, runtime reads of five identity partitions plus boot/recovery have private, independently verified baseline copies.
+Status: experimental installer policy engine, simulation CLI, and read-only USB adapter. **This does not yet install Couch on a physical remote.** The `install` command refuses to run. Controlled HA100 testing has captured the selected preloader, synchronized, uploaded the approved download agent into RAM and obtained eMMC/RAM metadata. A subsequent controlled session verified both GPT copies, runtime CID and all five identity partitions, then saved and independently verified their 60 MiB backup. A later capture exited the DA and closed USB cleanly, but the requested normal-boot exit powered the unit off; automatic return to Couch, persistent writes and installer recovery remain unvalidated. Separately, runtime reads of five identity partitions plus boot/recovery have private, independently verified baseline copies.
 
 ## Intended experience
 
@@ -176,9 +176,11 @@ confirmed the BCB had cleared after the normal startup interval. No boot image
 was reflashed. USB teardown itself still needs validation; this manual recovery
 must not be presented as automatic installer completion.
 
-Before a controlled reboot from running Couch, allow its 90-second startup
-interval to finish and verify the BCB state. Rebooting while it remains armed
-can select recovery even when the normal image is intact.
+Before a controlled reboot from running Couch, wait for the BCB to clear. After
+an initial 90-second delay, init requires a rendered frame and three advancing
+GUI heartbeats; this takes longer than 90 seconds. Verify the marker itself,
+not uptime alone. Rebooting while it remains armed can select recovery even
+when the normal image is intact.
 
 
 ## Capture eight: USB teardown cause and explicit boot experiment
@@ -201,7 +203,9 @@ so Couch implements the small strict exchange directly. See the
 [pinned legacy finish implementation](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_lib.py#L972)
 and [Linux CDC descriptor validation](https://github.com/torvalds/linux/blob/master/drivers/usb/class/cdc-acm.c).
 
-This exit path has regression coverage but is awaiting physical validation.
+Capture nine validated the ACK exchange, USB disconnect and clean teardown on
+the physical remote. The unit powered off instead of booting Couch; starting
+Couch still requires the physical Power button.
 Reports distinguish requested/acknowledged boot from normal-OS verification;
 a protocol ACK alone does not prove a successful Couch boot. The default capture
 still sends no exit command. Physical installation remains disabled.
@@ -227,3 +231,19 @@ installation cannot resume from that journal. Tests cover full round trips,
 interrupted install and restore, wrong-device rejection, corrupted later
 backups, unexpected partition changes, immutable originals and write ordering.
 This validates policy and failure handling, not hardware recoverability.
+
+
+## Capture nine: clean exit, manual power-on still required
+
+The opt-in normal-boot exit completed after another verified 60 MiB identity
+backup. Both ACKs were received, the original USB address disappeared, and
+resource cleanup succeeded. The private report records successful layout,
+CID, calibration, backup, boot-command acknowledgment and USB cleanup checks.
+`normal_os_verified` remains false: USB and network did not return, and the
+operator confirmed the remote appeared powered off. Thus HOME_SCREEN is not
+an automatically verified boot path on this DA/device combination.
+
+No partition writes were issued. The next installation UX must distinguish
+“backup verified / device disconnected” from “Couch booted,” prompt for physical
+Power where needed, and verify startup separately. Do not claim that clean USB
+teardown alone makes the installer production-ready.

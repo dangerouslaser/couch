@@ -125,7 +125,8 @@ def capture(args, *, enumerate_devices=None, session=read_session):
     save_json(destination / "readback.json", report)
     print("Read-only capture verified and session closed. No partition writes were sent.")
     if boot_after_capture:
-        print("Normal-boot request acknowledged; verify Couch startup separately.")
+        print("DA exit acknowledged. On the tested HA100 this powers off; hold Power to start Couch.")
+        print("Couch startup is not verified by this capture command.")
 
 
 def main():
@@ -142,7 +143,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--lock-dir", type=Path, default=Path.home() / ".local/state/couch-installer/locks")
     parser.add_argument("--boot-after-capture", action="store_true",
-                        help="Experimental: request normal boot only after verified capture; requires full baseline")
+                        help="Experimental: request DA exit after verified capture; tested HA100 needs manual Power; requires full baseline")
     parser.add_argument("--check-only", action="store_true", help="Validate local inputs without importing USB or waiting")
     args = parser.parse_args()
     try:
