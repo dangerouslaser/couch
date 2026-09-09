@@ -8,10 +8,12 @@ room and select that connection under **Add to this room**.
    **Model / codeset**. Only that brand's models are shown.
 3. Assign supported commands to the remote functions you need. Unsupported
    protocols remain visible with the reason they cannot be used.
-4. Enter a unique saved codeset ID, review the assigned commands, and select
+4. Review the assigned commands and select
    **Save and add to room**. Existing IR devices have a **Save IR commands** editor.
 
-The saved ID uses lowercase letters, numbers, hyphens or underscores. Devices
+A unique saved ID is generated automatically. **Advanced: shared codeset** lets
+you deliberately reuse an ID; it uses lowercase letters, numbers, hyphens or
+underscores. Devices
 sharing an ID share its commands. Assigning a second source command to the same
 function replaces that function's previous code and preserves other functions.
 The command text remains editable for custom functions and corrections.

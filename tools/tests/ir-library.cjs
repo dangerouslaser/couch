@@ -40,6 +40,8 @@ const assert=require('node:assert/strict');
   await page.getByLabel('Assign On (2)',{exact:true}).selectOption('power-on');
   assert.equal(await page.getByLabel('Assigned IR commands',{exact:true}).inputValue(),'toggle nec 4 8\npower-on nec 4 9');
   await page.getByLabel('IR device name',{exact:true}).fill('Office TV');
+  await page.getByText('Advanced: shared codeset',{exact:true}).click();
+  assert.match(await page.getByLabel('Saved codeset ID',{exact:true}).inputValue(),/^ir-[0-9a-f]{32}$/);
   await page.getByLabel('Saved codeset ID',{exact:true}).fill('../invalid');
   assert.equal(await page.getByRole('button',{name:'Save and add to room',exact:true}).isDisabled(),true);
   await page.getByLabel('Saved codeset ID',{exact:true}).fill('office-tv');

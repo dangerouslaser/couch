@@ -180,6 +180,21 @@ mod tests {
     }
 }
 
+fn new_codeset_id() -> String {
+    let mut bytes = [0u8; 16];
+    if web_sys::window()
+        .and_then(|w| w.crypto().ok())
+        .is_some_and(|crypto| crypto.get_random_values_with_u8_array(&mut bytes).is_ok())
+    {
+        format!(
+            "ir-{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        )
+    } else {
+        String::new()
+    }
+}
+
 pub fn device_setup(
     app: App,
     connection: couch_model::Id,
@@ -208,14 +223,14 @@ pub fn device_setup(
                 couch_model::Integration::Ir { codeset } => Some(codeset.clone()),
                 _ => None,
             })
-            .unwrap_or_default(),
+            .unwrap_or_else(new_codeset_id),
     );
     let text = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
     let saved = StoredValue::new(existing);
 
-    if !codeset.get_untracked().is_empty() {
+    if saved.get_value().is_some() && !codeset.get_untracked().is_empty() {
         busy.set(true);
         spawn_local(async move {
             let result = api::ha(
@@ -240,8 +255,9 @@ pub fn device_setup(
         {super::connections::field("IR device name",name,"Living room TV")}
         <label class="field">"Device type"<select aria-label="IR device kind" prop:value=move ||kind.get() on:change=move |e|kind.set(event_target_value(&e))><option value="tv">"TV"</option><option value="speaker">"Speaker / receiver"</option><option value="media-player">"Media player"</option><option value="other">"Other"</option></select></label>
         {library(app,text,false)}
+        <details open=!valid_id(codeset.get_untracked().trim())><summary>"Advanced: shared codeset"</summary>
         {super::connections::field("Saved codeset ID",codeset,"living-room-tv")}
-        <p class="dim">"Use a unique ID for this device: lowercase letters, numbers, hyphens or underscores. Devices sharing an ID share the same commands."</p>
+        <p class="dim">"An ID is generated automatically for this device. Only reuse another device’s ID if both should share command changes. IDs use lowercase letters, numbers, hyphens or underscores."</p></details>
         <label class="field">"Assigned commands"<textarea aria-label="Assigned IR commands" rows="6" maxlength="262144" prop:value=move ||text.get() on:input=move |e|text.set(event_target_value(&e)) /></label>
         <button type="button" class="primary" disabled=move ||busy.get()||name.get().trim().is_empty()||!valid_id(codeset.get().trim())||text.get().trim().is_empty() on:click=move |_|{
             busy.set(true);message.set(String::new());
