@@ -193,6 +193,7 @@ def install_simulated(release, bundle, device, backup_dir, identity, confirm, re
         require(backup_dir.is_dir() and backup_dir.stat().st_mode & 0o077 == 0, "Backup directory must be private (0700)")
         journal = read_json(journal_path)
         require(journal.get("schema") == 1, "Unsupported journal schema")
+        require("restore" not in journal, "Restore has started; installation cannot resume")
         require(journal.get("binding") == binding, "Journal belongs to a different release/device/identity")
         require(journal.get("backup_complete") is True, "Backup was interrupted; use a new backup directory")
         require(read_json(backup_dir / "identity.json") == identity, "Recorded identity changed")
@@ -262,6 +263,78 @@ def install_simulated(release, bundle, device, backup_dir, identity, confirm, re
     print("Simulation verified. No physical device was flashed.")
 
 
+def restore_simulated(release, device, backup_dir, identity, confirm, resume=False):
+    """Restore originals on a file fixture; keep recovery until the last write."""
+    require(isinstance(device, FileDevice), "Restore supports file simulation only")
+    preflight(release, device)
+    require(confirm == device.description["storage_id"], "Target confirmation does not match storage identity")
+    backup_dir = Path(backup_dir).absolute()
+    require(not backup_dir.is_symlink() and not backup_dir.resolve().is_relative_to(REPO),
+            "Use original backups outside the repository")
+    require(backup_dir.is_dir() and backup_dir.stat().st_mode & 0o077 == 0,
+            "Backup directory must be private (0700)")
+    journal_path = backup_dir / "journal.json"
+    journal = read_json(journal_path)
+    binding = {"release": fingerprint(release), "device": fingerprint(device.description),
+               "identity": fingerprint(identity)}
+    require(journal.get("schema") == 1 and journal.get("binding") == binding,
+            "Journal belongs to a different release/device/identity")
+    require(journal.get("backup_complete") is True, "Original backup is incomplete")
+    require(read_json(backup_dir / "identity.json") == identity and
+            read_json(backup_dir / "device.json") == device.description, "Recorded identity/layout changed")
+    writes = journal.get("writes")
+    require(isinstance(writes, dict) and writes.keys() <= release["images"].keys() and
+            all(state in ("writing", "verified") for state in writes.values()), "Invalid install write states")
+    names = IDENTITY_PARTITIONS | release["images"].keys()
+    require(isinstance(journal.get("backups"), dict) and journal["backups"].keys() == names,
+            "Original backup inventory differs")
+    for name in names:
+        path = regular(backup_dir / f"{name}.img")
+        require(path.stat().st_size == release["partitions"][name]["size"] and
+                digest(path) == journal["backups"][name], f"Damaged backup: {name}")
+    for name in IDENTITY_PARTITIONS:
+        require(device.hash(name) == journal["backups"][name], f"Device identity changed: {name}")
+    if resume:
+        restored = journal.get("restore")
+        require(isinstance(restored, dict), "No restore to resume")
+    else:
+        require("restore" not in journal, "Restore already started; use --resume")
+        restored = {}
+    require(restored.keys() <= release["images"].keys() and
+            all(state in ("writing", "verified") for state in restored.values()), "Invalid restore states")
+    # Validate every untouched/verified target before the first write. Only a
+    # journaled interrupted write may contain an unknown partial image.
+    for name, image in release["images"].items():
+        state = restored.get(name)
+        current = device.hash(name)
+        if state == "verified":
+            require(current == journal["backups"][name], f"Previously restored partition changed: {name}")
+        elif state != "writing" and writes.get(name) != "writing":
+            expected = image["sha256"] if writes.get(name) == "verified" else journal["backups"][name]
+            require(current == expected, f"Partition changed before restore: {name}")
+    journal["restore"] = restored
+    journal["restore_complete"] = False
+    save_json(journal_path, journal)
+    for name in ("userdata", "logo", "odmdtbo", "boot", "recovery"):
+        if name not in release["images"] or restored.get(name) == "verified":
+            continue
+        source = regular(backup_dir / f"{name}.img")
+        expected = journal["backups"][name]
+        require(digest(source) == expected, f"Backup changed before restore: {name}")
+        restored[name] = "writing"
+        save_json(journal_path, journal)
+        print(f"SIMULATION: restoring and verifying original {name}…", flush=True)
+        device.write(name, source)
+        require(device.hash(name) == expected, f"Restore readback mismatch: {name}; retain originals and journal")
+        restored[name] = "verified"
+        save_json(journal_path, journal)
+    for name in IDENTITY_PARTITIONS:
+        require(device.hash(name) == journal["backups"][name], f"Identity changed during restore: {name}")
+    journal["restore_complete"] = True
+    save_json(journal_path, journal)
+    print("Restore simulation verified. No physical device was flashed.")
+
+
 def watch_usb(timeout):
     # These are generic MediaTek IDs, not proof that a candidate is an HA100.
     try:
@@ -292,11 +365,11 @@ def main():
     watch = commands.add_parser("watch-usb", help="Observe generic MTK USB enumeration; does not capture the boot session")
     watch.add_argument("--timeout", type=float, default=60)
     commands.add_parser("install", help="Unavailable until the HA100 USB transport is hardware-validated")
-    for name in ("plan", "simulate"):
+    for name in ("plan", "simulate", "simulate-restore"):
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--device-dir", type=Path, required=True, help="File-backed simulated device")
-        if name == "simulate":
+        if name in ("simulate", "simulate-restore"):
             command.add_argument("--backup-dir", type=Path, required=True)
             command.add_argument("--identity", type=Path, required=True)
             command.add_argument("--confirm-device", required=True)
@@ -316,6 +389,9 @@ def main():
             print("Backup: " + ", ".join(sorted(IDENTITY_PARTITIONS | release["images"].keys())))
             print("Write and verify: " + " → ".join(name for name in WRITE_ORDER if name in release["images"]))
             print("Preserve every other partition; no format, repartition, bootloader writes or automatic reboot.")
+        elif args.command == "simulate-restore":
+            restore_simulated(release, device, args.backup_dir, identity_record(args.identity),
+                              args.confirm_device, args.resume)
         else:
             install_simulated(release, bundle, device, args.backup_dir, identity_record(args.identity),
                               args.confirm_device, args.resume)

@@ -29,6 +29,94 @@ class InstallerTests(unittest.TestCase):
             installer.install_simulated(self.release, self.bundle, self.device, self.backups,
                                         self.identity, confirm, resume)
 
+    def run_restore(self, resume=False, confirm="SIMULATED-HA100-001"):
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.restore_simulated(self.release, self.device, self.backups,
+                                        self.identity, confirm, resume)
+
+    def test_restore_preserves_originals_and_restores_recovery_last(self):
+        self.run_install()
+        writes = []
+        actual = self.device.write
+        self.device.write = lambda name, path: writes.append(name) or actual(name, path)
+        self.run_restore()
+        self.assertEqual(writes, ["userdata", "boot", "recovery"])
+        self.assertEqual({name: self.device.hash(name) for name in self.original}, self.original)
+        for name in self.original:
+            self.assertEqual(installer.digest(self.backups / f"{name}.img"), self.original[name])
+        self.assertTrue(installer.read_json(self.backups / "journal.json")["restore_complete"])
+        with self.assertRaisesRegex(installer.InstallError, "Restore has started"):
+            self.run_install(resume=True)
+        writes.clear()
+        self.run_restore(resume=True)
+        self.assertEqual(writes, [])
+
+    def test_interrupted_restore_resumes_without_replacing_originals(self):
+        self.run_install()
+        actual = self.device.write
+        def interrupted(name, source):
+            if name == "boot":
+                with self.device.partition(name).open("r+b") as stream:
+                    stream.write(b"interrupted restore")
+                raise OSError("unplug")
+            actual(name, source)
+        self.device.write = interrupted
+        with self.assertRaisesRegex(OSError, "unplug"):
+            self.run_restore()
+        self.device.write = actual
+        with self.assertRaisesRegex(installer.InstallError, "already started"):
+            self.run_restore()
+        self.run_restore(resume=True)
+        self.assertEqual({name: self.device.hash(name) for name in self.original}, self.original)
+
+    def test_restore_rejects_wrong_device_without_writes(self):
+        self.run_install()
+        self.device.write = lambda *a: self.fail("unexpected restore write")
+        with self.assertRaisesRegex(installer.InstallError, "confirmation"):
+            self.run_restore(confirm="another-device")
+        self.device.description["storage_id"] = "another-device"
+        with self.assertRaisesRegex(installer.InstallError, "different release/device/identity"):
+            self.run_restore(confirm="another-device")
+
+    def test_restore_validates_later_backup_before_first_write(self):
+        self.run_install()
+        with (self.backups / "recovery.img").open("r+b") as stream:
+            stream.write(b"corrupt")
+        self.device.write = lambda *a: self.fail("unexpected restore write")
+        with self.assertRaisesRegex(installer.InstallError, "Damaged backup"):
+            self.run_restore()
+
+    def test_restore_rejects_changed_calibration(self):
+        self.run_install()
+        with self.device.partition("nvram").open("r+b") as stream:
+            stream.write(b"different unit")
+        self.device.write = lambda *a: self.fail("unexpected restore write")
+        with self.assertRaisesRegex(installer.InstallError, "Device identity changed"):
+            self.run_restore()
+
+    def test_restore_rejects_unexpected_installed_changes(self):
+        self.run_install()
+        with self.device.partition("recovery").open("r+b") as stream:
+            stream.write(b"unexpected update")
+        self.device.write = lambda *a: self.fail("unexpected restore write")
+        with self.assertRaisesRegex(installer.InstallError, "Partition changed before restore"):
+            self.run_restore()
+
+    def test_restore_can_recover_an_interrupted_install(self):
+        actual = self.device.write
+        def interrupted(name, source):
+            if name == "userdata":
+                with self.device.partition(name).open("r+b") as stream:
+                    stream.write(b"partial install")
+                raise OSError("unplug")
+            actual(name, source)
+        self.device.write = interrupted
+        with self.assertRaisesRegex(OSError, "unplug"):
+            self.run_install()
+        self.device.write = actual
+        self.run_restore()
+        self.assertEqual({name: self.device.hash(name) for name in self.original}, self.original)
+
     def test_backup_precedes_every_write_and_boot_is_last(self):
         writes = []
         actual_write = self.device.write

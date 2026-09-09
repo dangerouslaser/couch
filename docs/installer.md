@@ -205,3 +205,25 @@ This exit path has regression coverage but is awaiting physical validation.
 Reports distinguish requested/acknowledged boot from normal-OS verification;
 a protocol ACK alone does not prove a successful Couch boot. The default capture
 still sends no exit command. Physical installation remains disabled.
+
+
+## Restore simulation
+
+`simulate-restore` restores the original files saved by `simulate`, using the
+same `--manifest`, `--device-dir`, `--backup-dir`, `--identity`, and
+`--confirm-device` arguments. It accepts only the file-backed simulator; there
+is no physical restore transport. Retain the matching release bundle as well
+as the original backup directory for this experimental command.
+
+Before writing, it verifies the recorded device/layout/identity, every original
+backup, current calibration hashes and every untouched or previously verified
+target. Only a journaled interrupted write may contain unknown partial bytes.
+It restores userdata and optional assets, then boot, and recovery last so the
+recovery image remains available through the earlier steps. It never restores
+calibration or bootloaders, and never replaces the original backup files.
+
+An interrupted restore requires explicit `--resume`. Once restoration starts,
+installation cannot resume from that journal. Tests cover full round trips,
+interrupted install and restore, wrong-device rejection, corrupted later
+backups, unexpected partition changes, immutable originals and write ordering.
+This validates policy and failure handling, not hardware recoverability.
