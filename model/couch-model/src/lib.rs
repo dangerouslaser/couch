@@ -53,6 +53,7 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 pub mod buttons;
+pub mod commands;
 mod device;
 mod connection;
 mod appearance;

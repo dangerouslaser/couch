@@ -215,7 +215,7 @@ impl Config {
                     && (binding.gesture == crate::buttons::Gesture::Short || binding.button.supports_long())
                     && binding.action.as_ref().map_or(true, |action| self.devices().find(|(_, d)| d.id == action.device)
                         .and_then(|(_, d)| self.resolve_integration(&d.integration))
-                        .is_some_and(|integration| crate::buttons::functions(&integration).iter().any(|f| f.0 == action.command)));
+                        .is_some_and(|integration| crate::commands::Function::parse(&action.command).is_some_and(|f|f.supports(&integration))));
                 if !valid { problems.push(Problem {at:alloc::format!("activities[{i}].buttons[{j}]"),message:"Choose one mapping per button and a supported device function".into()}); }
             }
             for (j, step) in act.steps.iter().enumerate() {

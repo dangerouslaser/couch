@@ -151,18 +151,7 @@ pub fn functions(integration: &Integration) -> &'static [(&'static str, &'static
         _ => &[],
     }
 }
-pub fn repeatable(command: &str) -> bool {
-    matches!(
-        command,
-        "up" | "down"
-            | "left"
-            | "right"
-            | "volume-up"
-            | "volume-down"
-            | "channel-up"
-            | "channel-down"
-    )
-}
+pub fn repeatable(command:&str)->bool {crate::commands::Function::parse(command).is_some_and(|f|f.repeatable())}
 
 #[cfg(test)]
 mod tests {
