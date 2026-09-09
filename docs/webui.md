@@ -179,8 +179,8 @@ writes the file - temp file in the same directory, `fsync`, `rename`, `fsync` of
 the directory. A rejected edit changes nothing at all, and a battery pull cannot
 leave a present-but-empty config behind. A *corrupt* file at startup is an
 error, not a reset: overwriting somebody's house because one brace is missing is
-data loss with extra steps. A *missing* file is first boot, and gets the seed
-house.
+data loss with extra steps. A *missing* file is first boot and starts with an
+empty configuration, without example rooms, devices, or connections.
 
 ## The API
 

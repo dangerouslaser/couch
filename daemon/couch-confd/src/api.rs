@@ -1046,6 +1046,7 @@ mod activity_mapping_tests {
         use couch_model::{ActivitySetup, SequenceStep};
         let dir = std::env::temp_dir().join(format!("couch-api-setup-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), serde_json::to_vec(&Config::seed()).unwrap()).unwrap();
         let api = Api::new(Store::open(dir.join("config.json")).unwrap(), Assets::embedded(), Arc::new(Auth::new(dir.join("pin"), true)));
         let mut activity = api.with(|s| s.config().activities[0].clone());
         activity.setup = ActivitySetup {
@@ -1071,6 +1072,7 @@ mod activity_mapping_tests {
     fn activity_update_persists_and_validates_physical_bindings() {
         let dir=std::env::temp_dir().join(format!("couch-api-buttons-{}",std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), serde_json::to_vec(&Config::seed()).unwrap()).unwrap();
         let api=Api::new(Store::open(dir.join("config.json")).unwrap(),Assets::embedded(),Arc::new(Auth::new(dir.join("pin"),true)));
         let mut activity=api.with(|s|s.config().activities[0].clone());
         activity.buttons=vec![couch_model::buttons::Binding{button:couch_model::buttons::Button::Ok,gesture:couch_model::buttons::Gesture::Long,action:Some(Action::new("living-kodi","home"))}];

@@ -203,7 +203,7 @@ Usage: couch-confd [options]
   -h, --help      this
   -V, --version   the version
 
-The config file is created from a seed house if it does not exist.
+An empty config file is created if it does not exist.
 
 A browser pairs by entering a four-digit PIN that appears on the remote's own
 screen: the credential is being able to see it.",

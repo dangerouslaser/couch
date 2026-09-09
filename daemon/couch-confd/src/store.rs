@@ -48,13 +48,10 @@ pub struct Store {
 }
 
 impl Store {
-    /// Load, or seed.
+    /// Load an existing configuration, or create an empty one on first boot.
     ///
-    /// A missing file is the first boot and gets the seed house written out, so
-    /// the web UI opens on something rather than an empty list a user has to
-    /// guess their way out of. A *corrupt* file is a different matter and is an
-    /// error: overwriting somebody's house because one brace is missing is not
-    /// a recovery, it is data loss with extra steps.
+    /// New installations start without example rooms or devices. A corrupt
+    /// existing file is an error and is never replaced with a fresh config.
     pub fn open(path: impl Into<PathBuf>) -> Result<Store, Error> {
         let path = path.into();
         match fs::read(&path) {
@@ -80,7 +77,7 @@ impl Store {
                 Ok(store)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let store = Store { path, config: Config::seed() };
+                let store = Store { path, config: Config::default() };
                 store.write()?;
                 Ok(store)
             }
@@ -226,14 +223,28 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_file_is_seeded() {
-        let path = scratch("seed");
+    fn a_missing_file_starts_empty_and_persists() {
+        let path = scratch("empty");
         let store = Store::open(&path).unwrap();
-        assert!(!store.config().rooms.is_empty());
+        assert_eq!(store.config(), &Config::default());
         assert!(path.exists());
         // And it reloads to the same thing.
         let again = Store::open(&path).unwrap();
         assert_eq!(again.config(), store.config());
+    }
+
+    #[test]
+    fn existing_configuration_is_preserved_byte_for_byte() {
+        let path = scratch("existing");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut config = Config::seed();
+        config.revision = 17;
+        config.rooms[0].name = "My existing room".into();
+        let original = serde_json::to_vec_pretty(&config).unwrap();
+        fs::write(&path, &original).unwrap();
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.config(), &config);
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]
@@ -247,6 +258,8 @@ mod tests {
     #[test]
     fn a_rejected_edit_changes_nothing() {
         let path = scratch("reject");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec(&Config::seed()).unwrap()).unwrap();
         let mut store = Store::open(&path).unwrap();
         let before = store.config().clone();
         let err = store
