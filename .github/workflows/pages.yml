@@ -2,7 +2,7 @@ name: Publish Couch site
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'preview/**', 'ui/couch-gui/ui/**', 'ui/couch-gui/fonts/**', 'ui/couch-gui/assets/**', 'assets/lucide/**', 'docs/mockups/kodi-activity/assets/**', 'tools/build-preview.sh', 'tools/tests/site-demo.cjs', '.github/workflows/pages.yml']
+    paths: ['site/**', 'preview/**', 'ui/couch-gui/**', 'model/couch-model/src/buttons.rs', 'assets/lucide/**', 'docs/mockups/kodi-activity/assets/**', 'tools/build-preview.sh', 'tools/tests/site-demo.cjs', 'tools/tests/site-usage.cjs', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -55,6 +55,12 @@ jobs:
           preview_server_pid=$!
           trap 'kill "$preview_server_pid"' EXIT
           NODE_PATH="$RUNNER_TEMP/preview-browser/node_modules" node tools/tests/site-demo.cjs
+      - name: Render usage screenshots and verify guides
+        run: |
+          python3 -m http.server 8098 --directory site > "$RUNNER_TEMP/usage-server.log" 2>&1 &
+          usage_server_pid=$!
+          trap 'kill "$usage_server_pid"' EXIT
+          NODE_PATH="$RUNNER_TEMP/preview-browser/node_modules" node tools/tests/site-usage.cjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

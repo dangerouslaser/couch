@@ -66,3 +66,5 @@
 .icon-tv{--icon:url("assets/lucide/tv.svg")}
 .icon-house{--icon:url("assets/lucide/house.svg")}
 .icon-power{--icon:url("assets/lucide/power.svg")}
+/* Keep the guide link reachable without squeezing the navigation on phones. */
+@media(max-width:550px){.topbar{height:auto;min-height:110px;flex-wrap:wrap;gap:20px;padding-block:22px}.topbar nav{width:100%;justify-content:space-between;gap:12px;font-size:12px}.topbar nav a{white-space:nowrap}.topbar nav span{margin-left:2px}}

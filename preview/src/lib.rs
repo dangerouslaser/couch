@@ -26,3 +26,9 @@ pub fn remote_button(name: &str) {
 pub fn state_json() -> String {
     demo::state_json()
 }
+
+/// Deterministic local fixtures for documentation rendered by the same Slint UI.
+#[wasm_bindgen]
+pub fn documentation_screen(name: &str) {
+    demo::documentation_screen(name);
+}

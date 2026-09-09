@@ -244,10 +244,12 @@ pub fn configure(app: &App) {
             })
             .collect::<Vec<_>>(),
     )));
-    let mut art = image::load_from_memory(include_bytes!("../../docs/mockups/kodi-activity/assets/fanart.png"))
-        .unwrap()
-        .resize_to_fill(480, 800, image::imageops::FilterType::Triangle)
-        .to_rgba8();
+    let mut art = image::load_from_memory(include_bytes!(
+        "../../docs/mockups/kodi-activity/assets/fanart.png"
+    ))
+    .unwrap()
+    .resize_to_fill(480, 800, image::imageops::FilterType::Triangle)
+    .to_rgba8();
     for (_, y, p) in art.enumerate_pixels_mut() {
         let shade = (0.18 + ((y as f32 - 300.) / 350.).clamp(0., 1.) * 0.78).clamp(0., 0.96);
         for c in 0..3 {
@@ -493,4 +495,38 @@ pub fn state_json() -> String {
         result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row());
     });
     result
+}
+
+// Documentation freezes fixture clocks, never the production component tree.
+// A fresh browser page per image keeps each screenshot independent.
+pub fn documentation_screen(name: &str) {
+    let name = name.to_string();
+    let _ = slint::invoke_from_event_loop(move || {
+        with(|d, a| {
+            d.timer.stop();
+            d.clear(a);
+            match name.as_str() {
+                "home" => {}
+                "room" => d.open_room(a, 0),
+                "brightness" => {
+                    d.open_room(a, 0);
+                    a.invoke_light_brightness(0, 5);
+                }
+                "scenes" => {
+                    d.open_room(a, 0);
+                    d.scene(a, 2);
+                }
+                "kodi" | "chapters" => {
+                    d.open_room(a, 0);
+                    d.player(a);
+                    if name == "chapters" {
+                        a.invoke_player_action("chapters".into(), 0.);
+                    }
+                }
+                _ => panic!("Unknown documentation fixture"),
+            }
+        });
+        // Allow deferred production callbacks to populate the card/sheet first.
+        later(|d, _| d.toast.stop());
+    });
 }

@@ -8,7 +8,7 @@ try {
   // This isolated frame emulates the remote's physical 480 × 800 framebuffer.
   // Keep Winit and Slint at that scale; the parent scales the entire device.
   Object.defineProperty(window, 'devicePixelRatio', {value:1, configurable:true});
-  const {default:init,remote_button,state_json}=await import('./wasm/couch_preview.js');
+  const {default:init,remote_button,state_json,documentation_screen}=await import('./wasm/couch_preview.js');
   const canvas = document.querySelector('canvas');
   canvas.width = Math.round(480 * devicePixelRatio);
   canvas.height = Math.round(800 * devicePixelRatio);
@@ -16,7 +16,7 @@ try {
     // Winit 0.30 hands its event loop to the browser with this sentinel.
     if (!String(error).includes("Using exceptions for control flow, don't mind me. This isn't actually an error!")) throw error;
   }
-  window.couchDemo = {remote_button, state:()=>JSON.parse(state_json())};
+  window.couchDemo = {remote_button, documentation_screen, state:()=>JSON.parse(state_json())};
   send('ready');
   // Device page transitions copy framebuffer images. Reproduce that host work
   // with canvas snapshots; the Slint component tree remains unchanged.

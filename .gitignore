@@ -19,3 +19,5 @@ __pycache__/
 
 # Generated browser Slint application; Pages builds it from preview/.
 site/wasm/
+# Generated from the current production Slint WASM by the Pages workflow.
+site/usage/screenshots/
