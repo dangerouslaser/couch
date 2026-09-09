@@ -18,6 +18,10 @@ impl std::fmt::Debug for Settings {
     }
 }
 impl Settings {
+    pub fn address(&self) -> Result<std::net::IpAddr> {
+        endpoint(&self.url).map(|(_, host, _)| host)
+    }
+
     pub fn validate(&self) -> Result<()> {
         let (url, _, _) = endpoint(&self.url)?;
         if url.path() != "/"

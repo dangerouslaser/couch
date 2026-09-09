@@ -17,11 +17,19 @@ enum Command {
     Volume(bool),
     Channel(bool),
     Mute(bool),
+    ToggleMute,
+    Power,
     Play(bool),
     Retry,
 }
 fn command(name: &str) -> Option<Command> {
     Some(match name {
+        "power" => Command::Power,
+        "toggle-mute" => Command::ToggleMute,
+        "red" => Command::Key(Button::Red),
+        "green" => Command::Key(Button::Green),
+        "blue" => Command::Key(Button::Blue),
+        "yellow" => Command::Key(Button::Yellow),
         "up" => Command::Key(Button::Up),
         "down" => Command::Key(Button::Down),
         "left" => Command::Key(Button::Left),
@@ -49,6 +57,20 @@ fn execute(c: &mut Client, action: Command) -> couch_webos::Result<()> {
         Command::Volume(false) => c.volume_down(),
         Command::Channel(up) => c.channel(up),
         Command::Mute(on) => c.mute(on),
+        Command::Power => c.power_off(),
+        Command::ToggleMute => {
+            let status = c.volume()?;
+            let status = if status["volumeStatus"].is_object() {
+                &status["volumeStatus"]
+            } else {
+                &status
+            };
+            let muted = status["muteStatus"]
+                .as_bool()
+                .or(status["muted"].as_bool())
+                .ok_or(couch_webos::Error::Protocol)?;
+            c.mute(!muted)
+        }
         Command::Play(play) => c.playback(if play {
             Playback::Play
         } else {
@@ -77,6 +99,113 @@ fn volume(c: &mut Client) -> couch_webos::Result<String> {
         }
     ))
 }
+// Bind the learned wake address to this exact pairing endpoint. It is private
+// device state, not part of exported room configuration.
+fn remember_wake(settings: &Settings) {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let Ok(address) = settings.address() else {
+        return;
+    };
+    let Ok(arp) = std::fs::read_to_string("/proc/net/arp") else {
+        return;
+    };
+    let Some(mac) = arp
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            (fields.len() >= 6 && fields[0] == address.to_string() && fields[2] == "0x2")
+                .then(|| fields[3].to_string())
+        })
+        .next()
+    else {
+        return;
+    };
+    if couch_webos::magic_packet(&mac).is_err() || mac == "00:00:00:00:00:00" {
+        return;
+    }
+    let data = serde_json::json!({"url":settings.url,"mac":mac}).to_string();
+    let file = home::path("webos-wake.json");
+    if std::fs::read_to_string(&file).ok().as_deref() == Some(&data) {
+        return;
+    }
+    let tmp = file.with_extension("new");
+    let result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(data.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &file)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+}
+fn wake_tv(settings: &Settings) -> Result<(), String> {
+    let saved = std::fs::read(home::path("webos-wake.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .ok_or("Connect while the TV is on once to learn its wake address")?;
+    if saved["url"].as_str() != Some(settings.url.as_str()) {
+        return Err("Connect to this TV while it is on once to learn its wake address".into());
+    }
+    couch_webos::wake(
+        saved["mac"].as_str().ok_or("Missing TV wake address")?,
+        std::net::Ipv4Addr::BROADCAST,
+    )
+    .map_err(|e| e.to_string())
+}
+fn power(
+    client: &mut Option<Client>,
+    active: &AtomicU64,
+    generation: u64,
+) -> Result<String, String> {
+    let settings =
+        Settings::load(&home::path("webos-connection.json")).map_err(|e| e.to_string())?;
+    if client.is_none() {
+        match Client::connect(&settings) {
+            Ok(c) => *client = Some(c),
+            Err(couch_webos::Error::Transport | couch_webos::Error::Timeout) => {
+                if active.load(Ordering::SeqCst) != generation {
+                    return Ok(String::new());
+                }
+                wake_tv(&settings)?;
+                return Ok("Wake requested…".into());
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    if active.load(Ordering::SeqCst) != generation {
+        return Ok(String::new());
+    }
+    remember_wake(&settings);
+    let status = client
+        .as_mut()
+        .unwrap()
+        .power_state()
+        .map_err(|e| e.to_string())?;
+    let state = status["state"]
+        .as_str()
+        .ok_or("TV did not report its power state")?;
+    if active.load(Ordering::SeqCst) != generation {
+        return Ok(String::new());
+    }
+    if state != "Active" {
+        wake_tv(&settings)?;
+        *client = None;
+        return Ok("Wake requested…".into());
+    }
+    // A failed power-off write is ambiguous: never follow it with a wake packet.
+    client
+        .as_mut()
+        .unwrap()
+        .power_off()
+        .map_err(|e| e.to_string())?;
+    *client = None;
+    Ok("TV powered off · Press Power to wake".into())
+}
 struct Work {
     generation: u64,
     action: Command,
@@ -90,6 +219,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     let mut client = None;
     let mut generation = 0;
     let mut refreshed = Instant::now();
+    let mut waking: Option<Instant> = None;
     loop {
         let work = match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(w) => Some(w),
@@ -100,6 +230,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
         if current != generation {
             client = None;
             generation = current;
+            waking = None;
         }
         if let Some(w) = work {
             if w.generation != current
@@ -109,11 +240,28 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             {
                 continue;
             }
+            if matches!(w.action, Command::Power) {
+                waking = None;
+                let result = power(&mut client, &active, generation);
+                if result.as_deref() == Ok("Wake requested…") {
+                    waking = Some(Instant::now() + Duration::from_secs(30));
+                }
+                if result.is_err() {
+                    client = None;
+                }
+                let _ = tx.try_send(Event {
+                    generation,
+                    status: result,
+                });
+                refreshed = Instant::now();
+                continue;
+            }
             let result = (|| {
                 if matches!(w.action, Command::Retry) || client.is_none() {
                     let settings = Settings::load(&home::path("webos-connection.json"))?;
                     let mut connected = Client::connect(&settings)?;
                     connected.prepare_input()?;
+                    remember_wake(&settings);
                     client = Some(connected);
                 }
                 // Opening or closing another screen cancels queued keys, including
@@ -128,7 +276,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 execute(c, w.action)?;
                 if matches!(
                     w.action,
-                    Command::Volume(_) | Command::Mute(_) | Command::Retry
+                    Command::Volume(_) | Command::Mute(_) | Command::ToggleMute | Command::Retry
                 ) {
                     volume(c)
                 } else {
@@ -144,6 +292,35 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 generation,
                 status: result.map_err(|e| e.to_string()),
             });
+            refreshed = Instant::now();
+        } else if current != 0 && waking.is_some() && refreshed.elapsed() > Duration::from_secs(2) {
+            let connected = Settings::load(&home::path("webos-connection.json"))
+                .and_then(|s| Client::connect(&s))
+                .and_then(|mut c| {
+                    if c.power_state()?["state"] == "Active" {
+                        Ok(c)
+                    } else {
+                        Err(couch_webos::Error::Timeout)
+                    }
+                });
+            if let Ok(mut c) = connected {
+                let result = volume(&mut c).map_err(|e| e.to_string());
+                client = Some(c);
+                waking = None;
+                let _ = tx.try_send(Event {
+                    generation,
+                    status: result,
+                });
+            } else if waking.is_some_and(|until| Instant::now() >= until) {
+                waking = None;
+                let _ = tx.try_send(Event {
+                    generation,
+                    status: Err(
+                        "TV did not wake. Enable network/mobile power-on in the LG TV settings"
+                            .into(),
+                    ),
+                });
+            }
             refreshed = Instant::now();
         } else if current != 0 && refreshed.elapsed() > Duration::from_secs(5) {
             if let Some(c) = client.as_mut() {

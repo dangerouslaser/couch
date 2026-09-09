@@ -46,17 +46,25 @@ to enter the native Slint control screen:
 | Volume + / − | TV volume up / down |
 | Channel + / − | TV channel up / down (TV/app support required) |
 | Menu | TV menu |
-| Return to Couch (touch) / Home key | Exit TV control mode |
+| Power | Turn off, or wake over the network |
+| Home | TV Home |
+| Mute | Toggle the TV's current mute state |
+| Red / Green / Blue / Yellow | Matching TV color key |
+| Return to Couch (touch) | Exit TV control mode |
 
-Touch buttons also provide TV Home, explicit mute/unmute, play/pause and
+The screen omits the touch D-pad. Touch buttons provide TV Home, explicit mute/unmute, play/pause and
 reconnect. TV navigation has no per-key acknowledgement. Volume status is
 read after volume commands and every five seconds while idle. The native
 controller owns persistent encrypted control/navigation sockets on a worker;
 it does not block rendering. Its input queue is bounded, old queued keys
 expire after 750ms, and leaving the screen invalidates queued commands and
 late UI replies. An already-sent command cannot be recalled. Failed commands
-are never automatically retried. Activity startup steps and WOL are not yet
-mapped to this screen; turn on the TV before connecting.
+are never automatically retried. Activity startup steps are not yet mapped to this screen. Connect once with
+the TV on so Couch can learn its MAC from the local ARP table. The private
+`webos-wake.json` binds that address to the current pairing URL. Power-on
+sends Wake-on-LAN and checks for an active TV for up to 30 seconds; enable
+network/mobile power-on in LG settings if it does not wake. Wake is not
+reported as successful merely because the packet was sent.
 
 The browser controls reconnect per operation. The library also supports
 interleaved push subscriptions.
@@ -70,7 +78,18 @@ configuration round trips. A physical-remote fixture verifies Slint input
 through Rust SSAP/pointer sockets for D-pad, OK, Back, volume, channels and
 exit. The physical GUI also raises and restores volume on the actual LG TV.
 Navigation-socket establishment is verified on that TV;
-physical wake is not yet verified.
+physical power-off and network wake are also verified.
 
 Protocol references: [Home Assistant's maintained SSAP client](https://github.com/home-assistant-libs/aiowebostv)
 and [webOS integration setup](https://www.home-assistant.io/integrations/webostv/).
+
+## HA100 physical key map
+
+Captured on the physical remote on 2026-09-09 (all on `mt_gpio_kpd`):
+Power **60**, Home **59**, Mute **113**, Red **66**, Green **67**, Blue **68**,
+Yellow **87**. These differ from standard Linux color/power key codes. The
+GUI reserves Slint F13–F18 for power, mute and colors; Home uses `Key.Home`.
+These keys never auto-repeat, while volume and directional keys still do.
+Physical-device fixture tests verify key-to-protocol mapping and mute toggle;
+unit tests verify that holding a one-shot button does not generate repeats.
+The actual LG TV passed physical mute-toggle and power-off/network-wake tests.

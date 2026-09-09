@@ -243,7 +243,7 @@ impl Keypad {
                         repeat: false,
                     });
                 };
-                self.held = code;
+                self.held = if one_shot(code) { 0 } else { code };
                 self.held_since = mono;
                 self.last_repeat = 0;
                 Some(Press {
@@ -285,6 +285,11 @@ impl Keypad {
     }
 }
 
+// Measured HA100 legends: Power=F2, Home=F1, R/G/B/Y=F8/F9/F10/F11.
+// Reserve F13–F18 for TV actions; never repeat power, mute, home or colors.
+fn one_shot(code: u16) -> bool {
+    matches!(code,59|60|113|116|172|66|67|68|87|398|399|400|401)
+}
 fn map_key(code: u16) -> Option<Key> {
     match code {
         103 => Some(Key::UpArrow),      // KEY_UP
@@ -304,7 +309,13 @@ fn map_key(code: u16) -> Option<Key> {
         109 | 403 => Some(Key::F22),   // PAGEDOWN / CHANNELDOWN
         115 => Some(Key::F23),         // KEY_VOLUMEUP
         114 => Some(Key::F24),         // KEY_VOLUMEDOWN
-        172 => Some(Key::Home),         // KEY_HOMEPAGE
+        60 | 116 => Some(Key::F13),     // measured Power / standard KEY_POWER
+        113 => Some(Key::F14),          // mute
+        66 | 398 => Some(Key::F15),      // red
+        67 | 399 => Some(Key::F16),      // green
+        68 | 401 => Some(Key::F17),      // blue
+        87 | 400 => Some(Key::F18),      // yellow
+        59 | 172 => Some(Key::Home),         // KEY_HOMEPAGE
         _ => None,
     }
 }
@@ -389,6 +400,17 @@ mod tests {
         for code in [109, 403] { assert_eq!(map_key(code).map(char::from), Some(char::from(Key::F22))); }
     }
 
+    #[test]
+    fn measured_tv_buttons_fire_once_even_when_held() {
+        for (code,mapped) in [(60,Key::F13),(59,Key::Home),(113,Key::F14),(66,Key::F15),(67,Key::F16),(68,Key::F17),(87,Key::F18)] {
+            let mut k=blank();
+            assert_eq!(batch(&mut k,&[down(code),syn()],1),vec![key(mapped)]);
+            assert!(k.repeat(2_000_000).is_none());
+            assert!(batch(&mut k,&[raw(EV_KEY,code,2,0),up(code),syn()],2_100_000).is_empty());
+        }
+        let mut k=blank();batch(&mut k,&[down(115),syn()],1);
+        assert!(k.repeat(2_000_000).is_some());
+    }
     #[test]
     fn volume_keys_map_to_repeatable_brightness_inputs() {
         assert_eq!(map_key(115).map(char::from), Some(char::from(Key::F23)));
