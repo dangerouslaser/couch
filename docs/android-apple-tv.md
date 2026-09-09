@@ -91,8 +91,8 @@ can map its supported functions to physical buttons, ordered start/stop steps,
 and custom command pages. Selecting an Android TV from a room opens its TV control screen immediately.
 D-pad, OK, Back, Home, menu, volume, mute, channel and power control that TV;
 long Back leaves the screen. Playback controls are available by touch. Android
-TV can also be an activity’s main screen. Apple TV still uses custom activity
-pages; its dedicated screen is not implemented. Unsupported
+TV and Apple TV can also be an activity’s main screen. Selecting an Apple TV
+opens its Companion control screen directly. Unsupported
 Apple functions such as mute and stop are omitted from the capability catalog.
 
 The shared control broker owns each endpoint, answers Android keepalives while
@@ -144,16 +144,16 @@ no corresponding installed-app-list operation. [Companion app-list implementatio
 The encrypted local Companion peer now exercises discovery as well as launch.
 Additional tests cover invalid catalogs and provider/pairing route guards; the
 web UI compiles for WebAssembly. This addition has not been tested on a physical
-Apple TV and does not add a dedicated Apple TV screen or playback metadata.
+Apple TV and does not add playback metadata. The dedicated screen is described below.
 
 ## Remaining client work, in priority order
 
 1. Pair and validate Apple TV on real hardware: PIN, saved reconnection,
    navigation, app discovery/launch and sleep/wake commands. This needs an
    available TV and its on-screen PIN.
-2. Add a dedicated Apple TV device/activity view, so selecting it from a room
-   immediately takes over physical controls. Custom activity mappings already
-   work; they are not a substitute for that unfinished direct-selection flow.
+2. Validate the dedicated Apple TV device/activity view against a paired TV,
+   including immediate physical-control takeover and installed-app launch.
+   Its routing and Slint controls are implemented and headless-tested.
 3. Exercise Android keepalive and network-loss recovery over longer sessions;
    its basic pairing, saved reconnection and visible navigation have passed.
 4. Extend Android text input/current-app tracking and Apple AirPlay/MRP
@@ -184,3 +184,25 @@ for the next fresh request. A transport failure never triggers replay of the
 failed command. The original queue-entry expiry and per-endpoint isolation
 remain in place. Real-TV network-loss and longer standby/reconnect checks are
 still outstanding.
+
+
+## Dedicated Apple TV screen
+
+Selecting a room's Apple TV now opens its control screen immediately, using that
+specific connection. Apple TV is also selectable as an activity's main screen.
+D-pad/OK, Back, Home, volume and channel buttons control Companion; Menu uses
+Companion Back. Long Back remains the global return to Couch. Activity mappings
+retain precedence over those defaults.
+
+Touch controls offer previous/play/pause/next and an installed-app selector using
+the shared animated bottom tray. Mute, color keys, stop and seek are unsupported
+and are not offered. There is no invented current program, artwork, timeline or
+power state. The physical Power button explicitly requests **Sleep**; the touch
+**Wake** action requests power-on. This is not an inferred toggle. App choices
+load when connecting or reconnecting and can update an already open Apps tray.
+
+Headless tests dispatch physical keys and touch events through the actual Slint
+component; routing tests check per-TV selection and reject unsupported commands.
+The adapter uses the already peer-tested Rust Companion broker. Physical Apple
+TV validation still needs its address, advertised Companion port, tvOS version
+and the PIN displayed during pairing. No Apple ID password is needed.

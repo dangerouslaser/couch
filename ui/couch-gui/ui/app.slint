@@ -139,6 +139,7 @@ export component App inherits Window {
     callback tv-action(string);
     in-out property <bool> tv-shown: false;
     in-out property <bool> tv-android: false;
+    in-out property <bool> tv-apple: false;
     in-out property <string> tv-title;
     in-out property <string> tv-status;
     in-out property <string> tv-error;
@@ -399,7 +400,7 @@ export component App inherits Window {
     }
 
     television := Television {
-        visible:root.tv-shown;shown:root.tv-shown;android-tv:root.tv-android;
+        visible:root.tv-shown;shown:root.tv-shown;android-tv:root.tv-android;apple-tv:root.tv-apple;
         width:parent.width;height:parent.height;
         title:root.tv-title;status:root.tv-status;error:root.tv-error;
         source-name:root.tv-source;sound:root.tv-sound;picture:root.tv-picture;panel:root.tv-panel;choices:root.tv-choices;

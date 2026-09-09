@@ -96,7 +96,7 @@ pub fn setup(app: App, connection: &Connection) -> AnyView {
                         token.set(String::new());
                         code.set(String::new());
                         message.set(if apple {
-                            "Paired. Add this TV to a room, then map its controls in an activity."
+                            "Paired. Add this TV to a room and select it on the remote to take control."
                         } else {
                             "Paired. Add this TV to a room and select it on the remote to take control."
                         }.into());
@@ -137,7 +137,7 @@ pub(super) fn controls(app: App, base: String) -> AnyView {
     let base = StoredValue::new(base);
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
-    view!{<section><p class="dim">{if android {"Select this device on the remote to take control with its physical buttons."} else {"Experimental controls. Add this device to an activity to map physical buttons."}}</p><div class="actions">{
+    view!{<section><p class="dim">{if android {"Select this device on the remote to take control with its physical buttons."} else {"Select this device on the remote for physical controls and installed apps. Apple TV remains experimental."}}</p><div class="actions">{
   [("up","Up"),("down","Down"),("left","Left"),("right","Right"),("ok","OK"),("back","Back"),("home","Home"),("play-pause","Play / pause"),("volume-down","Volume −"),("volume-up","Volume +")].into_iter().map(move |(command,label)|view!{<button disabled=move ||busy.get() on:click=move |_|{if busy.get_untracked(){return}busy.set(true);spawn_local(async move{let result=api::ha("POST",&format!("{}/command",base.get_value()),Some(json!({"command":command}))).await;if busy.try_get_untracked().is_none(){return}match result{Ok(_)=>message.set("Command sent.".into()),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>{label}</button>}).collect_view()
  }</div><p role="status">{move ||message.get()}</p></section>}.into_any()
 }

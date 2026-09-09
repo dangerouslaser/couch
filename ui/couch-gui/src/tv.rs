@@ -1,6 +1,8 @@
 //! TV control: one background owner, bounded input, no network on the UI thread.
 #[path = "tv_android.rs"]
 mod android;
+#[path = "tv_apple.rs"]
+mod apple;
 use crate::{home, App, TvChoice};
 use couch_control::WebOs as Client;
 use couch_webos::{Button, Playback, Settings};
@@ -24,6 +26,7 @@ enum Command {
     Mute(bool),
     ToggleMute,
     Power,
+    Wake,
     Play(bool),
     Retry,
     Next(bool),
@@ -48,6 +51,7 @@ fn command(name: &str) -> Option<Command> {
 
     Some(match name {
         "power" => Command::Power,
+        "wake" => Command::Wake,
         "toggle-mute" => Command::ToggleMute,
         "red" => Command::Key(Button::Red),
         "green" => Command::Key(Button::Green),
@@ -93,7 +97,7 @@ fn execute(c: &mut Client, action: &Command) -> couch_control::Result<()> {
             Playback::Pause
         }),
         Command::Retry => Ok(()),
-        Command::Next(_) => Err(couch_control::Error::Rejected),
+        Command::Next(_) | Command::Wake => Err(couch_control::Error::Rejected),
         Command::Stop => c.playback(Playback::Stop),
         Command::Rewind(forward) => c.playback(if *forward {
             Playback::FastForward
@@ -348,6 +352,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     let mut client = None;
     let mut android_client = None;
     let mut android_mode = false;
+    let mut apple_mode = false;
     let mut generation = 0;
     let mut refreshed = Instant::now();
     let mut waking: Option<Instant> = None;
@@ -363,13 +368,21 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             client = None;
             android_client = None;
             android_mode = false;
+            apple_mode = false;
             generation = current;
             waking = None;
             view = None;
         }
-        if current != 0 && android_mode && refreshed.elapsed() >= Duration::from_secs(4) {
+        if current != 0
+            && (android_mode || apple_mode)
+            && refreshed.elapsed() >= Duration::from_secs(4)
+        {
             if let Some(c) = android_client.as_ref() {
-                match android::refresh(c, generation) {
+                match if apple_mode {
+                    apple::refresh(c, generation)
+                } else {
+                    android::refresh(c, generation)
+                } {
                     Ok(event) => {
                         let _ = tx.try_send(event);
                     }
@@ -398,8 +411,13 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                     .map(|c| c.provider.clone())
             });
             android_mode = provider == Some(couch_model::Provider::AndroidTv);
-            if android_mode {
-                let result = android::run(&mut android_client, &w, &active);
+            apple_mode = provider == Some(couch_model::Provider::AppleTv);
+            if android_mode || apple_mode {
+                let result = if apple_mode {
+                    apple::run(&mut android_client, &w, &active)
+                } else {
+                    android::run(&mut android_client, &w, &active)
+                };
                 match result {
                     Ok(Some(event)) => {
                         let _ = tx.try_send(event);
@@ -618,7 +636,12 @@ impl Controller {
                     c.connection(&couch_model::Id::new(connection))
                         .is_some_and(|c| c.provider == couch_model::Provider::AndroidTv)
                 });
+                let apple = crate::connections::config().is_some_and(|c| {
+                    c.connection(&couch_model::Id::new(connection))
+                        .is_some_and(|c| c.provider == couch_model::Provider::AppleTv)
+                });
                 app.set_tv_android(android);
+                app.set_tv_apple(apple);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 self.choices.clear();
@@ -641,7 +664,7 @@ impl Controller {
                 continue;
             }
             if ["inputs", "apps", "picture", "sound"].contains(&action) {
-                if app.get_tv_android() && action != "apps" {
+                if (app.get_tv_android() || app.get_tv_apple()) && action != "apps" {
                     app.set_tv_error("This control is only available for LG webOS TVs".into());
                     continue;
                 }
@@ -762,6 +785,18 @@ impl Controller {
                 });
                 self.choices = view.choices;
                 self.settings_app = view.settings_app;
+                if app.get_tv_apple() && app.get_tv_panel() == 2 {
+                    app.set_tv_choices(ModelRc::new(VecModel::from(
+                        self.choices
+                            .iter()
+                            .map(|(id, title, detail)| TvChoice {
+                                action: id.as_str().into(),
+                                title: title.as_str().into(),
+                                detail: detail.as_str().into(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )));
+                }
             }
             match event.status {
                 Ok(status) => {

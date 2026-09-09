@@ -315,14 +315,19 @@ impl Controller {
             if let Some((_, device)) = config.devices().find(|(_, d)| Some(&d.id) == source) {
                 if matches!(
                     config.resolve_integration(&device.integration),
-                    Some(Integration::WebOs | Integration::AndroidTv)
+                    Some(Integration::WebOs | Integration::AndroidTv | Integration::AppleTv)
                 ) {
                     let connection = match &device.integration {
                         Integration::Connection { connection_id, .. } => connection_id.to_string(),
                         _ => config
                             .connections
                             .iter()
-                            .find(|c| c.provider == couch_model::Provider::WebOs)
+                            .find(|c| match config.resolve_integration(&device.integration) {
+                                Some(Integration::WebOs) => c.provider == couch_model::Provider::WebOs,
+                                Some(Integration::AndroidTv) => c.provider == couch_model::Provider::AndroidTv,
+                                Some(Integration::AppleTv) => c.provider == couch_model::Provider::AppleTv,
+                                _ => false,
+                            })
                             .map(|c| c.id.to_string())
                             .unwrap_or_default(),
                     };

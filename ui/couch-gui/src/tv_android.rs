@@ -48,7 +48,7 @@ fn function(action: &Command, state: &Value) -> Result<Option<&'static str>, Str
         Command::Play(false) => "pause",
         Command::Rewind(true) => "fast-forward",
         Command::Rewind(false) => "rewind",
-        Command::Input(_) | Command::App(_) | Command::Sound(_) => {
+        Command::Wake | Command::Input(_) | Command::App(_) | Command::Sound(_) => {
             return Err("This control is only available for LG webOS TVs".into())
         }
     }))
