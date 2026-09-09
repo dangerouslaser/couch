@@ -3,8 +3,10 @@
 The new `couch-androidtv` and `couch-appletv` crates are native Rust libraries in
 `clients/`. They do not invoke Python, ADB or an external remote-control program.
 Both are **experimental**. Connections now offers network discovery and explicit
-PIN pairing; deployment and physical TV validation remain pending. Protocol-peer
-tests and ARMv7 compilation are not physical TV validation.
+PIN pairing. The GUI and daemon are deployed on the development remote; initial
+Android TV pairing and authenticated status reads have passed on a Xiaomi TV.
+Apple TV physical validation remains pending. Protocol-peer tests and ARMv7
+compilation are not physical TV validation.
 
 ## Android TV / Google TV
 
@@ -96,3 +98,15 @@ failure. Activity navigation releases retained connection handles. Credentials
 changed through pairing replace the next mapped command's connection settings.
 Discovery is an explicit three-second IPv4 Bonjour search; IPv6 addresses can be
 entered manually, but scoped/link-local IPv6 discovery is not implemented.
+
+
+## Initial Android TV hardware check
+
+The HA100 paired with a Xiaomi `MiTV-AFMU0` using its six-character on-screen
+code. Credentials were saved on the remote, and the authenticated Remote v2
+connection reported model/vendor, power and volume state. Home, Right and Left
+command requests completed successfully, and the operator confirmed visible
+navigation on the TV. A later connection using saved credentials also passed.
+Long-running keepalive and network-loss recovery remain separate checks; a
+successful command write alone does not prove that the TV performed it. No Apple TV has
+been paired during this validation.
