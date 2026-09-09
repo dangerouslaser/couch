@@ -187,7 +187,10 @@ class ExactUsbBackend:
             config.write_preloader_to_file = False
             config.hwparam_path = self.work.name
             config.vid, config.pid = 0x0e8d, 0x2000
-            config.interface = -1
+            # No interface is claimed during construction. An explicit numeric
+            # placeholder avoids this upstream revision's broken default_ids
+            # iteration for -1; start_readonly binds the observed CDC interface.
+            config.interface = 0
             self.mtk = Mtk(config=config, loglevel=logging.CRITICAL)
             mtk = self.mtk
             daconfig = mtk.daloader.daconfig

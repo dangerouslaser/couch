@@ -103,6 +103,15 @@ class UsbBackendTests(unittest.TestCase):
         self.assertEqual(self.events, [("detach", 0), ("claim", 0), ("detach", 1), ("claim", 1),
                                        ("release", 1), ("release", 0), ("attach", 1), ("attach", 0), "dispose"])
 
+    def test_prepare_uses_explicit_placeholder_without_claiming_usb(self):
+        self.backend.prepare(b"loader")
+        self.assertEqual(self.backend.mtk.config.interface, 0)
+        self.assertIsNone(self.backend.device)
+        self.assertEqual(self.events, [])
+        self.backend.claim(descriptor(self.dev))
+        mtk = self.backend.start_readonly(b"loader", ReadPolicy())
+        self.assertEqual(mtk.config.interface, 1)
+
     def test_partial_claim_failure_is_cleaned_up(self):
         def claim(dev, number):
             if number == 1:
