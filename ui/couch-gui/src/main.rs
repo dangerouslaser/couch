@@ -12,6 +12,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod evdev;
 mod keypad;
 mod mic;
+mod motion;
 mod panel;
 mod qr;
 mod system;
@@ -470,6 +471,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let remote_clock = remote_clock::Clock::new();
     let mut dock_clock_enabled = true;
+    let mut wake_on_lift = true;
+    let mut motion = motion::Controller::new();
     let mut swallow_dock_repeats = false;
     // COUCH_OPEN presses OK on whatever COUCH_FOCUS selected, so the chooser
     // can be photographed without driving the keypad. Fired from the loop a
@@ -662,6 +665,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     loop {
+        if motion.poll(wake_on_lift && standby != Standby::Active) {
+            app.set_dock_clock_shown(false);
+            if standby == Standby::Off { light_controls.wake(); }
+            wake(&mut screen, active_level.get());
+            standby = Standby::Active;
+            last_input = now_monotonic_us();
+            verify_at = Some(last_input + 1_000_000);
+            println!("couch-gui: standby: wake on lift");
+        }
         let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() {
             format!("{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_active_activity())
         } else { String::new() };
@@ -874,6 +886,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some((clock, settings)) = remote_clock.poll() {
                 app.set_clock(clock.into());
                 dock_clock_enabled = settings.dock_clock;
+                wake_on_lift = settings.wake_on_lift;
             }
             if let Some((raw, saved, accent)) = home::read(&loaded_home) {
                 home::apply_accent(&app,accent);

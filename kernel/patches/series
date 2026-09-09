@@ -5,3 +5,4 @@ ha100-touch-retry.patch
 ha100-irtx-clock.patch
 ha100-touch-reset.patch
 ha100-pwm-resume.patch
+ha100-motion.patch
