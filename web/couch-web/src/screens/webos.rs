@@ -68,7 +68,7 @@ pub fn setup(app: App, connection: &couch_model::Connection) -> AnyView {
         <div class="actions"><button class="primary" disabled=move ||busy.get() on:click=pair>{move ||if paired.get(){"Pair again / change TV"}else{"Pair TV"}}</button>
         <Show when=move ||paired.get()><button class="ghost" disabled=move ||busy.get() on:click=move |_|{busy.set(true);message.set("Testing saved connection…".into());spawn_local(async move{match api::ha("GET",&format!("{}/status",base.get_value()),None).await{Ok(_)=>{message.set("TV is reachable. Connection saved; add it in Rooms & devices.".into());},Err(e)=>fail(app,message,e)}busy.set(false);});}>"Test connection & save"</button></Show></div>
         <p role="status">{move ||message.get()}</p>
-        <Show when=move ||paired.get()>{move ||controls(app,base.get_value())}</Show>
+        <Show when=move ||paired.get()>{move ||power_settings(app,base.get_value())}{move ||controls(app,base.get_value())}</Show>
         </section>
     }.into_any()
 }
@@ -148,4 +148,39 @@ pub fn controls(app: App, path: String) -> AnyView {
         <div class="actions">{move ||apps.get().into_iter().map(|v|{let id=v["id"].as_str().unwrap_or("").to_string();let label=v["title"].as_str().unwrap_or(&id).to_string();view!{<button class="ghost" disabled=move ||busy.get() on:click=move |_|perform(Some(json!({"action":"launch","id":id})))>{label}</button>}}).collect_view()}</div>
         <p role="status">{move ||message.get()}</p>
     }.into_any()
+}
+
+
+fn power_settings(app: App, base: String) -> AnyView {
+    let endpoint=StoredValue::new(format!("{base}/power"));
+    let method=RwSignal::new("ir".to_string());
+    let codeset=RwSignal::new(String::new());
+    let busy=RwSignal::new(true);
+    let loaded=RwSignal::new(false);
+    let available=RwSignal::new(false);
+    let message=RwSignal::new(String::new());
+    spawn_local(async move {
+        let response=api::ha("GET",&endpoint.get_value(),None).await;
+        if busy.try_get_untracked().is_none(){return;}
+        match response {
+            Ok(v)=>{method.set(v["method"].as_str().unwrap_or("ir").into());codeset.set(v["codeset"].as_str().unwrap_or("").into());available.set(v["blaster_available"]==true);loaded.set(true);},
+            Err(e)=>fail(app,message,e),
+        }
+        busy.set(false);
+    });
+    view!{<section class="card"><h3>"Power control"</h3>
+        <p>"IR is the default and uses the remote’s own blaster. Network power is an explicit alternative: Wake-on-LAN to turn on, webOS to turn off."</p>
+        <label class="field">"Power method"<select prop:value=move ||method.get() disabled=move ||busy.get()||!loaded.get() on:change=move |e|method.set(event_target_value(&e))>
+            <option value="ir">"IR (default)"</option><option value="network">"Network (Wake-on-LAN)"</option>
+        </select></label>
+        <Show when=move ||method.get()=="ir">
+            <p class="dim">{move ||if available.get(){"IR device node is present. Confirm your TV’s codes and line of sight before use."}else{"IR blaster is unavailable on this system. Power will report an error until its driver is enabled; select network power explicitly if needed."}}</p>
+            <label class="field">"Verified IR power codes"<textarea rows="4" maxlength="4096" prop:value=move ||codeset.get() disabled=move ||busy.get() on:input=move |e|codeset.set(event_target_value(&e)) /></label>
+            <p class="dim">"Use couch-ir codeset lines: button protocol address command. Use power for the physical toggle, and power-on / power-off for activity commands. Enter codes verified for your TV; none are supplied automatically. A missing discrete code never falls back to toggle."</p>
+        </Show>
+        <button disabled=move ||busy.get()||!loaded.get() on:click=move |_|{
+            busy.set(true);let body=json!({"method":method.get_untracked(),"codeset":codeset.get_untracked()});
+            spawn_local(async move{let response=api::ha("PUT",&endpoint.get_value(),Some(body)).await;if busy.try_get_untracked().is_none(){return;}match response{Ok(_)=>message.set("Power settings saved. No command was sent.".into()),Err(e)=>fail(app,message,e)}busy.set(false);});
+        }>"Save power settings"</button><p role="status">{move ||message.get()}</p>
+    </section>}.into_any()
 }

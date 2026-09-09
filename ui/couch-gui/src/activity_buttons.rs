@@ -385,6 +385,14 @@ pub(crate) fn execute(
             result.map_err(|e| e.to_string())
         }
         Integration::WebOs => {
+            if matches!(command, F::PowerOn | F::PowerOff) {
+                let path = connections::file(connection, "webos");
+                let settings = couch_webos::Settings::load(&path).map_err(|e| e.to_string())?;
+                let preference = couch_webos::power::PowerSettings::load(&path, &settings.url)?;
+                if preference.method == couch_webos::power::Method::Ir {
+                    return preference.transmit(if command == F::PowerOn { "power-on" } else { "power-off" });
+                }
+            }
             if command == F::PowerOn {
                 let path = connections::file(connection, "webos");
                 let settings = couch_webos::Settings::load(&path).map_err(|e| e.to_string())?;

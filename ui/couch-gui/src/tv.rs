@@ -199,6 +199,14 @@ fn power(
     credentials: &std::path::Path,
 ) -> Result<String, String> {
     let settings = Settings::load(credentials).map_err(|e| e.to_string())?;
+    let preference = couch_webos::power::PowerSettings::load(credentials, &settings.url)?;
+    if preference.method == couch_webos::power::Method::Ir {
+        if active.load(Ordering::SeqCst) != generation {
+            return Ok(String::new());
+        }
+        preference.transmit("power")?;
+        return Ok("IR power toggle sent".into());
+    }
     if client.is_none() {
         match Client::connect(&settings) {
             Ok(c) => *client = Some(c),
@@ -806,10 +814,8 @@ impl Controller {
                     }
                 }
                 Err(error) => {
-                    app.set_tv_status("Connection needs attention".into());
-                    app.set_tv_error(
-                        format!("{error}. Check the TV is on, then reconnect.").into(),
-                    );
+                    app.set_tv_status("Control needs attention".into());
+                    app.set_tv_error(error.into());
                 }
             }
         }
@@ -818,6 +824,37 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_lg_power_requires_ir_codes_before_any_network_connection() {
+        let root = std::env::temp_dir().join(format!(
+            "couch-tv-power-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("webos-connection.json");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        Settings {
+            url: format!("ws://127.0.0.1:{}/", listener.local_addr().unwrap().port()),
+            client_key: "fixture".into(),
+            certificate: vec![],
+        }
+        .save(&path)
+        .unwrap();
+        let mut client = None;
+        let result = power(&mut client, &AtomicU64::new(1), 1, &path);
+        assert!(result.unwrap_err().contains("verified power IR code"));
+        assert!(client.is_none());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn trays_slide_both_ways_with_toast_margins() {
         if std::env::var_os("COUCH_TEST_TRAYS").is_none() {

@@ -48,7 +48,7 @@ to enter the native Slint control screen:
 | Volume + / − | TV volume up / down |
 | Channel + / − | TV channel up / down (TV/app support required) |
 | Menu | TV menu |
-| Power | Turn off, or wake over the network |
+| Power | IR toggle by default; network off/wake only when selected in Connections |
 | Home | TV Home |
 | Mute | Toggle the TV's current mute state |
 | Red / Green / Blue / Yellow | Matching TV color key |
@@ -76,7 +76,7 @@ controller owns persistent encrypted control/navigation sockets on a worker;
 it does not block rendering. Its input queue is bounded, old queued keys
 expire after 750ms, and leaving the screen invalidates queued commands and
 late UI replies. An already-sent command cannot be recalled. Failed commands
-are never automatically retried. Activity startup steps are not yet mapped to this screen. Connect once with
+are never automatically retried. Activity startup/shutdown steps use their configured device commands. With network power selected, connect once with
 the TV on so Couch can learn its MAC from the local ARP table. The private
 `webos-wake.json` binds that address to the current pairing URL. Power-on
 sends Wake-on-LAN and checks for an active TV for up to 30 seconds; enable
@@ -115,26 +115,36 @@ The TV and Kodi screens share the same touch back-button component. TV surfaces 
 
 ![TV screen using the system theme](webos-system-theme.png)
 
-## Planned IR power default (hardware prerequisite)
+## Per-TV power method and remaining IR prerequisites
 
-The requested power behavior is IR by default, with a per-TV opt-in for network
-power (WOL on, webOS off). The current custom kernel does not expose `/dev/irtx`,
-with `CONFIG_MTK_IRTX_SUPPORT` and `CONFIG_MTK_IRTX_PWM_SUPPORT` both disabled,
-although the Rust `couch-ir` transmitter is installed. Switching the default
-before the driver is ported would leave power control nonfunctional.
+**Connections → LG TV → Power control** selects IR (the default) or an explicit
+Network alternative (WoL on, webOS off). The setting is bound to this pairing's
+URL in private `webos-power.json`; changing to a different TV resets to IR.
+Saving preferences sends no command. The screen reports whether `/dev/irtx`
+exists, which is a prerequisite rather than proof of working IR output.
 
-Required work:
-1. Port/enable the HA100 MediaTek PWM IR driver and its board resources; build
-   the kernel on **Ollie**, following the existing recovery/deployment procedure.
-2. Verify the carrier and actual LED transmission on the remote, then test with
-   the LG TV in line of sight. Existing Rust encoding tests do not prove output.
-3. Validate LG's NEC address `0x04`, toggle command `0x08`; also test discrete
-   on `0xC4` and off `0xC5` on the actual model. Discrete commands are preferable
-   for explicit activity power-on/off; never infer power state from a failed
-   network request and blindly resend a toggle.
-4. Add the per-TV power-method setting and route both physical/default and
-   mapped power actions through it, with single-send behavior and clear errors.
+Supply verified power codes using the existing `couch-ir` codeset format:
+`button protocol address command`. The physical button uses `power` (toggle).
+Activity power-on and power-off use separate `power-on` and `power-off` entries.
+No codes are prefilled; missing discrete codes never fall back to toggle. Both
+routes send one frame with zero repeats, no retry and no automatic network
+fallback. If the codes or blaster are unavailable, power reports an error; users
+who need the existing network behavior must explicitly select Network.
 
-LG documents toggle and discrete commands in its
-[IR code table](https://www.lg.com/us/support/products/documents/32LC50CB_Manual.pdf).
-That table establishes candidate codes, not compatibility proof for the B4 TV.
+Still required for hardware validation:
+1. Enable/validate the HA100 MediaTek PWM IR driver and board resources. The current runtime
+   has `CONFIG_MTK_PWM=y` and a bound PWM controller, but both IRTX options are
+   disabled and `/dev/irtx` is absent. All kernel builds belong on **Ollie**.
+2. Confirm carrier and actual LED transmission, then test with the TV in line of
+   sight. Encoder and dispatch unit tests do not prove emitted light.
+3. Validate the TV's codes. LG documents NEC address `0x04`, toggle `0x08`, and
+   discrete on/off `0xC4`/`0xC5` as candidates. They are not compatibility proof
+   for this particular B4 TV and are not automatically installed by Couch.
+
+[LG IR code table](https://www.lg.com/us/support/products/documents/32LC50CB_Manual.pdf).
+
+Validation covers default selection, missing-code rejection, prohibition of a
+toggle fallback for discrete actions, malformed/duplicate code entries, private
+per-endpoint persistence, API save without contacting a TV, and the dedicated
+power path choosing IR before opening any network connection. No IR command was
+sent during these checks; physical validation remains outstanding.

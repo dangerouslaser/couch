@@ -1,6 +1,7 @@
 //! LG webOS LAN control using SSAP. One owner drives a persistent WebSocket;
 //! subscriptions interleave with request replies. No command is automatically retried.
 pub mod settings;
+pub mod power;
 mod tls;
 use serde_json::{json, Value};
 pub use settings::Settings;

@@ -289,6 +289,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "couch-ir"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "couch-kodi"
 version = "0.1.0"
 dependencies = [
@@ -307,6 +314,7 @@ dependencies = [
 name = "couch-webos"
 version = "0.1.0"
 dependencies = [
+ "couch-ir",
  "rustls",
  "serde",
  "serde_json",

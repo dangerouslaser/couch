@@ -300,6 +300,7 @@ dependencies = [
 name = "couch-webos"
 version = "0.1.0"
 dependencies = [
+ "couch-ir",
  "rustls",
  "serde",
  "serde_json",
