@@ -22,10 +22,11 @@ const assert=require('node:assert/strict');
    if(path.startsWith('/api/ir/codesets/')){const id=path.split('/').pop();if(method==='PUT'){stored[id]=r.request().postDataJSON().text;writes.push(stored[id]);}return r.fulfill({json:{id,text:stored[id]||'',commands:[]}});}
    throw Error('Unexpected IR request '+method+' '+path);
   });
-  await page.route('**/api/rooms/office/devices',r=>{
-   assert.equal(r.request().method(),'POST');assert.equal(r.request().headers()['if-match'],String(config.revision));
+  await page.route('**/api/rooms/office/devices**',r=>{
+   assert.equal(r.request().headers()['if-match'],String(config.revision));
+   assert.ok(['POST','PUT'].includes(r.request().method()));
    const device=r.request().postDataJSON();assert.equal(device.integration.resource_id,'office-tv');
-   config={...config,revision:13,rooms:[{...config.rooms[0],devices:[{id:'test-tv',...device}]}]};return r.fulfill({json:config});
+   config={...config,revision:config.revision+1,rooms:[{...config.rooms[0],devices:[{id:'test-tv',...device}]}]};return r.fulfill({json:config});
   });
   await page.goto('http://127.0.0.1:18196/rooms/office');
   await page.getByLabel('IR brand',{exact:true}).selectOption('LG');
@@ -52,6 +53,16 @@ const assert=require('node:assert/strict');
   await page.getByRole('button',{name:'Save and add to room',exact:true}).click();
   await page.getByRole('heading',{name:'Office TV',exact:true}).waitFor();
   assert.equal(writes.length,1);assert.match(writes[0],/toggle nec 4 8/);
+  const editor=page.locator('section.card').filter({has:page.getByRole('heading',{name:'Infrared commands',exact:true})});
+  await editor.getByLabel('Assigned IR commands',{exact:true}).waitFor();
+  await page.waitForFunction(()=>[...document.querySelectorAll('textarea[aria-label="Assigned IR commands"]')].some(e=>e.value.includes('toggle nec 4 8')));
+  await editor.getByLabel('Assigned IR commands',{exact:true}).fill('toggle nec 4 10');
+  await editor.getByRole('button',{name:'Save IR commands',exact:true}).click();
+  await page.waitForFunction(()=>document.body.textContent.includes('Office TV'));
+  for(let i=0;i<30&&config.revision<14;i++)await page.waitForTimeout(10);
+  assert.equal(writes[1],'toggle nec 4 10');
+  assert.equal(config.revision,14);
+
   config={...config,connections:[{id:'lg',name:'LG TV',provider:{kind:'web-os'}}],rooms:[]};
   let powerSave;
   await page.route('**/api/connections/lg/webos/*',r=>{
