@@ -56,7 +56,8 @@
 .device-buttons button:hover{color:#ddd;background:#29272d}.device-buttons button:active,.device-buttons button.tour-pressed{color:#cfb5fa;background:#353039;box-shadow:inset 0 1px 3px #000b}
 .device-buttons button:focus-visible{outline:2px solid #b18ae6;outline-offset:2px;z-index:2}.device-buttons .icon{width:16px;height:16px}
 .device-system{display:grid;grid-template-columns:1fr 1.7fr 1fr;gap:2px;height:36px;border-radius:6px;overflow:hidden;background:#0a0b0b;padding:1px;border:1px solid #242626}
-.device-system [data-remote=home]{border-radius:20px;margin:3px 12px;box-shadow:inset 0 1px 3px #000,0 1px #383838}
+.device-system [data-remote=home]{position:relative}
+.device-system [data-remote=home]::before{content:"";position:absolute;inset:3px 12px;border-radius:20px;box-shadow:inset 0 1px 3px #000,0 1px #383838;pointer-events:none}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.device-buttons button{transition:none}}
 .icon-chevron-left{--icon:url("assets/lucide/chevron-left.svg")}
