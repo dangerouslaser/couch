@@ -25,6 +25,7 @@ struct Request {
     at: Instant,
     config: Arc<Config>,
     action: Action,
+    repeat: bool,
 }
 pub struct Controller {
     context: String,
@@ -70,6 +71,7 @@ impl Controller {
                     at: Instant::now(),
                     config: self.config.clone(),
                     action: action.clone(),
+                    repeat,
                 });
             }
         }
@@ -79,6 +81,7 @@ impl Controller {
         self.replay.pop_front()
     }
     pub fn handle(&mut self, app: &App, press: &Press) -> bool {
+        self.sync_context(app);
         if self.context.is_empty()
             || app.get_pair_shown()
             || app.get_settings_shown()
@@ -118,18 +121,24 @@ impl Controller {
         }
         self.fire(button, Gesture::Short, press.repeat)
     }
-    pub fn poll(&mut self, app: &App) -> Option<String> {
+    fn sync_context(&mut self, app: &App) {
         let context = if app.get_player_shown() || app.get_tv_shown() {
             app.get_active_activity().to_string()
         } else {
             String::new()
         };
-        if context != self.context {
+        self.refresh(context, connections::config());
+    }
+    fn refresh(&mut self, context: String, config: Option<Arc<Config>>) {
+        let changed = config.as_ref().map_or(!self.bindings.is_empty(), |next| {
+            !Arc::ptr_eq(next, &self.config)
+        });
+        if context != self.context || changed {
             self.generation.fetch_add(1, Ordering::SeqCst);
             self.pending.clear();
             self.replay.clear();
             self.bindings.clear();
-            if let Some(config) = connections::config() {
+            if let Some(config) = config {
                 self.bindings = config
                     .activities
                     .iter()
@@ -143,9 +152,14 @@ impl Controller {
                     })
                     .unwrap_or_default();
                 self.config = config;
+            } else {
+                self.config = Arc::new(Config::default());
             }
             self.context = context;
         }
+    }
+    pub fn poll(&mut self, app: &App) -> Option<String> {
+        self.sync_context(app);
         let due: Vec<_> = self
             .pending
             .iter_mut()
@@ -248,7 +262,18 @@ fn connection_worker(
         if r.generation != generation || r.at.elapsed() > Duration::from_millis(750) {
             continue;
         }
-        if let Err(error) = execute(&r.config, &r.action, &mut denon, &mut tv, &mut streaming) {
+        if let Err(error) = execute_with_input(
+            &r.config,
+            &r.action,
+            &mut denon,
+            &mut tv,
+            &mut streaming,
+            r.repeat,
+            &|| {
+                current.load(Ordering::SeqCst) == r.generation
+                    && r.at.elapsed() <= Duration::from_millis(750)
+            },
+        ) {
             let _ = reply.try_send((r.generation, error));
         }
     }
@@ -261,6 +286,23 @@ pub(crate) fn execute(
     tv: &mut HashMap<String, couch_control::WebOs>,
     streaming: &mut HashMap<String, couch_control::StreamingTv>,
 ) -> Result<(), String> {
+    execute_with_input(config, action, denon, tv, streaming, false, &|| true)
+}
+
+/// Physical input preserves hold edges; other callers represent distinct presses.
+/// `current` is rechecked after loading a codeset and opening the blaster.
+pub(crate) fn execute_with_input(
+    config: &Config,
+    action: &Action,
+    denon: &mut HashMap<String, couch_control::Denon>,
+    tv: &mut HashMap<String, couch_control::WebOs>,
+    streaming: &mut HashMap<String, couch_control::StreamingTv>,
+    repeat: bool,
+    current: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    if !current() {
+        return Ok(());
+    }
     let device = config
         .devices()
         .find(|(_, d)| d.id == action.device)
@@ -280,25 +322,34 @@ pub(crate) fn execute(
         Integration::Ir { codeset } => {
             let codes = couch_ir::codeset::load(&crate::home::path("ir"), &codeset)
                 .map_err(|e| e.to_string())?;
-            // Each dispatched action is one logical command, without hidden
-            // retries/repeats. Keep RC5/RC6 toggle state per target, including
-            // when activities alternate between different IR devices.
+            if !current() {
+                return Ok(());
+            }
+            // One transmission per input edge. RC5/RC6 hold repeats retain
+            // their toggle; a new press changes it. No retry on TX failure.
             static TOGGLES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
                 std::sync::OnceLock::new();
-            let message = {
-                let mut states = TOGGLES
-                    .get_or_init(Default::default)
-                    .lock()
-                    .map_err(|_| "IR command state unavailable")?;
-                let toggle = states.entry(device.id.to_string()).or_insert(false);
-                let message = ir_message(&codes, &command, *toggle)?;
-                *toggle = !*toggle;
-                message
-            };
-            let mut blaster = couch_ir::tx::Irtx::open("/dev/irtx").map_err(|e| e.to_string())?;
-            couch_ir::tx::transmit(&mut blaster, &message, 0)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+            let mut states = TOGGLES
+                .get_or_init(Default::default)
+                .lock()
+                .map_err(|_| "IR command state unavailable")?;
+            ir_send_with(
+                &mut states,
+                device.id.as_str(),
+                &codes,
+                &command,
+                repeat,
+                current,
+                |message| {
+                    let mut blaster =
+                        couch_ir::tx::Irtx::open("/dev/irtx").map_err(|e| e.to_string())?;
+                    if !current() {
+                        return Ok(false);
+                    }
+                    couch_ir::tx::transmit(&mut blaster, message, 0).map_err(|e| e.to_string())?;
+                    Ok(true)
+                },
+            )
         }
         Integration::AndroidTv | Integration::AppleTv => {
             let kind = if matches!(integration, Integration::AppleTv) {
@@ -488,6 +539,32 @@ pub(crate) fn execute(
     }
 }
 
+fn ir_send_with(
+    states: &mut HashMap<String, bool>,
+    device: &str,
+    codes: &couch_ir::codeset::Codeset,
+    command: &F,
+    repeat: bool,
+    current: &dyn Fn() -> bool,
+    send: impl FnOnce(&couch_ir::proto::Message) -> Result<bool, String>,
+) -> Result<(), String> {
+    if !current() {
+        return Ok(());
+    }
+    let toggle = states
+        .get(device)
+        .map(|last| if repeat { *last } else { !*last })
+        .unwrap_or(false);
+    let message = ir_message(codes, command, toggle)?;
+    if !current() {
+        return Ok(());
+    }
+    if send(&message)? {
+        states.insert(device.into(), toggle);
+    }
+    Ok(())
+}
+
 fn ir_message(
     codes: &couch_ir::codeset::Codeset,
     command: &F,
@@ -523,6 +600,134 @@ mod tests {
         let next = ir_message(&codes, &F::Ok, true).unwrap();
         assert_ne!(format!("{first:?}"), format!("{next:?}"));
         assert!(ir_message(&codes, &F::Back, false).is_err());
+    }
+
+    #[test]
+    fn held_ir_presses_keep_toggle_and_only_successful_new_presses_advance_it() {
+        let codes = couch_ir::codeset::Codeset::parse("fixture", "volume-up rc5 0 1").unwrap();
+        let mut states = HashMap::new();
+        let mut frames = Vec::new();
+        for repeat in [false, true, true, false] {
+            ir_send_with(
+                &mut states,
+                "tv",
+                &codes,
+                &F::VolumeUp,
+                repeat,
+                &|| true,
+                |m| {
+                    frames.push(m.frame.clone());
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(frames[0], frames[1]);
+        assert_eq!(frames[1], frames[2]);
+        assert_ne!(frames[2], frames[3]);
+        let before = states.clone();
+        assert!(ir_send_with(
+            &mut states,
+            "tv",
+            &codes,
+            &F::VolumeUp,
+            false,
+            &|| true,
+            |_| Err("TX failed".into())
+        )
+        .is_err());
+        assert_eq!(states, before);
+        ir_send_with(
+            &mut states,
+            "tv",
+            &codes,
+            &F::VolumeUp,
+            false,
+            &|| true,
+            |_| Ok(false),
+        )
+        .unwrap();
+        assert_eq!(states, before);
+        ir_send_with(
+            &mut states,
+            "tv",
+            &codes,
+            &F::VolumeUp,
+            false,
+            &|| false,
+            |_| panic!("stale command sent"),
+        )
+        .unwrap();
+        assert_eq!(states, before);
+        ir_send_with(
+            &mut states,
+            "other",
+            &codes,
+            &F::VolumeUp,
+            false,
+            &|| true,
+            |m| {
+                assert_eq!(m.frame, frames[0]);
+                Ok(true)
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    fn config_change_refreshes_active_bindings_and_invalidates_queued_work() {
+        let (mut c, rx) = fixture();
+        let mut config = Config::default();
+        config.activities.push(couch_model::Activity {
+            id: "watch".into(),
+            name: "Watch".into(),
+            room: "room".into(),
+            source: None,
+            setup: Default::default(),
+            kind: Default::default(),
+            steps: vec![],
+            buttons: vec![binding(Gesture::Short, "ok")],
+        });
+        let original = Arc::new(config.clone());
+        c.refresh("watch".into(), Some(original.clone()));
+        c.handle_press(&press(353, false));
+        let queued = rx.try_recv().unwrap();
+        let old_generation = c.generation.load(Ordering::SeqCst);
+        c.refresh("watch".into(), Some(original));
+        assert_eq!(c.generation.load(Ordering::SeqCst), old_generation);
+        c.pending.insert(
+            353,
+            Pending {
+                down: press(353, false),
+                at: Instant::now(),
+                fired: false,
+            },
+        );
+        config.activities[0].buttons[0].action = Some(Action::new("other-device", "home"));
+        c.refresh("watch".into(), Some(Arc::new(config)));
+        assert_ne!(queued.generation, c.generation.load(Ordering::SeqCst));
+        assert!(c.pending.is_empty());
+        c.handle_press(&press(353, false));
+        assert_eq!(
+            rx.try_recv().unwrap().action,
+            Action::new("other-device", "home")
+        );
+        c.refresh("watch".into(), Some(Arc::new(Config::default())));
+        assert!(c.bindings.is_empty());
+    }
+    #[test]
+    fn physical_repeat_metadata_reaches_the_worker() {
+        let (mut c, rx) = fixture();
+        c.bindings = vec![Binding {
+            button: Button::VolumeUp,
+            gesture: Gesture::Short,
+            action: Some(Action::new("tv", "volume-up")),
+        }];
+        let mut p = press(115, false);
+        c.handle_press(&p);
+        assert!(!rx.try_recv().unwrap().repeat);
+        p.repeat = true;
+        c.handle_press(&p);
+        assert!(rx.try_recv().unwrap().repeat);
     }
 
     fn fixture() -> (Controller, mpsc::Receiver<Request>) {
@@ -685,6 +890,7 @@ mod worker_tests {
             at: Instant::now(),
             config: Arc::new(config),
             action: Action::new("avr", "volume-up"),
+            repeat: false,
         })
         .unwrap();
         assert_eq!(
