@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "partition": "userdata",
+  "source": "observed",
+  "offset": 1895825408,
+  "size": 5905055744,
+  "evidence_sha256": "ffa9876b835eb5d25ad4712cadca202eb06698893ef2184578a063f8520e1738"
+}

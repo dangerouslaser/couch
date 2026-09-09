@@ -57,6 +57,17 @@ class PackageClosureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'package set'):
             inventory(self.root, ['musl'], IMAGE)
 
+    def test_x86_tool_closure_is_explicit_and_cannot_masquerade_as_arm(self):
+        self.fixture()
+        path = self.root / 'package-urls.txt'
+        path.write_text(path.read_text().replace('/armv7/', '/x86_64/'))
+        manifest = inventory(self.root, ['musl'], IMAGE, 'x86_64')
+        self.assertEqual(manifest['architecture'], 'x86_64')
+        with self.assertRaisesRegex(ValueError, 'source path'):
+            inventory(self.root, ['musl'], IMAGE)
+        with self.assertRaisesRegex(ValueError, 'architecture'):
+            inventory(self.root, ['musl'], IMAGE, 'unknown')
+
     def test_prepare_rejects_unpinned_builder_options_and_existing_output(self):
         with patch('package_closure.subprocess.run') as run:
             with self.assertRaises(ValueError):

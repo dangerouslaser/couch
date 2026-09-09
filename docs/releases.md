@@ -45,3 +45,7 @@ The result is a normalized `rootfs-staging.tar.gz` plus a noninstallable `stagin
 Extensionless recovery scripts are explicitly limited to `save`, `setpw`, `scan`, and `enroll` under `opt/couch/www/cgi-bin/`; they require mode 0755 and an input hash like other artifacts. There is no general extensionless-file exception.
 
 Validation on Ollie installed 19 additional packages over the pinned base, executed dnsmasq's pre-install and BusyBox's trigger, and ran ARM Wi-Fi/SSH/iw version checks. Two independent builds produced identical normalized archives (1277 entries without optional artifacts). A separate fixture included all four real CGI scripts. The version-only Wi-Fi check reports missing `/dev/urandom` because no runtime device tree is mounted; it does not test networking. This validates package assembly, not remote boot or a complete Couch runtime. Reviewed vendor files, complete executable/script inventory, partition images, signatures and physical recovery validation remain required.
+
+## Prepare a raw userdata filesystem
+
+`prepare_ext4.py` now turns packaged staging into an exact-size regular ext4 file using explicit observed geometry and a pinned offline filesystem-tool cache. It validates the filesystem without loop mounts or host rootfs extraction. See [userdata image preparation](userdata-image.md) for commands, reproducibility evidence and the remaining noninstallable release gates.

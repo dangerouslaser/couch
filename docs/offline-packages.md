@@ -19,6 +19,8 @@ Preparation resolves the current contents of the versioned branch; it is **not**
 
 Validation on Ollie resolved 26 packages, verified every signature, and passed the offline simulation with Docker networking disabled. A negative fixture omitted `libcrypto3` and correctly failed dependency resolution. Local tests reject tampering, missing/extra files, symlinks, unexpected package URLs, unpinned builders and option injection.
 
+`--architecture x86_64` prepares a separate host-tool closure for [userdata image creation](userdata-image.md); ARM runtime assembly explicitly rejects those tool packages.
+
 ## Remaining assembly work
 
 The clean staging specification and this closure can now be combined with `prepare_rootfs.py`; see [clean release staging](releases.md#assemble-offline-packages). It installs packages/scripts in an isolated ARM-compatible root, then normalizes and rescans the archive. Building and signing partition images remains a separate step. Preserve first-use SSH host-key generation and empty onboarding configuration. Do not use the old provisioning script's `--allow-untrusted` fallback for releases.
