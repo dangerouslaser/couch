@@ -247,3 +247,8 @@ No partition writes were issued. The next installation UX must distinguish
 “backup verified / device disconnected” from “Couch booted,” prompt for physical
 Power where needed, and verify startup separately. Do not claim that clean USB
 teardown alone makes the installer production-ready.
+
+After manual Power, the normal Couch kernel, network and GUI returned. The
+local GUI health gate cleared the BCB, and boot/recovery partition hashes
+matched the private pre-capture baseline. This was manual startup, not an
+automatic return or an installation test.
