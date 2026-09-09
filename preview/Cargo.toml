@@ -1,0 +1,27 @@
+[package]
+name = "couch-preview"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keep the browser preview independent from the five device workspaces.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+slint = { version = "=1.17.1", default-features = false, features = [
+    "compat-1-2", "std", "backend-winit", "renderer-software",
+] }
+wasm-bindgen = "=0.2.127"
+image = { version = "0.25", default-features = false, features = ["png"] }
+console_error_panic_hook = "0.1"
+
+[build-dependencies]
+slint-build = "=1.17.1"
+
+[profile.release]
+lto = "thin"
+opt-level = "s"
+strip = true

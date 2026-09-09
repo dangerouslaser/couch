@@ -1,0 +1,15 @@
+# Couch Slint browser preview
+
+This standalone Rust workspace compiles **the actual production** `ui/couch-gui/ui/app.slint` and its imported screens, widgets, icons, and Lato fonts. It does not copy the UI into HTML or link device clients. `src/demo.rs` supplies local example data and callback behavior; this is a browser simulation, not a hardware or network performance benchmark.
+
+Run `tools/build-preview.sh` from the repository root. Requirements: Rust with `wasm32-unknown-unknown` installed and `wasm-bindgen-cli` **0.2.127**. The script also recognizes Trunk's cached macOS CLI. The independent lockfile pins the binding version; do not replace other workspaces' lockfiles. Slint is pinned to the device version, **1.17.1**.
+
+Generated JavaScript/WASM goes to `site/wasm/`. Serve `site/` over HTTP; importing `wasm/couch_preview.js` and awaiting its default initializer starts the UI on `<canvas id="canvas">`. Winit hands control to the browser by throwing its event-loop sentinel; the shell catches only that exact sentinel and reports other initialization failures. The isolated `site/preview.html` frame uses a native 480×800 backing buffer and reports device-pixel ratio 1 to its renderer; the parent scales the entire frame for page layout. This matches the physical remote framebuffer and avoids Winit's initial software-buffer sizing race on high-DPI screens. The parent page retains its real device-pixel ratio. The browser uses Slint's Winit backend with its software renderer and Softbuffer canvas output. It does not require a device framebuffer, GPU, or WebGL.
+
+The WASM exports `remote_button(name)` for the page's physical-button simulation and `state_json()` for local accessibility text and browser checks. Fixture state and callbacks live in `src/demo.rs`; no visitor state is persisted and no commands reach real devices.
+
+## Assets and licenses
+
+Lato fonts come from the existing device GUI and are embedded by the same Slint compiler configuration as the device. Their SIL Open Font License is in `licenses/LATO-OFL.txt` (source: https://github.com/google/fonts/blob/main/ofl/lato/OFL.txt). Lucide icons retain the notices in `licenses/LUCIDE-LICENSE`; the build copies both licenses beside the browser bundle.
+
+The example movie is *Tears of Steel*, © Blender Foundation, licensed CC BY 3.0: https://creativecommons.org/licenses/by/3.0/. Its existing mockup fanart is frame `graded_edit_final_04500.png` from https://media.xiph.org/tearsofsteel/tearsofsteel-1080-png/graded_edit_final_04500.png (source license: https://media.xiph.org/tearsofsteel/README.txt). Displayed fanart is cropped and darkened using the device's presentation. Any typographic title stand-in is not the official film logo. Production Couch displays artwork from the user's Kodi library.

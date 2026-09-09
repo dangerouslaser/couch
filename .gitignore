@@ -16,3 +16,6 @@ gui/icons/svg/
 gui/icons/png/
 build/fb.raw
 __pycache__/
+
+# Generated browser Slint application; Pages builds it from preview/.
+site/wasm/
