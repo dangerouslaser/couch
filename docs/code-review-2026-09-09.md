@@ -21,31 +21,38 @@ The browser verification also caught and fixed the initial activity-save path
 omitting bindings entirely. Short/long exclusion and cancellation on navigation
 are covered by both timing tests and physical evdev fixtures.
 
-## Recommended next refactors
+## Approved refactors implemented
 
-1. **One command owner per connection.** `activity_buttons.rs` currently uses
-   one bounded worker for all mapped devices. A slow TV connection can delay a
-   receiver command until its 750 ms queue deadline expires. Independent queues
-   keyed by connection would isolate failures and give each provider clear
-   socket ownership across direct control, activities and web requests. Add
-   queue-delay/drop metrics before changing the architecture.
-2. **A shared, revisioned configuration snapshot.** Activity, light, scene and
-   clock controllers independently reread/parse configuration; some reads occur
-   on the rendering thread. Load once after a revision change and distribute an
-   immutable `Arc<Config>`. Measure activity-open/render timings before and after.
-3. **Typed provider actions and capabilities.** The shared function catalog
-   prevents arbitrary RPC execution, but string commands are still translated
-   again in several controllers. A typed action layer would make unsupported
-   cases explicit and reduce drift between web choices and execution. Extend it
-   with discovered input/app choices rather than adding more string prefixes.
-4. **Extract input and navigation ownership from `main.rs`.** Wake handling,
-   microphone/menu semantics, activity overrides, focus and framebuffer slides
-   now interact in one large loop. Preserve the existing evdev fixtures while
-   separating these responsibilities; do not replace working hardware paths in
-   one wholesale rewrite.
+1. **Independent command ownership.** Mapped devices now have separate bounded
+   workers. Kodi, webOS and Denon share the daemon's per-endpoint control service
+   across GUI and HTTP requests, with queue metrics and explicit lease cleanup.
+   Tests prove a stalled receiver cannot block another and that IPC/local
+   consumers share one socket. Existing Hue/HA push subscriptions are retained.
+2. **Shared configuration snapshots.** Controllers share a validated immutable
+   `Arc<Config>`. A background watcher publishes changes; invalid files preserve
+   the last valid snapshot. Room and controller reads no longer parse files on
+   the rendering thread. Logs separate snapshot load costs from rendering.
+3. **Typed functions and discovered choices.** Validation and activity execution
+   use the shared `Function` enum. Existing persisted commands remain compatible;
+   Denon/webOS inputs and webOS apps can be discovered for button mappings.
+4. **Input/navigation extraction.** `input.rs` owns touch/wake policy and menu/mic
+   hold state. `navigation.rs` owns area/settings framebuffer transitions,
+   preserving their drawing order and timing. The main loop remains responsible
+   for coordinating hardware and controllers.
+
+See [control-service.md](control-service.md) for ownership, limits and diagnostics.
 
 The current separation between pure model validation, blocking Rust clients and
 Slint rendering is sound. Keep native hardware validation distinct from host
 unit tests: a passing host build cannot prove panel wake or physical key routing.
 
-Validation after fixes: 202 Rust tests passed across model, clients, daemon and GUI. Workspace-wide `cargo fmt --check` is not clean; formatting debt remains in existing and expanded modules. New standalone modules were formatted, and `git diff --check` passes.
+Validation after refactors: 210 Rust tests passed across model, clients, daemon and GUI. Workspace-wide `cargo fmt --check` is not clean; formatting debt remains in existing and expanded modules. New standalone modules were formatted, and `git diff --check` passes.
+
+Hardware validation after refactors: short/long activity mappings and held volume
+repeat passed through both standalone and daemon IPC control, including pending
+hold cancellation on exit. The webOS fixture passed input/app/sound selection,
+playback controls, physical TV keys and animated touch exit. An isolated charging
+fixture verified live timezone/format updates, clock persistence beyond the off
+timeout, button/touch wake without issuing a TV command, and undocking. Snapshot
+loads measured 582–761 us in these small fixture configurations; these are load
+costs, not a claimed end-to-end speedup. Activity slides retained 11 frames.
