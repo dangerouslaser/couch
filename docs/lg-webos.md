@@ -110,3 +110,5 @@ These keys never auto-repeat, while volume and directional keys still do.
 Physical-device fixture tests verify key-to-protocol mapping and mute toggle;
 unit tests verify that holding a one-shot button does not generate repeats.
 The actual LG TV passed physical mute-toggle and power-off/network-wake tests.
+
+The TV and Kodi screens share the same touch back-button component. TV surfaces and text use the system theme, with the configured accent on controls; there is no fixed purple background tint. Activity button overrides are documented in [activity-buttons.md](activity-buttons.md).
