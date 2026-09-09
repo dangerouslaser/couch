@@ -1,0 +1,30 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+(async()=>{const browser=await chromium.launch();try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[],requests=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
+ await page.goto(process.env.SITE_URL||'http://127.0.0.1:8098/',{waitUntil:'networkidle'});
+ const screen=page.locator('#demo'), title=page.locator('#demo-title');
+ await screen.getByRole('button',{name:/Living room/}).click();assert.equal(await title.textContent(),'Living room');
+ const floor=screen.getByRole('button',{name:/Floor lamp/});assert.equal(await floor.getAttribute('aria-pressed'),'true');await floor.click();assert.equal(await floor.getAttribute('aria-pressed'),'false');
+ await screen.getByRole('slider',{name:'Floor lamp brightness'}).fill('42');assert.equal(await floor.getAttribute('aria-pressed'),'true');assert.match(await floor.textContent(),/42%/);
+ await screen.getByRole('button',{name:'3 scenes'}).click();await screen.getByRole('button',{name:/Lights off/}).click();assert.equal(await title.textContent(),'Living room');assert.equal(await floor.getAttribute('aria-pressed'),'false');
+ assert.equal(await page.locator('#demo-toast').textContent(),'Lights off applied');
+ await page.getByRole('button',{name:'Back',exact:true}).click();assert.equal(await title.textContent(),'HOME');assert.equal(await page.locator('#demo-toast').textContent(),'');
+ await screen.getByRole('button',{name:/Kitchen/}).click();assert.equal(await screen.getByRole('button',{name:/Pendant lights/}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Home',exact:true}).click();
+ const list=screen.locator('.demo-list');await list.hover();await page.mouse.wheel(0,700);await page.waitForTimeout(500);assert.ok(await list.evaluate(e=>e.scrollTop)>0);
+ await screen.getByRole('button',{name:/Hallway/}).click();assert.equal(await title.textContent(),'Hallway');await page.getByRole('button',{name:'Back',exact:true}).click();await page.waitForTimeout(300);assert.ok(await list.evaluate(e=>e.scrollTop)>0,'restore scroll');
+ await screen.getByRole('button',{name:/Watch TV/}).click();assert.equal(await title.textContent(),'WATCH TV');await screen.getByRole('button',{name:'Pause',exact:true}).click();await screen.getByRole('button',{name:'Play',exact:true}).waitFor();
+ const elapsed=await screen.locator('#elapsed').textContent();await page.waitForTimeout(1100);assert.equal(await screen.locator('#elapsed').textContent(),elapsed);
+ await screen.getByRole('button',{name:'Skip forward 30 seconds'}).click();assert.notEqual(await screen.locator('#elapsed').textContent(),elapsed);
+ await screen.getByRole('slider',{name:'Playback position'}).fill('1000');assert.equal(await screen.locator('#elapsed').textContent(),'16:40');
+ await page.getByRole('button',{name:'Put demo screen to sleep'}).click();assert.equal(await page.locator('#demo-viewport').evaluate(e=>e.inert),true);
+ await page.getByRole('button',{name:'Wake demo screen',exact:true}).click();assert.equal(await page.locator('#demo-viewport').evaluate(e=>e.inert),false);assert.equal(await title.textContent(),'WATCH TV');
+ await page.getByRole('button',{name:'Home',exact:true}).click();assert.equal(await title.textContent(),'HOME');
+ await screen.getByRole('button',{name:/Watch TV/}).focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');assert.equal(await title.textContent(),'Living room');await page.keyboard.press('Escape');assert.equal(await title.textContent(),'HOME');
+ for(const width of [1440,390,320]){await page.setViewportSize({width,height:1000});await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page overflow '+width);assert.equal(await screen.evaluate(e=>e.scrollWidth>e.clientWidth),false,'screen overflow '+width);if(width!==320)await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'couch-demo-'+width+'.png'),fullPage:true});}
+ await page.emulateMedia({reducedMotion:'reduce'});await screen.getByRole('button',{name:/Living room/}).click();assert.equal(await screen.locator('.demo-page').evaluate(e=>e.getAnimations().length),0);
+ assert.deepEqual(errors,[]);assert.ok(requests.every(url=>url.startsWith(new URL(page.url()).origin)), 'external request');
+ console.log('PASS: scrolling/restoration, lights/brightness, scoped scenes, media controls, sleep/wake, Home/Back, keyboard, reduced motion, responsive layouts, no device/external requests.');
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});
