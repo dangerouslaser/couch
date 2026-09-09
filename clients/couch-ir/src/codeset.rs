@@ -37,12 +37,16 @@ pub struct Entry {
     pub protocol: Protocol,
     pub address: u32,
     pub command: u32,
+    pub raw: Option<proto::Frame>,
 }
 
 impl Entry {
     /// Encode this button into a sendable message. `toggle` is only consulted
     /// by RC5/RC6.
     pub fn encode(&self, toggle: bool) -> Result<Message> {
+        if let Some(frame) = &self.raw {
+            return proto::raw(frame.carrier_hz, frame.pattern_us.clone());
+        }
         proto::encode(self.protocol, self.address, self.command, toggle)
     }
 }
@@ -56,7 +60,10 @@ pub struct Codeset {
 impl Codeset {
     /// Parse a codeset. `path` is only for error messages.
     pub fn parse(path: &str, text: &str) -> Result<Codeset> {
-        let mut entries = Vec::new();
+        if text.len() > 256 * 1024 {
+            return Err(Error::Encode("codeset exceeds 256 KiB".into()));
+        }
+        let mut entries: Vec<Entry> = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let line = i + 1;
             // Strip comments (everything after `#`) and surrounding space.
@@ -80,12 +87,37 @@ impl Codeset {
                 line,
                 detail: format!("unknown protocol {:?}", fields[1]),
             })?;
-            if protocol == Protocol::Raw {
+            if entries.len() >= 256
+                || fields[0].len() > 80
+                || !fields[0]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-:+.".contains(c))
+                || entries
+                    .iter()
+                    .any(|e| e.button.eq_ignore_ascii_case(fields[0]))
+            {
                 return Err(Error::Codeset {
-                    path: path.to_string(),
+                    path: path.into(),
                     line,
-                    detail: "raw has no address/command; it cannot appear in a codeset".into(),
+                    detail: "invalid/duplicate button name or more than 256 commands".into(),
                 });
+            }
+            if protocol == Protocol::Raw {
+                let hz = parse_u32(fields[2]).map_err(Error::Encode)?;
+                let timings = fields[3]
+                    .split(',')
+                    .map(parse_u32)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Error::Encode)?;
+                let frame = proto::raw(hz, timings)?.frame;
+                entries.push(Entry {
+                    button: fields[0].into(),
+                    protocol,
+                    address: 0,
+                    command: 0,
+                    raw: Some(frame),
+                });
+                continue;
             }
             let address = parse_u32(fields[2]).map_err(|e| Error::Codeset {
                 path: path.to_string(),
@@ -109,6 +141,7 @@ impl Codeset {
                 protocol,
                 address,
                 command,
+                raw: None,
             });
         }
         Ok(Codeset { entries })
@@ -190,5 +223,63 @@ sony    sony12 1 21
         assert_eq!(parse_u32("0x10"), Ok(16));
         assert_eq!(parse_u32("0b10000"), Ok(16));
         assert!(parse_u32(" zz").is_err());
+    }
+}
+
+/// IDs are filenames, never paths. Shared by the server and local runtime.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.as_bytes()[0].is_ascii_alphanumeric()
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
+}
+
+pub fn load(directory: &std::path::Path, id: &str) -> Result<Codeset> {
+    use std::io::Read;
+    if !valid_id(id) {
+        return Err(Error::Encode("invalid codeset ID".into()));
+    }
+    let path = directory.join(format!("{id}.codeset"));
+    let metadata = std::fs::symlink_metadata(&path).map_err(|e| Error::Encode(e.to_string()))?;
+    if !metadata.is_file() || metadata.len() > 256 * 1024 {
+        return Err(Error::Encode(
+            "codeset must be a regular file of at most 256 KiB".into(),
+        ));
+    }
+    let mut text = String::new();
+    std::fs::File::open(&path)
+        .and_then(|f| f.take(256 * 1024 + 1).read_to_string(&mut text))
+        .map_err(|e| Error::Encode(e.to_string()))?;
+    Codeset::parse(&path.display().to_string(), &text)
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn raw_round_trip_encodes_the_exact_capture() {
+        let set = Codeset::parse("capture", "power raw 38000 9000,4500,560,560").unwrap();
+        let frame = set.get("power").unwrap().encode(false).unwrap().frame;
+        assert_eq!(frame.carrier_hz, 38000);
+        assert_eq!(frame.pattern_us, vec![9000, 4500, 560, 560]);
+    }
+    #[test]
+    fn reject_ambiguous_names_paths_and_unbounded_captures() {
+        for id in ["../tv", "TV", ".hidden", "tv/x", ""] {
+            assert!(!valid_id(id));
+        }
+        assert!(valid_id("user-tv_2"));
+        for text in [
+            "power nec 4 8\nPOWER nec 4 9",
+            "a/b nec 4 8",
+            "power raw 38000 0,500",
+            "power raw 38000 4294967295,1",
+            "power raw 1000000 500",
+        ] {
+            assert!(Codeset::parse("bad", text).is_err());
+        }
+        assert!(proto::raw(38000, vec![1; 1025]).is_err());
     }
 }

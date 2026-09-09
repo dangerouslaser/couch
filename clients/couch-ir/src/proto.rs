@@ -309,7 +309,11 @@ fn coalesce(halves: &[(bool, u32)]) -> Vec<u32> {
     }
     let mut out = Vec::with_capacity(runs.len());
     for (i, (level, dur)) in runs.into_iter().enumerate() {
-        debug_assert_eq!(level, i % 2 == 0, "coalesced pattern must alternate from a mark");
+        debug_assert_eq!(
+            level,
+            i % 2 == 0,
+            "coalesced pattern must alternate from a mark"
+        );
         out.push(dur);
     }
     out
@@ -414,7 +418,11 @@ pub fn sony(bits: u32, address: u32, command: u32, extended: u32) -> Result<Mess
     let addr_bits = match bits {
         12 | 20 => 5,
         15 => 8,
-        _ => return Err(Error::Encode(format!("Sony SIRC is 12, 15 or 20 bits, not {bits}"))),
+        _ => {
+            return Err(Error::Encode(format!(
+                "Sony SIRC is 12, 15 or 20 bits, not {bits}"
+            )))
+        }
     };
     fits("command", command, 7)?;
     fits("address", address, addr_bits)?;
@@ -453,14 +461,21 @@ pub fn sony(bits: u32, address: u32, command: u32, extended: u32) -> Result<Mess
 
 /// A caller-supplied table, validated only for the frame invariant.
 pub fn raw(carrier_hz: u32, pattern_us: Vec<u32>) -> Result<Message> {
-    if carrier_hz == 0 {
-        return Err(Error::Encode("raw carrier must be non-zero Hz".into()));
+    if !(20_000..=60_000).contains(&carrier_hz) {
+        return Err(Error::Encode("raw carrier must be 20000–60000 Hz".into()));
     }
-    if pattern_us.is_empty() {
-        return Err(Error::Encode("raw needs at least one duration".into()));
+    if pattern_us.is_empty()
+        || pattern_us.len() > 1024
+        || pattern_us.iter().map(|v| u64::from(*v)).sum::<u64>() > 500_000
+    {
+        return Err(Error::Encode(
+            "raw needs 1–1024 durations totaling at most 500 ms".into(),
+        ));
     }
     if pattern_us.contains(&0) {
-        return Err(Error::Encode("raw durations must be non-zero microseconds".into()));
+        return Err(Error::Encode(
+            "raw durations must be non-zero microseconds".into(),
+        ));
     }
     Ok(Message {
         frame: Frame {
