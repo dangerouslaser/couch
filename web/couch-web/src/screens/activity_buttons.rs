@@ -101,25 +101,30 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
         let prefix = match connection.provider {
             couch_model::Provider::Denon { .. } => "denon",
             couch_model::Provider::WebOs => "webos",
+            couch_model::Provider::AppleTv => "appletv",
             _ => return,
         };
-        discovery.set("Loading input choices…".into());
+        discovery.set("Loading inputs and apps…".into());
         leptos::task::spawn_local(async move {
             let mut rows = Vec::new();
             let base = format!("/api/connections/{}/{prefix}", connection.id);
-            let result = api::ha(
-                "GET",
-                &format!(
-                    "{base}/{}",
-                    if prefix == "denon" {
-                        "sources"
-                    } else {
-                        "inputs"
-                    }
-                ),
-                None,
-            )
-            .await;
+            let result = if prefix == "appletv" {
+                Ok(serde_json::Value::Null)
+            } else {
+                api::ha(
+                    "GET",
+                    &format!(
+                        "{base}/{}",
+                        if prefix == "denon" {
+                            "sources"
+                        } else {
+                            "inputs"
+                        }
+                    ),
+                    None,
+                )
+                .await
+            };
             if let Ok(value) = &result {
                 if prefix == "denon" {
                     if let Ok(sources) =
@@ -142,8 +147,11 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                     }
                 }
             }
-            if prefix == "webos" {
-                if let Ok(apps) = api::ha("GET", &format!("{base}/apps"), None).await {
+            let mut discovery_failed = result.is_err();
+            if matches!(prefix, "webos" | "appletv") {
+                let app_result = api::ha("GET", &format!("{base}/apps"), None).await;
+                discovery_failed |= app_result.is_err();
+                if let Ok(apps) = app_result {
                     if let Some(apps) = apps["launchPoints"]
                         .as_array()
                         .or_else(|| apps["apps"].as_array())
@@ -161,8 +169,8 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
             }
             if device.try_get_untracked().as_deref() == Some(&selected) {
                 dynamic.set(rows);
-                discovery.set(if result.is_err() {
-                    "Input discovery unavailable; saved mappings are retained.".into()
+                discovery.set(if discovery_failed {
+                    "Input or app discovery unavailable; saved mappings are retained.".into()
                 } else {
                     String::new()
                 });

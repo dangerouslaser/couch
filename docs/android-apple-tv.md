@@ -125,3 +125,41 @@ The target app must be installed and registered to handle the supplied URL.
 Couch does not enable ADB or install software on the TV to obtain an app list.
 [Protocol implementation](https://github.com/tronikos/androidtvremote2),
 [message schema](https://github.com/tronikos/androidtvremote2/blob/main/src/androidtvremote2/remotemessage.proto).
+
+## Apple TV app discovery in activities
+
+For a paired Apple TV, selecting its device in an activity's **Devices & sequences**
+command library or **Physical buttons** picker now loads launchable apps. Choose
+an **App · name** entry to store the existing `app:<bundle-id>` command. Discovery
+runs through the shared control broker and the authenticated connection API;
+it does not launch an app until a configured command is executed. A discovery
+failure leaves standard commands and saved mappings available.
+
+`GET /api/connections/<id>/appletv/apps` returns only `apps: [{id, title}]`.
+The Companion response is a bundle-ID-to-name dictionary, normalized to a sorted,
+bounded catalog. Invalid IDs, names, duplicate IDs or oversized catalogs are
+rejected. Android keeps its configured app-link shortcuts because Remote v2 has
+no corresponding installed-app-list operation. [Companion app-list implementation](https://github.com/postlund/pyatv/blob/master/pyatv/protocols/companion/__init__.py#L150).
+
+The encrypted local Companion peer now exercises discovery as well as launch.
+Additional tests cover invalid catalogs and provider/pairing route guards; the
+web UI compiles for WebAssembly. This addition has not been tested on a physical
+Apple TV and does not add a dedicated Apple TV screen or playback metadata.
+
+## Remaining client work, in priority order
+
+1. Pair and validate Apple TV on real hardware: PIN, saved reconnection,
+   navigation, app discovery/launch and sleep/wake commands. This needs an
+   available TV and its on-screen PIN.
+2. Add a dedicated Apple TV device/activity view, so selecting it from a room
+   immediately takes over physical controls. Custom activity mappings already
+   work; they are not a substitute for that unfinished direct-selection flow.
+3. Exercise Android keepalive and network-loss recovery over longer sessions;
+   its basic pairing, saved reconnection and visible navigation have passed.
+4. Extend Android text input/current-app tracking and Apple AirPlay/MRP
+   now-playing separately. Neither is implemented by the existing basic controls.
+
+Already implemented: both Rust protocol clients, discovery and private pairing
+flows, multi-connection storage, room test controls, activity commands, Android's
+dedicated screen and configured app shortcuts. The README's older hardware
+roadmap does not track these client milestones; use this list for their status.

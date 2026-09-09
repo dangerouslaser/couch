@@ -125,6 +125,7 @@ enum Op {
     AvrSources,
     AvrCommand(couch_denon::Command),
     StreamingStatus,
+    StreamingApps,
     StreamingCommand(String),
 }
 #[derive(Serialize, Deserialize)]
@@ -243,6 +244,7 @@ impl Client {
         match (self, op) {
             (_, Op::Open) => Ok(Value::Null),
             (Self::Streaming(c), Op::StreamingStatus) => c.status(),
+            (Self::Streaming(c), Op::StreamingApps) => c.apps(),
             (Self::Streaming(c), Op::StreamingCommand(name)) => {
                 c.command(&name)?;
                 Ok(Value::Null)

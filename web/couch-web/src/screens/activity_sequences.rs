@@ -41,25 +41,30 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
         let prefix = match connection.provider {
             Provider::Denon { .. } => "denon",
             Provider::WebOs => "webos",
+            Provider::AppleTv => "appletv",
             _ => return,
         };
         status.set("Loading inputs and apps…".into());
         leptos::task::spawn_local(async move {
             let mut rows = Vec::new();
             let path = format!("/api/connections/{}/{prefix}", connection.id);
-            let inputs = api::ha(
-                "GET",
-                &format!(
-                    "{path}/{}",
-                    if prefix == "denon" {
-                        "sources"
-                    } else {
-                        "inputs"
-                    }
-                ),
-                None,
-            )
-            .await;
+            let inputs = if prefix == "appletv" {
+                Ok(serde_json::Value::Null)
+            } else {
+                api::ha(
+                    "GET",
+                    &format!(
+                        "{path}/{}",
+                        if prefix == "denon" {
+                            "sources"
+                        } else {
+                            "inputs"
+                        }
+                    ),
+                    None,
+                )
+                .await
+            };
             if let Ok(value) = &inputs {
                 if prefix == "denon" {
                     if let Ok(v) = serde_json::from_value::<Vec<(String, String)>>(value.clone()) {
@@ -78,8 +83,11 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                     }
                 }
             }
-            if prefix == "webos" {
-                if let Ok(value) = api::ha("GET", &format!("{path}/apps"), None).await {
+            let mut discovery_failed = inputs.is_err();
+            if matches!(prefix, "webos" | "appletv") {
+                let app_result = api::ha("GET", &format!("{path}/apps"), None).await;
+                discovery_failed |= app_result.is_err();
+                if let Ok(value) = app_result {
                     if let Some(items) = value["launchPoints"]
                         .as_array()
                         .or_else(|| value["apps"].as_array())
@@ -99,7 +107,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                 && selected().is_some_and(|d| d.id == device.id)
             {
                 dynamic.set(rows);
-                status.set(if inputs.is_err() {
+                status.set(if discovery_failed {
                     "Device unavailable; standard commands are still available.".into()
                 } else {
                     String::new()

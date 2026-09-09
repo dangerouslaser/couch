@@ -124,6 +124,9 @@ impl StreamingTv {
     pub fn status(&self) -> Result<Value> {
         self.handle.call(Op::StreamingStatus)
     }
+    pub fn apps(&self) -> Result<Value> {
+        self.handle.call(Op::StreamingApps)
+    }
     pub fn command(&self, function: &str) -> Result<()> {
         if function.len() > 2176 {
             return Err(Error::Protocol);
@@ -176,6 +179,17 @@ impl Client {
                 json!({"connected":true,"protocol":"companion","now_playing_supported":false})
             }
         })
+    }
+    pub fn apps(&mut self) -> Result<Value> {
+        match self {
+            Self::Apple(c) => c
+                .launchable_apps()
+                .map(|apps| json!({"apps": apps}))
+                .map_err(|error| Error::Remote(error.to_string())),
+            Self::Android(_) => Err(Error::Remote(
+                "Android TV does not provide installed app discovery".into(),
+            )),
+        }
     }
     pub fn command(&mut self, name: &str) -> Result<()> {
         match self {

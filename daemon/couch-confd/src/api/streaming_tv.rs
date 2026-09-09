@@ -275,7 +275,8 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], file: PathBuf, app
         };
         return response(&connection);
     }
-    if !matches!((method, path), ("GET", ["status"]) | ("POST", ["command"])) {
+    let apps = apple && method == "GET" && path == ["apps"];
+    if !apps && !matches!((method, path), ("GET", ["status"]) | ("POST", ["command"])) {
         return Reply::error(404, "Unknown streaming TV operation");
     }
     let command = if method == "POST" {
@@ -309,6 +310,7 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], file: PathBuf, app
     };
     let result = match command {
         Some(command) => client.command(&command).map(|_| json!({"accepted":true})),
+        None if apps => client.apps(),
         None => client.status(),
     };
     match result {
@@ -329,6 +331,21 @@ fn valid_code(code: &str, apple: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn app_discovery_requires_apple_pairing_and_never_falls_back_to_android() {
+        let missing =
+            std::env::temp_dir().join(format!("couch-unpaired-test-{}.json", token().unwrap()));
+        assert!(!missing.exists());
+        assert_eq!(
+            route("GET", &["apps"], b"", missing.clone(), true).status,
+            400
+        );
+        assert_eq!(
+            route("GET", &["apps"], b"", missing.clone(), false).status,
+            404
+        );
+        assert_eq!(route("POST", &["apps"], b"", missing, true).status, 404);
+    }
     #[test]
     fn only_literal_lan_addresses_are_accepted() {
         for bad in [

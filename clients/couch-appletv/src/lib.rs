@@ -18,6 +18,50 @@ use std::{
 pub const MDNS_SERVICE: &str = "_companion-link._tcp.local.";
 
 pub type Result<T> = std::result::Result<T, Error>;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct App {
+    pub id: String,
+    pub title: String,
+}
+
+fn launchable_apps(response: &Value) -> Result<Vec<App>> {
+    // Companion returns _c as bundle identifier -> display name (pyatv's
+    // CompanionApps.app_list). Do not forward arbitrary protocol fields.
+    let Some(Value::Dict(items)) = response.get("_c") else {
+        return Err(Error::Protocol);
+    };
+    if items.len() > 512 {
+        return Err(Error::Protocol);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut apps = Vec::with_capacity(items.len());
+    for (id, title) in items {
+        let title = title.string()?;
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._/-+".contains(&b))
+            || title.trim().is_empty()
+            || title.len() > 256
+            || title.chars().any(char::is_control)
+            || !seen.insert(id)
+        {
+            return Err(Error::Protocol);
+        }
+        apps.push(App {
+            id: id.clone(),
+            title: title.to_owned(),
+        });
+    }
+    apps.sort_by(|a, b| {
+        a.title
+            .to_lowercase()
+            .cmp(&b.title.to_lowercase())
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(apps)
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Configuration,
@@ -469,6 +513,9 @@ impl Remote {
         self.connection
             .command("FetchLaunchableApplicationsEvent", Value::Dict(vec![]))
     }
+    pub fn launchable_apps(&mut self) -> Result<Vec<App>> {
+        launchable_apps(&self.apps()?)
+    }
     /// Drain bounded pushed events; never performs a state-changing operation.
     pub fn poll(&mut self) -> Result<Option<Value>> {
         if let Some(event) = self.connection.events.pop_front() {
@@ -529,6 +576,31 @@ mod peer_tests {
         }
         socket.write_all(&[h.as_slice(), &d].concat()).unwrap();
     }
+    #[test]
+    fn app_catalog_rejects_malformed_or_duplicate_entries() {
+        for content in [
+            Value::Null,
+            Value::dict([("com.example", 1.into())]),
+            Value::dict([("com.example", "One".into()), ("com.example", "Two".into())]),
+            Value::dict([("bad id", "Name".into())]),
+            Value::dict([("com.example", "\n".into())]),
+            Value::Dict(
+                (0..513)
+                    .map(|i| (format!("com.example.{i}"), "Name".into()))
+                    .collect(),
+            ),
+        ] {
+            assert_eq!(
+                launchable_apps(&Value::dict([("_c", content)])),
+                Err(Error::Protocol)
+            );
+        }
+        assert_eq!(launchable_apps(&Value::Dict(vec![])), Err(Error::Protocol));
+        assert!(launchable_apps(&Value::dict([("_c", Value::Dict(vec![]))]))
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn verified_encrypted_session_routes_navigation_playback_and_apps() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -617,6 +689,7 @@ mod peer_tests {
                 "_hidC",
                 "_mcc",
                 "_launchApp",
+                "FetchLaunchableApplicationsEvent",
                 "_sessionStop",
             ]
             .into_iter()
@@ -653,6 +726,8 @@ mod peer_tests {
                             "_c",
                             if expected == "_sessionStart" {
                                 Value::dict([("_sid", 42.into())])
+                            } else if expected == "FetchLaunchableApplicationsEvent" {
+                                Value::dict([("com.example.video", "Example Video".into())])
                             } else {
                                 Value::Dict(vec![])
                             },
@@ -667,6 +742,13 @@ mod peer_tests {
         remote.press(Button::Ok).unwrap();
         remote.playback(Playback::Play).unwrap();
         remote.launch("com.example.video").unwrap();
+        assert_eq!(
+            remote.launchable_apps().unwrap(),
+            vec![App {
+                id: "com.example.video".into(),
+                title: "Example Video".into()
+            }]
+        );
         remote.close().unwrap();
         peer.join().unwrap();
     }
