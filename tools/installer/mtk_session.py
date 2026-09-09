@@ -42,7 +42,11 @@ class ReadPolicy:
 def source_pin(checkout):
     checkout = Path(checkout).resolve()
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(checkout), *args], stderr=subprocess.PIPE)
+        try:
+            return subprocess.check_output(["git", "-C", str(checkout), *args], stderr=subprocess.PIPE)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise InstallError("Cannot inspect pinned mtkclient checkout with Git; verify the checkout "
+                               "and its ownership under the same user running capture. No USB was claimed.") from error
     require(git("rev-parse", "HEAD").decode().strip() == REVIEWED_REVISION, "Unreviewed mtkclient checkout")
     tracked = {}
     for record in git("ls-tree", "-rz", "--full-tree", "HEAD", "--", "mtkclient").split(b"\0"):
@@ -129,6 +133,8 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
     Factory must be side-effect-free until claim(), and expose enumerate(),
     claim(Candidate), claimed_candidate(), start_readonly(bytes, ReadPolicy),
     close(reset=False). start_readonly returns the connected upstream Mtk object.
+    An explicit boot_after_capture requests the legacy normal-boot exit only
+    after the consumer returns successfully; failed captures never request boot.
     The backend must not rediscover a different target or invoke configure_da's
     generic reset/security fallback. mtk_usb.ExactUsbBackend implements this
     contract experimentally. Physical DA startup and identity readback have

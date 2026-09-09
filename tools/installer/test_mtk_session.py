@@ -138,6 +138,10 @@ class SessionGateTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallError, "outside the source pin"):
                 session.verify_loaded_sources({})
 
+    def test_git_checkout_failure_has_actionable_capture_error(self):
+        with self.assertRaisesRegex(InstallError, "same user running capture.*No USB was claimed"):
+            session.source_pin(self.root / "missing-checkout")
+
     def test_tracked_source_hash_and_untracked_python_are_checked(self):
         repo = self.root / "source"
         repo.mkdir()
