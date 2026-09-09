@@ -301,3 +301,18 @@ The larger Flipper Devices source uses MIT, independently of the older
 Flipper-IRDB CC0 boundary. Detailed commands decompress on demand; the full
 database is not expanded into command tables at daemon startup. SIRC20
 imports preserve all 13 address bits (5-bit device plus 8-bit extension).
+
+
+### Carrier and coexistence controller checks
+
+On kernel `9b699dde`, two separate one-word zero transfers completed in
+2136/2149 µs, and the 281 µs carrier-pattern probe completed in 2154 µs.
+The 38 kHz long-zero probes completed in 69482 µs (68 ms requested) and
+501744 µs (500 ms requested). Separate 68 ms zero probes completed in
+69713 µs at 36 kHz and 69328 µs at 40 kHz. Each used one write with no retry;
+GUI heartbeats advanced afterward and no transmit errors were logged.
+
+The read-only GPIO dump reported GPIO8 as mode 2 (PWM_A); no mux writes were
+needed. These checks verify carrier-dependent programming, bounded DMA and
+repeat-transfer completion. They do not measure optical carrier frequency or
+prove reception by a television. Real-device command validation remains pending.
