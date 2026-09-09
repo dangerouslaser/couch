@@ -191,6 +191,3 @@ index 00000000..80f7ec8c
 +module_exit(couch_motion_exit);
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("Couch HA100 MIR3DA display-standby motion sensor");
--- 
-2.43.0
-
