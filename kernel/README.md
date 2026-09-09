@@ -19,15 +19,19 @@ in its own git history. It lives on the build box (Ollie, `~/couch-kernel/`):
 
 ```
 ~/couch-kernel/base     the tree: parthibx24/android_kernel_wiko_k300 @ 521b3081
-                        plus our delta, committed on branch couch-ha100 (7a0e5e8f)
+                        plus our delta, committed on branch couch-ha100 (0d6673cd)
 ~/couch-kernel/donor    LCM-MTK/android_kernel_mediatek_mt6580, the tree the
                         CONSYS_6580 connectivity driver was grafted from
 ~/couch-kernel/out      build output (O=), disposable
 ```
 
-The branch has no publishing remote. A full Git bundle is backed up outside
-this repository; `patches/ha100-input-display.patch` also preserves the input
-and display fixes after `7a0e5e8f`. Apply it with `git am` to that baseline.
+The full branch is published at
+[dangerouslaser/couch-kernel](https://github.com/dangerouslaser/couch-kernel)
+on `couch-ha100`; the `couch` remote on Ollie points there and `origin` remains
+upstream. A second Git copy lives on the Mac at `~/Projects/couch-kernel/base`
+(`couch-published`, verified at `0d6673cd`). This copy is for source backup,
+not compilation. A full Git bundle is also backed up outside this repository.
+The `patches/` directory preserves later hardware fixes as reviewable deltas.
 
 What the delta on top of wiko_k300 is (one commit, 541 files, ~19MB):
 
