@@ -542,7 +542,7 @@ leaves it with no password at all, so key auth works and password auth cannot.
    Full kernel history is published at [dangerouslaser/couch-kernel](https://github.com/dangerouslaser/couch-kernel),
    branch `couch-ha100`. Ollie holds the build checkout; the Mac holds an
    independent Git copy in `~/Projects/couch-kernel/base` (`couch-published`).
-   Both copies were verified at `0d6673cd`; all kernel builds still run on Ollie.
+   Both copies were verified at `e581fb14`; all kernel builds still run on Ollie.
 
 The remote's original control app was Android/Kotlin
 (`~/Projects/sanytron`, "Sanytron Remote"); the Slint GUI in `ui/couch-gui`

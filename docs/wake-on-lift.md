@@ -54,9 +54,15 @@ thresholds need field measurement before claiming a low-power suspend solution.
 - Live module initialization and 100 resting samples passed without restarting
   the GUI. Gravity measured 1017–1111 counts; maximum departure from the learned
   pose was 75 counts, below the 210-count threshold.
-- The built-in kernel compiled successfully on Ollie. Physical pickup wake and
-  a reboot into that kernel still require deployment validation; this document
-  does not claim those tests have passed.
+- A real-GUI mount-namespace fixture passed simulated lift from dim, display-off
+  and dock-clock states, plus opt-out sensor suspension and physical button wake.
+  Production configuration/Wi-Fi hashes were unchanged and its GUI restored.
+- The built-in kernel compiled on Ollie and booted on the HA100 as
+  `3.18.79-couch-normal-ge581fb141386`. The boot write was read back and verified;
+  the independent recovery partition hash was unchanged.
+- The user confirmed on September 9 that picking up the dimmed remote wakes it.
+  Physical pickup from full display-off/dock clock and battery consumption still
+  need field validation; those modes have passed simulated sensor tests.
 
 After deployment, leave the remote still until dimmed, then pick it up. Repeat
 from display-off and from the charging clock. Confirm table vibration does not

@@ -1,5 +1,6 @@
 # On-device setup
 
+Fresh installs begin with no example connections, rooms, devices, or activities.
 Normal first boot opens **Welcome to couch.** on the remote. Choose **Set up
 Wi-Fi**, select a scanned network (or enter a hidden SSID), and use the keyboard
 to enter its password. **Test connection** checks association and DHCP; it does
@@ -37,5 +38,8 @@ the other `stage2/*.sh` files. No device credentials belong in an image or Git.
 
 Run `python3 -m unittest discover -s tools/tests` for boot policy regressions
 and `cargo test --manifest-path ui/Cargo.toml` for network trial/rollback tests.
-Validate scanning, keyboard navigation, errors, saving, and the QR handoff on
-hardware separately. Do not erase an existing user's networks to test first boot.
+On the HA100, the welcome page, network scan, return navigation, recovery
+confirmation, and offline exit were checked with the new GUI; saved credentials
+and configuration hashes stayed unchanged. The existing trial/rollback tests
+cover network changes. A complete fresh-network Save and QR handoff still need
+an end-to-end onboarding test. Do not erase an existing user's networks to test first boot.
