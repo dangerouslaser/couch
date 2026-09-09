@@ -134,7 +134,7 @@ impl Controller {
                     .activities
                     .iter()
                     .find(|a| a.id.as_str() == context)
-                    .map(|a| a.buttons.clone())
+                    .map(|a| a.buttons.iter().filter(|b| !(b.button == Button::Back && b.gesture == Gesture::Long)).cloned().collect())
                     .unwrap_or_default();
                 self.config = config;
             }

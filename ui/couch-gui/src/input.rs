@@ -173,3 +173,127 @@ mod tests {
         assert!(!p.settings_hold_due(2_000_000, true));
     }
 }
+
+/// Reserve a Back hold while a device owns the physical keys. Keep swallowing
+/// its release after navigation so it cannot activate the previous screen.
+#[derive(Default)]
+pub struct BackHold {
+    context: String,
+    captured: bool,
+    pending: Option<(crate::keypad::Press, u64)>,
+}
+pub enum BackAction {
+    Pass(crate::keypad::Press),
+    Consume,
+    Exit,
+}
+impl BackHold {
+    pub fn context(&mut self, context: String) {
+        if self.context != context {
+            self.context = context;
+            self.pending = None;
+        }
+    }
+    pub fn poll(&mut self, now: u64) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_sub(*at) >= 600_000)
+        {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+    pub fn handle(&mut self, press: crate::keypad::Press, now: u64, awake: bool) -> BackAction {
+        if press.code != 158 {
+            return BackAction::Pass(press);
+        }
+        if press.released && self.captured {
+            self.captured = false;
+            return match self.pending.take() {
+                Some((down, at)) if now.saturating_sub(at) < 600_000 => BackAction::Pass(down),
+                Some(_) => BackAction::Exit,
+                None => BackAction::Consume,
+            };
+        }
+        if self.captured {
+            return BackAction::Consume;
+        }
+        if self.context.is_empty() || !awake || press.released || press.repeat {
+            return BackAction::Pass(press);
+        }
+        self.captured = true;
+        self.pending = Some((press, now));
+        BackAction::Consume
+    }
+}
+
+#[cfg(test)]
+mod back_tests {
+    use super::*;
+    fn press(released: bool) -> crate::keypad::Press {
+        crate::keypad::Press {
+            code: 158,
+            released,
+            key: None,
+            mic: None,
+            menu: None,
+            latency_us: 0,
+            repeat: false,
+        }
+    }
+    #[test]
+    fn short_back_is_delivered_on_release_and_hold_exits_only_once() {
+        let mut hold = BackHold::default();
+        hold.context("kodi".into());
+        assert!(matches!(
+            hold.handle(press(false), 0, true),
+            BackAction::Consume
+        ));
+        assert!(
+            matches!(hold.handle(press(true), 100_000, true), BackAction::Pass(p) if !p.released)
+        );
+        assert!(matches!(
+            hold.handle(press(false), 200_000, true),
+            BackAction::Consume
+        ));
+        assert!(!hold.poll(799_999));
+        assert!(hold.poll(800_000));
+        assert!(!hold.poll(900_000));
+        hold.context(String::new());
+        assert!(matches!(
+            hold.handle(press(true), 1_000_000, true),
+            BackAction::Consume
+        ));
+    }
+    #[test]
+    fn navigation_cancels_hold_and_dark_screen_does_not_arm_it() {
+        let mut hold = BackHold::default();
+        hold.context("tv".into());
+        assert!(matches!(
+            hold.handle(press(false), 0, false),
+            BackAction::Pass(_)
+        ));
+        assert!(!hold.poll(700_000));
+        hold.handle(press(false), 1_000_000, true);
+        hold.context("another-device".into());
+        assert!(!hold.poll(1_700_000));
+        assert!(matches!(
+            hold.handle(press(true), 1_800_000, true),
+            BackAction::Consume
+        ));
+    }
+    #[test]
+    fn release_after_slow_frame_still_exits_without_short_back() {
+        let mut hold = BackHold::default();
+        hold.context("kodi".into());
+        hold.handle(press(false), 0, true);
+        assert!(matches!(
+            hold.handle(press(true), 650_000, true),
+            BackAction::Exit
+        ));
+        assert!(!hold.poll(700_000));
+    }
+}

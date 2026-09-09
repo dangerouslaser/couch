@@ -231,7 +231,9 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                         <button class="mapping-slot" aria-label=format!("{name}, short press") disabled=move ||app.busy.get() on:click=move |_|open(button, Gesture::Short)>
                             <span class="mapping-gesture">"● Short press"</span><strong>{short.0}</strong><span class="mapping-device">{short.1}</span><span class="mapping-edit" aria-hidden="true">"↗"</span>
                         </button>
-                        {if button.supports_long() { view! {
+                        {if button == Button::Back { view! {
+                            <div class="mapping-slot" aria-label="Back, long press: return to Couch"><span class="mapping-gesture">"━ Long press"</span><strong>"Return to Couch"</strong><span class="mapping-device">"Previous screen · Always available"</span></div>
+                        }.into_any() } else if button.supports_long() { view! {
                             <button class="mapping-slot" aria-label=format!("{name}, long press") disabled=move ||app.busy.get() on:click=move |_|open(button, Gesture::Long)>
                                 <span class="mapping-gesture">"━ Long press"</span><strong>{long.0}</strong><span class="mapping-device">{long.1}</span><span class="mapping-edit" aria-hidden="true">"↗"</span>
                             </button>

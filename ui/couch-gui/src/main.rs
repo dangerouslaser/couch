@@ -648,10 +648,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.set_feedback_enabled(false);
     };
 
+    let mut back_hold = input::BackHold::default();
+    let exit_device = |app: &App| {
+        if app.get_tv_shown() {
+            app.invoke_tv_action("close".into());
+        } else if app.get_player_shown() {
+            app.set_player_panel(0);
+            app.invoke_player_action("back".into(), 0.);
+        }
+    };
     loop {
+        let back_context = if app.get_tv_shown() || app.get_player_shown() {
+            format!("{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_active_activity())
+        } else { String::new() };
+        back_hold.context(back_context);
+        if back_hold.poll(now_monotonic_us()) { exit_device(&app); }
         let replay = button_controls.next_replay();
         let replayed = replay.is_some();
-        if let Some(press) = replay.or_else(||pad.poll()) {
+        let press = replay.or_else(||pad.poll()).and_then(|press| {
+            if replayed { return Some(press); }
+            if press.code == 158 && !press.released {
+                last_input = now_monotonic_us();
+                if standby == Standby::Dim && !app.get_dock_clock_shown() {
+                    wake(&mut screen, active_level.get());
+                    standby = Standby::Active;
+                    verify_at = Some(last_input + 1_000_000);
+                }
+            }
+            match back_hold.handle(press, now_monotonic_us(), standby != Standby::Off && !app.get_dock_clock_shown()) {
+                input::BackAction::Pass(press) => Some(press),
+                input::BackAction::Consume => None,
+                input::BackAction::Exit => { exit_device(&app); None },
+            }
+        });
+        if let Some(press) = press {
             if press.released && press.mic.is_none() && press.menu.is_none() {
                 if !replayed {button_controls.handle(&app,&press);}
                 continue;

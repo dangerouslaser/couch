@@ -31,7 +31,11 @@ belong to different Couch rooms. Only supported functions are offered. IR
 remains unavailable until the built-in blaster can send codes.
 
 - **Activity default** removes an override. **Do nothing** explicitly consumes it.
-- Short and long presses are independent. A configured long press fires once
+- **Long Back is reserved globally for returning to Couch** from a device or
+  activity screen, including open Kodi/TV panels. Short Back still controls the
+  device and fires on release. The held press and release never send device
+  Back; existing long-Back overrides are retained in configuration but ignored.
+- Other short and long presses are independent. A configured long press fires once
   after 600 ms. Its short action waits for release and never also fires on a hold.
 - D-pad, volume and channel keys retain repeat; they cannot have long bindings.
   Repeat events only repeat navigation, volume and channel functions, even when
