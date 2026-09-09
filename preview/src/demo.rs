@@ -299,6 +299,10 @@ pub fn configure(app: &App) {
         later(move |d, a| match action.as_str() {
             "close" => d.back(a),
             "dismiss" => a.set_tv_panel(0),
+            "commands" => {
+                a.set_tv_choices(ModelRc::new(VecModel::from([("toggle","Power toggle"),("power-on","Power on"),("volume-up","Volume up"),("volume-down","Volume down"),("mute","Mute")].into_iter().map(|(action,title)|TvChoice{action:format!("ir:{action}").into(),title:title.into(),detail:"Send infrared command".into()}).collect::<Vec<_>>())));
+                a.set_tv_panel(2);
+            }
             "apps" | "inputs" => {
                 let apps = action == "apps";
                 a.set_tv_choices(ModelRc::new(VecModel::from(if apps {
@@ -560,7 +564,7 @@ fn dispatch_button(name: &str) {
 pub fn state_json() -> String {
     let mut result = "{}".to_string();
     with(|d, a| {
-        result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{},\"tv\":{},\"tv_panel\":{},\"android_tv\":{},\"apple_tv\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row(),a.get_tv_shown(),a.get_tv_panel(),a.get_tv_android(),a.get_tv_apple());
+        result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{},\"tv\":{},\"tv_panel\":{},\"android_tv\":{},\"apple_tv\":{},\"infrared\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row(),a.get_tv_shown(),a.get_tv_panel(),a.get_tv_android(),a.get_tv_apple(),a.get_tv_ir());
     });
     result
 }
@@ -585,14 +589,16 @@ pub fn documentation_screen(name: &str) {
                     d.scene(a, 2);
                 }
                 "android-tv" | "android-apps" | "webos" | "webos-inputs" | "apple-tv"
-                | "apple-apps" => {
+                | "apple-apps" | "infrared" | "infrared-commands" => {
                     d.open_room(a, 0);
+                    let infrared = name.starts_with("infrared");
+                    a.set_tv_ir(infrared);
                     let android = name.starts_with("android");
                     let apple = name.starts_with("apple");
                     a.set_tv_android(android);
                     a.set_tv_apple(apple);
                     a.set_tv_title(
-                        if android {
+                        if infrared {"Living room IR TV"} else if android {
                             "Living room Android TV"
                         } else if apple {
                             "Living room Apple TV"
@@ -602,7 +608,7 @@ pub fn documentation_screen(name: &str) {
                         .into(),
                     );
                     a.set_tv_source(
-                        if android {
+                        if infrared {"Infrared controls"} else if android {
                             "Android / Google TV"
                         } else if apple {
                             "Apple TV"
@@ -612,7 +618,7 @@ pub fn documentation_screen(name: &str) {
                         .into(),
                     );
                     a.set_tv_status(
-                        if apple {
+                        if infrared {"Infrared · No device feedback"} else if apple {
                             "Connected · Companion"
                         } else {
                             "TV on · Volume 12"
@@ -626,6 +632,7 @@ pub fn documentation_screen(name: &str) {
                     if name == "android-apps" || name == "apple-apps" {
                         a.invoke_tv_action("apps".into());
                     }
+                    if name == "infrared-commands" {a.invoke_tv_action("commands".into());}
                     if name == "webos-inputs" {
                         a.invoke_tv_action("inputs".into());
                     }
