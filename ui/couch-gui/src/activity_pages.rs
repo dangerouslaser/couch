@@ -159,6 +159,7 @@ impl Pages {
                     matches!(
                         i,
                         couch_model::Integration::Kodi { .. } | couch_model::Integration::WebOs
+                                    | couch_model::Integration::AndroidTv
                     )
                 })
         }));

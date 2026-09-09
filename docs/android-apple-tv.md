@@ -88,8 +88,11 @@ the named provider reference.
 
 Add the TV to a room. The room editor provides basic test controls; activities
 can map its supported functions to physical buttons, ordered start/stop steps,
-and custom command pages. A dedicated full-screen Android/Apple TV media view is
-not implemented. Use custom activity pages for the first iteration. Unsupported
+and custom command pages. Selecting an Android TV from a room opens its TV control screen immediately.
+D-pad, OK, Back, Home, menu, volume, mute, channel and power control that TV;
+long Back leaves the screen. Playback controls are available by touch. Android
+TV can also be an activity’s main screen. Apple TV still uses custom activity
+pages; its dedicated screen is not implemented. Unsupported
 Apple functions such as mute and stop are omitted from the capability catalog.
 
 The shared control broker owns each endpoint, answers Android keepalives while
@@ -110,3 +113,15 @@ navigation on the TV. A later connection using saved credentials also passed.
 Long-running keepalive and network-loss recovery remain separate checks; a
 successful command write alone does not prove that the TV performed it. No Apple TV has
 been paired during this validation.
+
+
+## Android TV app shortcuts
+
+The Android Remote v2 schema supports app-link launch requests, but no installed
+app list query. The Android TV screen therefore uses explicitly configured,
+named app shortcuts rather than presenting a guessed list as discovered apps.
+Configure links for this TV in Connections; the Apps selector uses those links.
+The target app must be installed and registered to handle the supplied URL.
+Couch does not enable ADB or install software on the TV to obtain an app list.
+[Protocol implementation](https://github.com/tronikos/androidtvremote2),
+[message schema](https://github.com/tronikos/androidtvremote2/blob/main/src/androidtvremote2/remotemessage.proto).

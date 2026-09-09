@@ -315,7 +315,7 @@ impl Controller {
             if let Some((_, device)) = config.devices().find(|(_, d)| Some(&d.id) == source) {
                 if matches!(
                     config.resolve_integration(&device.integration),
-                    Some(Integration::WebOs)
+                    Some(Integration::WebOs | Integration::AndroidTv)
                 ) {
                     let connection = match &device.integration {
                         Integration::Connection { connection_id, .. } => connection_id.to_string(),

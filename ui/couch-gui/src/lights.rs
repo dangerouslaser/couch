@@ -478,9 +478,7 @@ impl Controller {
                         let cfg=crate::connections::config();
                         let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
                         if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
-                        let tv=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration))).is_some_and(|i|matches!(i,Integration::WebOs));
-                        if tv {
-                            let connection=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|match &d.integration {Integration::Connection{connection_id,..}=>Some(connection_id.to_string()),_=>c.connections.iter().find(|c|c.provider==couch_model::Provider::WebOs).map(|c|c.id.to_string())})).unwrap_or_default();
+                        if let Some(connection) = cfg.as_ref().and_then(|c| tv_connection(c, e.id.trim_start_matches("device:"))) {
                             app.set_active_activity("".into());
                             app.invoke_open_tv(connection.as_str().into(),e.name.as_str().into());continue;
                         }
@@ -606,9 +604,41 @@ fn description(light: &Light) -> String {
             .unwrap_or_else(|| "On".into()),
     }
 }
+// Resolve the selected device's own connection; never select the first Android
+// TV when multiple TVs are configured.
+fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String> {
+    let (_, device) = config.devices().find(|(_, d)| d.id.as_str() == device_id)?;
+    let provider = match config.resolve_integration(&device.integration)? {
+        Integration::WebOs => couch_model::Provider::WebOs,
+        Integration::AndroidTv => couch_model::Provider::AndroidTv,
+        _ => return None,
+    };
+    match &device.integration {
+        Integration::Connection { connection_id, .. } => Some(connection_id.to_string()),
+        _ => config.connections.iter().find(|c| c.provider == provider).map(|c| c.id.to_string()),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_android_tv_uses_its_own_connection() {
+        let config: couch_model::Config = serde_json::from_value(serde_json::json!({
+            "schema_version":1,
+            "connections":[
+                {"id":"first","name":"First TV","provider":{"kind":"android-tv"}},
+                {"id":"second","name":"Second TV","provider":{"kind":"android-tv"}}
+            ],
+            "rooms":[{"id":"office","name":"Office","devices":[
+                {"id":"tv","name":"Android TV","kind":"tv","integration":{"via":"connection","connection_id":"second","resource_id":""}}
+            ]}]
+        })).unwrap();
+        assert_eq!(tv_connection(&config, "tv").as_deref(), Some("second"));
+        assert_eq!(tv_connection(&config, "missing"), None);
+        let mut removed = config;
+        removed.connections.pop();
+        assert_eq!(tv_connection(&removed, "tv"), None);
+    }
     #[test]
     fn brightness_steps_use_pending_targets_clamp_and_reject_unsupported_lights() {
         let mut light = Light {
