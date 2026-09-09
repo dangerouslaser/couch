@@ -3,7 +3,8 @@
 
 Layout: a 512-byte MTK image header (magic 0x58881688, then the payload size
 and the partition name), followed by a table of [count, block_size, offsets...]
-and then that many zlib streams, each one a raw RGB565 frame. Offsets are
+and then that many zlib streams, raw pixel data (HA100 full-screen frames are BGRA8888; other devices may
+use RGB565). Offsets are
 relative to the start of the table, and the table's own length is exactly
 offsets[0], which is how the first image is found.
 """
