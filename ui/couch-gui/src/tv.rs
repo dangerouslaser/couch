@@ -367,6 +367,24 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             waking = None;
             view = None;
         }
+        if current != 0 && android_mode && refreshed.elapsed() >= Duration::from_secs(4) {
+            if let Some(c) = android_client.as_ref() {
+                match android::refresh(c, generation) {
+                    Ok(event) => {
+                        let _ = tx.try_send(event);
+                    }
+                    Err(error) => {
+                        android_client = None;
+                        let _ = tx.try_send(Event {
+                            generation,
+                            details: None,
+                            status: Err(error),
+                        });
+                    }
+                }
+            }
+            refreshed = Instant::now();
+        }
         if let Some(w) = work {
             if w.generation != current
                 || current == 0
@@ -471,23 +489,6 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                         status: Ok(String::new()),
                         details: Some(fresh),
                     });
-                }
-            }
-            refreshed = Instant::now();
-        } else if current != 0 && android_mode && refreshed.elapsed() >= Duration::from_secs(4) {
-            if let Some(c) = android_client.as_ref() {
-                match android::refresh(c, generation) {
-                    Ok(event) => {
-                        let _ = tx.try_send(event);
-                    }
-                    Err(error) => {
-                        android_client = None;
-                        let _ = tx.try_send(Event {
-                            generation,
-                            details: None,
-                            status: Err(error),
-                        });
-                    }
                 }
             }
             refreshed = Instant::now();
