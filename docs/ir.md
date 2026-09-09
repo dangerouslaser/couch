@@ -6,45 +6,28 @@ waveform generator and `/dev/irtx` transport.
 
 ## Driver status
 
-The first live bringup kernel (`3dee4cfb`) registers `/dev/irtx` and accepts
-the solution/carrier ioctls. A single zero waveform returned ETIMEDOUT after
-53,114 µs; GUI heartbeats advanced and the device did not hang. Optical
-transmission remains unvalidated. The bringup configuration enables
-`CONFIG_MTK_IRTX_PWM_SUPPORT` and uses Couch's `couch_irtx.c` on MT6580. Its
-miscdevice requests `/dev/irtx`, dynamic minor, mode **0600** (runtime mdev
-currently sets **0660**, observed major/minor 10:61); the stock major and
-`mt_irtx` class must not be hardcoded. Probe waits for the PWM controller and
-does not start a transmission.
+Kernel `9b699dde` is live and its guarded completion path passed two separate
+zero-word writes (2,136 and 2,149 µs) and one 281 µs carrier-burst write (2,154 µs).
+GUI heartbeats advanced and no TX errors were logged. These establish bounded
+DMA completion and repeated-write cleanup; **optical emission and actual target
+control remain unvalidated**.
 
-The effective device tree confirms `mediatek,irtx-pwm`, `pwm_ch = 0` and
-`pwm_data_invert = 0`; the existing overlay supplies these properties. The PWM
-controller is bound at `11008000.PWM`. Preserve the current DTB and overlay.
+The driver requests `/dev/irtx` mode 0600; runtime mdev sets 0660 (observed 10:61).
+The effective DT selects PWM channel 0, inversion 0. Read-only GPIO inspection
+confirmed GPIO8 mode 2, the MT6580 `PWM_A` function. Current IR probe and vendor
+HAL do not set that mux or enable a separate LED GPIO, so the configuration is
+inherited from boot. The stock overlay adds no IR pinctrl state. Pinmux matching
+PWM_A does not by itself prove the board's LED connection or power.
 
-A diagnostic follow-up (`146bbaeb`) observes the powered channel on failure:
-PWM enable/clock selection, interrupt enable/status, control and duration
-registers, buffer word count and requested/sent waveform counters. It reads
-only the active channel and shared controller, before acknowledgement and
-clock shutdown. It changes no interrupt enable or transmit behavior.
-`sent_waves=1` with no finish status would support investigating masked status;
-zero progress instead points toward clock/configuration/DMA. Neither is assumed
-in advance. The legacy computed-clock helper is not used as frequency evidence.
-
-The diagnostic zero transfer completed one hardware waveform (`sent_before=0`,
-`sent_after=1`, `requested_waves=1`), while interrupt enable and status remained
-zero. The channel was enabled with the expected 228-clock durations. This
-supports masked completion status as the cause of the timeout; it does not
-prove optical emission. The [MediaTek PWM HAL API](https://android.googlesource.com/kernel/mediatek/+/android-mtk-3.18/drivers/misc/mediatek/pwm/mt_pwm.c)
-provides a sent-wave counter independently of interrupt status.
-
-The next candidate (`9b699dde`) polls that counter for exactly one completed
-waveform. It requires a zero baseline before or during the current transfer,
-so a retained `1` cannot falsely finish a repeated write. It also waits the full
-computed waveform duration after configuration returns. If a tiny repeated
-frame finishes before a counter reset can be observed, the conservative result
-is a bounded timeout, not assumed success. Existing timeout, error diagnostics,
-channel disable/drain and DMA cleanup remain in place; no IRQ is enabled.
-`kernel/test-irtx-completion.c` exercises the actual kernel helper on Ollie for
-minimum duration, stale counts, observed reset and full-length frames.
+Previous candidates reached `sent_waves=1` while interrupt enable/status remained
+zero, then timed out. The [MediaTek PWM API](https://android.googlesource.com/kernel/mediatek/+/android-mtk-3.18/drivers/misc/mediatek/pwm/mt_pwm.c)
+provides the sent-wave counter independently. The fix polls exactly one completed
+wave, requires a zero baseline before or during the current transfer, and waits
+the full computed waveform duration after configuration returns. A stale count
+cannot complete the next frame. No shared IRQ is enabled. Error diagnostics read
+only the powered channel and shared controller before acknowledgement/disable.
+`kernel/test-irtx-completion.c` tests the actual helper's stale-count and duration
+guards on Ollie.
 
 An earlier driver revision hung during transmission. Compilation and successful
 probe do **not** validate LED output, carrier frequency, completion interrupts,
@@ -220,7 +203,11 @@ operations; `--dry-run` opens nothing for any mode.
 - `--zero`: writes `[0x00000000, 281]`, one zero waveform word and a duration trailer.
 - `--pulse`: writes `[0x49249249, 281]`, eleven high samples spaced three ticks
   apart, ending low. This is a short carrier burst, not a television command.
-- Both send exactly eight bytes in **one syscall with no retry**, even on EINTR
+- `--zero-us 68000` or `--zero-us 500000`: allocates enough all-zero sample
+  words for at least that duration, plus the separate trailer. Inputs are bounded
+  to 1–1,000,000 µs. These exercise longer DMA without intentional carrier marks;
+  no repeat loop is built in. Add `--dry-run` to inspect lengths without hardware.
+- The two original probes send exactly eight bytes in **one syscall with no retry**, even on EINTR
   or a short write. At 228 clocks per sample the actual waveform lasts about
   281 µs. Logs flush before the write and report return value, errno and elapsed
   time afterward. A successful return proves driver completion, not optical output.
@@ -240,6 +227,17 @@ The historical failure was a four-byte zero waveform on `15b9bb34`, followed by
 watchdog reboot. Corrected clock ordering did not eliminate it. No captured
 trace proves its exact cause, so do not attribute it solely to the ABI mismatch.
 The candidate's minimum valid frame is eight bytes including the trailer.
+
+## Read-only pinmux check
+
+```sh
+cat /sys/class/misc/mtgpio/pin | sed -n '1p;/^ *8:/p'
+```
+
+The first digit after `8:` is mode; observed `8:21001110` confirms mode 2.
+The header documents the remaining fields. This attribute's show callback reads
+GPIO state; **writing** the same attribute can change pins and is not a query.
+Do not substitute GPIO numbers from generic PWM test code for HA100 wiring.
 
 ## Remaining hardware checks
 

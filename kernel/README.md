@@ -19,7 +19,7 @@ in its own git history. It lives on the build box (Ollie, `~/couch-kernel/`):
 
 ```
 ~/couch-kernel/base     the tree: parthibx24/android_kernel_wiko_k300 @ 521b3081
-                        plus our delta, committed on branch couch-ha100 (e581fb14)
+                        plus our delta, committed on branch couch-ha100 (9b699dde)
 ~/couch-kernel/donor    LCM-MTK/android_kernel_mediatek_mt6580, the tree the
                         CONSYS_6580 connectivity driver was grafted from
 ~/couch-kernel/out      build output (O=), disposable
@@ -47,27 +47,26 @@ What the delta on top of wiko_k300 is (one commit, 541 files, ~19MB):
 from the device backup, adjusted for this tree, with the connectivity stack
 built in.
 
-## IR bringup candidate
+## IR transfer validation
 
-The isolated Ollie branch `couch-irtx-bringup` at `3dee4cfb` adds the waveform
-ABI correction on top of the validated motion kernel `e581fb14`. The base
-checkout and existing normal output remain unchanged. Reproduce it with:
+The reviewed Ollie base and published `couch-ha100` branch are at `9b699dde`.
+The normal profile enables `CONFIG_MTK_IRTX_PWM_SUPPORT`; guarded sent-wave
+completion replaces polling masked interrupt status. Two zero-word writes and
+one short carrier burst completed in about 2.15 ms with advancing GUI heartbeats.
+Actual optical output and target control remain unvalidated.
+
+The isolated development worktree remains available:
 
 ```sh
 KTREE=/home/bryan/couch-kernel/irtx-worktree \
 KOUT=/home/bryan/couch-kernel/out-irtx-normal kernel/build.sh normal
 ```
 
-The only resulting config change is `CONFIG_MTK_IRTX_PWM_SUPPORT=y`.
-`build/couch-irtx.img` preserves the verified `build/couch-motion.img` DTB and
-ramdisk; its adjacent JSON records the input and output hashes.
-`build/irtx-normal-manifest.json` records clean source, compiler and kernel
-hashes. These local build products are not an installer release.
-
-After coordinated deployment, first verify boot/display/touch/wake and the
-read-only IR registration/ioctl path. Physical emission needs a separate,
-measured test with recovery access available, because earlier transmission
-attempts hung the device. Driver probe itself does not emit IR.
+`build/couch-irtx-counter.img` preserves the verified motion image's DTB and
+ramdisk. Its adjacent JSON records input/output hashes; the corresponding
+`build/irtx-counter-manifest.json` records clean source, compiler and config.
+See [IR](../docs/ir.md) for the staged probes, actual results and recovery setup.
+These local build products are not an installer release.
 
 ## Building
 
@@ -159,8 +158,8 @@ The normal profile now builds the corrected PWM IR driver as a **bringup
 candidate**. The previous revision hung during a minimal transmission. The
 candidate fixes carrier-scaled sample timing, excludes the duration trailer
 from DMA, keeps carrier state per descriptor and waits for the PWM provider.
-It has not yet passed a physical transmission test. Do not interpret driver
-probe success as a validated transmitter; see [IR](../docs/ir.md).
+It passes bounded controller transfers, but optical output and target control
+remain unvalidated; see [IR](../docs/ir.md).
 
 The boot-health gate requires advancing local GUI heartbeats before clearing
 the recovery BCB. It does not protect failures before init arms the BCB.
