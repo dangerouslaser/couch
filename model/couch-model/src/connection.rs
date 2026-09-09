@@ -15,6 +15,7 @@ pub enum Provider {
     Kodi { host: String, port: u16 },
     HomeAssistant,
     Hue,
+    WebOs,
     Ir,
 }
 impl Provider {
@@ -23,6 +24,7 @@ impl Provider {
             Self::Kodi { .. } => "kodi",
             Self::HomeAssistant => "home-assistant",
             Self::Hue => "hue",
+            Self::WebOs => "web-os",
             Self::Ir => "ir",
         }
     }
@@ -31,6 +33,7 @@ impl Provider {
             Self::Kodi { .. } => "Kodi",
             Self::HomeAssistant => "Home Assistant",
             Self::Hue => "Philips Hue",
+            Self::WebOs => "LG webOS",
             Self::Ir => "Infrared",
         }
     }
@@ -60,6 +63,7 @@ impl Config {
             Provider::Hue => Integration::Hue {
                 light_id: resource_id.clone(),
             },
+            Provider::WebOs => Integration::WebOs,
             Provider::Ir => Integration::Ir {
                 codeset: resource_id.clone(),
             },
@@ -146,6 +150,20 @@ mod tests {
         );
         c.connections.clear();
         assert!(c.validate().is_err());
+    }
+    #[test]
+    fn webos_connection_round_trips_and_resolves_room_tv() {
+        let mut config = Config::default();
+        config.connections.push(Connection {id:"lg".into(),name:"LG TV".into(),provider:Provider::WebOs});
+        let integration = Integration::Connection {connection_id:"lg".into(),resource_id:String::new()};
+        config.rooms.push(Room {id:"office".into(),name:"Office".into(),icon:None,devices:vec![Device::new("tv".into(),"LG TV",DeviceKind::Tv).with_integration(integration.clone())]});
+        assert!(config.validate().is_ok());
+        assert_eq!(config.resolve_integration(&integration),Some(Integration::WebOs));
+        let saved=serde_json::to_string(&config).unwrap();
+        assert!(saved.contains("web-os"));
+        assert_eq!(serde_json::from_str::<Config>(&saved).unwrap(),config);
+        config.connections.push(Connection {id:"second".into(),name:"Second TV".into(),provider:Provider::WebOs});
+        assert!(config.validate().is_err());
     }
     #[test]
     fn old_config_remains_readable_without_connections() {

@@ -24,3 +24,5 @@ serde_json = "1"
 
 couch-ha = { path = "../../clients/couch-ha" }
 couch-hue = { path = "../../clients/couch-hue" }
+
+couch-webos = { path = "../../clients/couch-webos" }

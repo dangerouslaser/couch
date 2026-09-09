@@ -10,6 +10,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("kodi", "Kodi"),
         ("home-assistant", "Home Assistant"),
         ("hue", "Philips Hue"),
+        ("web-os", "LG webOS TV"),
         ("ir", "Infrared"),
     ]
     .into_iter()
@@ -23,7 +24,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>super::home_assistant::setup(app),"hue"=>super::hue::setup(app),_=>view!{<p class="dim">"Kodi supports multiple players. One Home Assistant server, Hue bridge and infrared transmitter are supported."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>super::home_assistant::setup(app),"hue"=>super::hue::setup(app),"web-os"=>super::webos::setup(app),_=>view!{<p class="dim">"Kodi supports multiple players. One LG webOS TV, Home Assistant server, Hue bridge and infrared transmitter are supported."</p>}.into_any()}}
         </section>
     }.into_any()
 }
@@ -37,6 +38,7 @@ fn saved(app: App, c: Connection) -> AnyView {
         Provider::Ir => local_form(app, Some(c.clone()), true),
         Provider::HomeAssistant => super::home_assistant::setup(app),
         Provider::Hue => super::hue::setup(app),
+        Provider::WebOs => super::webos::setup(app),
     };
     view!{<section class="card saved-connection"><h2>{title}</h2><p>{format!("{label} · {usage} assigned devices")}</p>
         <p class="dim">{match &c.provider{Provider::Kodi{host,port}=>format!("{host}:{port} · Saved address"),Provider::Ir=>"Built-in transmitter · Sending is currently unavailable on this device".into(),_=>"Credentials are kept privately on the remote".into()}}</p>

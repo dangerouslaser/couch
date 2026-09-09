@@ -22,6 +22,7 @@
 
 mod ha;
 mod hue;
+mod webos;
 mod connections;
 
 use std::io::Read;
@@ -274,6 +275,7 @@ impl Api {
         }
 
         if rest.first() == Some(&"connections") { return self.connection_route(&method, &rest[1..], &body, if_match); }
+        if rest.first() == Some(&"webos") { return webos::route(&method, &rest[1..], &body); }
         if rest.first() == Some(&"hue") { return hue::route(&method, &rest[1..], &body); }
         if rest.first() == Some(&"ha") { return ha::route(&method, &rest[1..], &body); }
 

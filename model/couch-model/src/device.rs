@@ -156,6 +156,7 @@ pub enum Integration {
     // UUID for a light or room:GROUPED_LIGHT_UUID. Scenes use Scene.hue.
     // Keep the legacy field name for backwards-compatible saved configurations.
     Hue { light_id: String },
+    WebOs,
     HomeAssistant {
         entity_id: String,
     },
@@ -178,6 +179,7 @@ impl Integration {
             Integration::None => "none",
             Integration::Kodi { .. } => "kodi",
             Integration::Hue { .. } => "hue",
+            Integration::WebOs => "web-os",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",
         }
