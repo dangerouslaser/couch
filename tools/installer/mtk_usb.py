@@ -15,6 +15,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 
 from couch_install import InstallError, require
 from mtk_session import Candidate, ReadPolicy, loader_bytes, select_candidate, source_pin
@@ -115,18 +116,40 @@ class PacketBufferedInput:
         return size
 
 
-def strict_handshake(cdc):
-    # No primer byte: an extra A0 can leave an unread 5F and shift every reply.
+def strict_handshake(cdc, *, sleep=time.sleep):
     cdc.set_line_coding(921600, 0, 8, 1)
     cdc.setcontrollinestate(rts=True)
-    for byte in (0xa0, 0x0a, 0x50, 0x05):
-        written = cdc.EP_OUT.write(bytes([byte]), timeout=500)
-        require(written == 1, f"Preloader handshake write failed at {byte:02x}")
-        reply = cdc.EP_IN.read(1, timeout=500)
+
+    def write(byte):
+        require(cdc.EP_OUT.write(bytes([byte]), timeout=500) == 1,
+                f"Preloader handshake write failed at {byte:02x}")
+
+    def check(byte, reply):
         require(len(reply) == 1 and reply[0] == (byte ^ 0xff),
                 f"Preloader handshake echo mismatch at {byte:02x}: {bytes(reply).hex() or 'empty'}; "
                 f"buffered={bytes(getattr(cdc.EP_IN, 'pending', b''))[:16].hex() or 'none'} "
-                "(no bytes discarded)")
+                "(no unrecognized bytes discarded)")
+
+    write(0xa0)
+    reply = cdc.EP_IN.read(1, timeout=500)
+    banners = 0
+    while reply == b"R":
+        banner = reply + cdc.EP_IN.read(4, timeout=500)
+        require(banner == b"READY", f"Unrecognized preloader preamble: {banner.hex()}")
+        banners += 1
+        require(banners <= 8, "Too many READY banners before download handshake")
+        if banners == 1:
+            # MT6580 usb_listen consumes the trigger A0 before entering the
+            # download handler, which then expects its own four-byte sync.
+            # The listener polls every 20 ms. Keep the second A0 in a later
+            # receive cycle; no mode command or reset is needed.
+            sleep(0.03)
+            write(0xa0)
+        reply = cdc.EP_IN.read(1, timeout=500)
+    check(0xa0, reply)
+    for byte in (0x0a, 0x50, 0x05):
+        write(byte)
+        check(byte, cdc.EP_IN.read(1, timeout=500))
 
 
 class ExactUsbBackend:

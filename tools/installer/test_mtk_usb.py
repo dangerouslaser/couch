@@ -245,15 +245,35 @@ class UsbBackendTests(unittest.TestCase):
         self.assertEqual(writes, [b"\xa0", b"\x0a", b"\x50", b"\x05"])
         self.assertEqual(reads, [64])
 
-    def test_unsolicited_ready_is_diagnosed_without_discarding_it(self):
-        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"READY\x5f"))
+    def test_malformed_ready_is_rejected_without_restarting(self):
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"REXDY\x5f"))
         writes = []
         cdc = NS(EP_IN=incoming, EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
                  set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
-        with self.assertRaisesRegex(InstallError, "at a0: 52; buffered=454144595f"):
+        with self.assertRaisesRegex(InstallError, "Unrecognized preloader preamble"):
             strict_handshake(cdc)
         self.assertEqual(writes, [b"\xa0"])
-        self.assertEqual(incoming.pending, b"EADY\x5f")
+        self.assertEqual(incoming.pending, b"\x5f")
+
+    def test_known_ready_preamble_adds_one_trigger_but_not_mode_commands(self):
+        writes, pauses = [], []
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64,
+                    read=lambda size, timeout: b"READYREADY\x5f\xf5\xaf\xfa"))
+        cdc = NS(EP_IN=incoming, EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
+                 set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
+        strict_handshake(cdc, sleep=pauses.append)
+        self.assertEqual(writes, [b"\xa0", b"\xa0", b"\x0a", b"\x50", b"\x05"])
+        self.assertEqual(pauses, [0.03])
+        self.assertEqual(incoming.pending, b"")
+
+    def test_ready_loop_is_bounded(self):
+        writes = []
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"READY"))
+        cdc = NS(EP_IN=incoming, EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
+                 set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
+        with self.assertRaisesRegex(InstallError, "Too many READY"):
+            strict_handshake(cdc, sleep=lambda _: None)
+        self.assertEqual(writes, [b"\xa0", b"\xa0"])
 
     def test_pinned_importer_compiles_source_without_using_python_cache(self):
         with tempfile.TemporaryDirectory() as root:
