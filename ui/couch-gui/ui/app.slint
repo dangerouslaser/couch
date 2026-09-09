@@ -547,9 +547,9 @@ export component App inherits Window {
 
     VolumeOverlay {
         visible: root.feedback-enabled;
-        x: 36px;
-        width: parent.width - 72px;
-        y: parent.height - self.height - 36px;
+        x: Theme.overlay-inset;
+        width: parent.width - 2 * Theme.overlay-inset;
+        y: parent.height - self.height - Theme.overlay-inset;
         target: root.scene-feedback-name;
         caption: root.scene-feedback-status;
         meter: false;
@@ -557,9 +557,9 @@ export component App inherits Window {
     }
     VolumeOverlay {
         visible: root.feedback-enabled;
-        x: 36px;
-        width: parent.width - 72px;
-        y: parent.height - self.height - 36px;
+        x: Theme.overlay-inset;
+        width: parent.width - 2 * Theme.overlay-inset;
+        y: parent.height - self.height - Theme.overlay-inset;
         target: root.brightness-target;
         caption: "Brightness";
         value: root.light-brightness-percent;
@@ -568,9 +568,9 @@ export component App inherits Window {
     }
     VolumeOverlay {
         visible: root.feedback-enabled;
-        x: 36px;
-        width: parent.width - 72px;
-        y: parent.height - self.height - 36px;
+        x: Theme.overlay-inset;
+        width: parent.width - 2 * Theme.overlay-inset;
+        y: parent.height - self.height - Theme.overlay-inset;
         target: root.volume-target;
         value: root.volume;
         shown: root.volume-shown;

@@ -1,0 +1,39 @@
+import { Theme } from "../theme.slint";
+
+// Keep the tray instantiated through dismissal so the exit can finish. Screen
+// owners retain the last panel's content until a different panel is opened.
+export component BottomTray inherits Rectangle {
+    in property <bool> open;
+    in property <bool> active: true;
+    in property <length> tray-height: 620px;
+    out property <length> content-width: root.width - 2 * Theme.overlay-inset;
+    out property <length> content-height: min(root.tray-height, root.height - 2 * Theme.overlay-inset);
+    out property <length> content-y: root.height - root.reveal * (root.content-height + Theme.overlay-inset);
+    callback dismiss();
+    property <float> reveal: root.open && root.active ? 1 : 0;
+    animate reveal { duration: root.active ? 200ms : 0ms; easing: ease-out; }
+    visible: root.active && root.reveal > 0;
+    clip: true;
+    background: transparent;
+
+    Rectangle {
+        width: parent.width; height: parent.height;
+        background: #00000088;
+        opacity: root.reveal;
+        TouchArea { clicked => { if (root.open) { root.dismiss(); } } }
+    }
+    Rectangle {
+        x: Theme.overlay-inset;
+        width: root.content-width;
+        height: root.content-height;
+        y: root.content-y;
+        background: Theme.surface;
+        border-radius: 24px;
+        border-width: 1px;
+        border-color: Theme.border-raised;
+        clip: true;
+    }
+    @children
+    // Hold input during dismissal while the old content slides out.
+    if !root.open: TouchArea { }
+}

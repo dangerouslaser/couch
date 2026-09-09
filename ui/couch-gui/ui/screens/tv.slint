@@ -1,3 +1,4 @@
+import { BottomTray } from "../components/bottom_tray.slint";
 import { MediaBack } from "../widgets/media-back.slint";
 import { Theme } from "../theme.slint";
 export struct TvChoice { action:string, title:string, detail:string }
@@ -30,8 +31,10 @@ export component Television inherits Rectangle {
     in property <string> sound;
     in property <string> picture;
     in property <int> panel;
+    property <int> displayed-panel: 0;
     in property <[TvChoice]> choices;
     callback action(string);
+    changed panel => { if (root.panel > 0) { root.displayed-panel = root.panel; } }
     public function take-focus(){keys.focus();}
     background:Theme.bg;
     MediaBack {x:24px;y:22px;activate=>{root.action("close");}}
@@ -53,16 +56,23 @@ export component Television inherits Rectangle {
     if root.android-tv: Tile {x:246px;y:514px;width:210px;height:120px;title:"Next";detail:"Next item";icon:@image-url("../../../../assets/lucide/skip-forward.svg");activate=>{root.action("next");}}
     if root.android-tv: Tile {x:24px;y:646px;width:210px;height:120px;title:"Stop";detail:"Stop playback";icon:@image-url("../../../../assets/lucide/square.svg");activate=>{root.action("stop");}}
     if root.android-tv: Tile {x:246px;y:646px;width:210px;height:120px;title:"Apps";detail:"Your shortcuts";icon:@image-url("../../../../assets/lucide/layout-grid.svg");activate=>{root.action("apps");}}
-    if root.panel>0: Rectangle {width:parent.width;height:parent.height;background:#00000088;TouchArea {clicked=>{root.action("dismiss");}}}
-    if root.panel>0: Rectangle {x:0px;y:180px;width:parent.width;height:parent.height - 180px;background:Theme.surface;border-radius:24px;
-        Text {x:26px;y:24px;width:parent.width - 110px;height:36px;text:root.panel==1 ? "Choose an input" : root.panel==2 ? (root.android-tv ? "App shortcuts" : "TV apps") : root.panel==3 ? "Picture" : "Sound output";font-size:27px;color:#ffffff;font-weight:600;}
-        IconButton {x:parent.width - 70px;y:20px;width:44px;height:44px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("dismiss");}}
-        Text {x:26px;y:80px;width:parent.width - 52px;height:84px;wrap:word-wrap;text:root.panel==3 ? "Picture-mode changes are available through your TV’s on-screen settings." : root.choices.length==0 ? (root.android-tv ? "Add app shortcuts in Connections in the web UI." : "No choices available. Reconnect to refresh.") : "Select by touch. Physical buttons continue to control the TV.";font-size:19px;color:Theme.text-secondary;}
-        Flickable {x:24px;y:176px;width:parent.width - 48px;height:parent.height - 198px;viewport-height:root.choices.length*82px;viewport-width:self.width;
-            for item[i] in root.choices: Rectangle {x:0px;y:i*82px;width:parent.width;height:74px;background:Theme.surface-raised;border-radius:12px;
-                Text {x:16px;y:10px;width:parent.width - 32px;height:29px;text:item.title;font-size:21px;color:#ffffff;overflow:elide;}
-                Text {x:16px;y:43px;width:parent.width - 32px;height:22px;text:item.detail;font-size:16px;color:Theme.text-secondary;overflow:elide;}
-                TouchArea {clicked=>{root.action(item.action);}}
+    tray := BottomTray {
+        width: parent.width; height: parent.height;
+        open: root.panel > 0;
+        active: root.shown;
+        dismiss => { root.action("dismiss"); }
+        // Explicit bounds keep projected children relative to the inset surface.
+        Rectangle { x: Theme.overlay-inset; y: tray.content-y; width: tray.content-width; height: tray.content-height;
+            TouchArea { }
+            Text {x:26px;y:24px;width:parent.width - 110px;height:36px;text:root.displayed-panel==1 ? "Choose an input" : root.displayed-panel==2 ? (root.android-tv ? "App shortcuts" : "TV apps") : root.displayed-panel==3 ? "Picture" : "Sound output";font-size:27px;color:#ffffff;font-weight:600;}
+            IconButton {x:parent.width - 70px;y:20px;width:44px;height:44px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("dismiss");}}
+            Text {x:26px;y:80px;width:parent.width - 52px;height:84px;wrap:word-wrap;text:root.displayed-panel==3 ? "Picture-mode changes are available through your TV’s on-screen settings." : root.choices.length==0 ? (root.android-tv ? "Add app shortcuts in Connections in the web UI." : "No choices available. Reconnect to refresh.") : "Select by touch. Physical buttons continue to control the TV.";font-size:19px;color:Theme.text-secondary;}
+            Flickable {x:24px;y:176px;width:parent.width - 48px;height:parent.height - 198px;viewport-height:root.choices.length*82px;viewport-width:self.width;
+                for item[i] in root.choices: Rectangle {x:0px;y:i*82px;width:parent.width;height:74px;background:Theme.surface-raised;border-radius:12px;
+                    Text {x:16px;y:10px;width:parent.width - 32px;height:29px;text:item.title;font-size:21px;color:#ffffff;overflow:elide;}
+                    Text {x:16px;y:43px;width:parent.width - 32px;height:22px;text:item.detail;font-size:16px;color:Theme.text-secondary;overflow:elide;}
+                    TouchArea {clicked=>{root.action(item.action);}}
+                }
             }
         }
     }

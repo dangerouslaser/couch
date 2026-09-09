@@ -15,7 +15,7 @@ slint = { version = "=1.17.1", default-features = false, features = [
     "compat-1-2", "std", "backend-winit", "renderer-software",
 ] }
 wasm-bindgen = "=0.2.127"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 console_error_panic_hook = "0.1"
 
 [build-dependencies]

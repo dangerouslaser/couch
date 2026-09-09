@@ -245,7 +245,7 @@ pub fn configure(app: &App) {
             .collect::<Vec<_>>(),
     )));
     let mut art = image::load_from_memory(include_bytes!(
-        "../../docs/mockups/kodi-activity/assets/fanart.png"
+        "../../docs/mockups/kodi-activity/assets/fanart.jpg"
     ))
     .unwrap()
     .resize_to_fill(480, 800, image::imageops::FilterType::Triangle)
@@ -260,7 +260,7 @@ pub fn configure(app: &App) {
         SharedPixelBuffer::clone_from_slice(art.as_raw(), 480, 800),
     ));
     app.set_player_has_art(true);
-    app.set_player_logo(png(include_bytes!("../assets/clearlogo.png")));
+    app.set_player_logo(png(include_bytes!("../../docs/mockups/kodi-activity/assets/clearlogo.png")));
     app.set_player_has_logo(true);
     let d = Rc::new(RefCell::new(Demo {
         app: app.as_weak(),

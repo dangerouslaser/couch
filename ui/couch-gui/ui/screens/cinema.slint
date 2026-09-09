@@ -1,3 +1,4 @@
+import { BottomTray } from "../components/bottom_tray.slint";
 import { MediaBack } from "../widgets/media-back.slint";
 import { Theme } from "../theme.slint";
 export struct PlayerChoice { title: string, detail: string }
@@ -36,6 +37,7 @@ export component Cinema inherits Rectangle {
     in property <string> message;
     in property <float> progress;
     in property <int> panel;
+    property <int> displayed-panel: 0;
     in property <string> panel-detail;
     in property <[PlayerChoice]> choices;
     callback action(string,float);
@@ -44,7 +46,7 @@ export component Cinema inherits Rectangle {
     property <float> seek-preview:0;
     property <length> list-scroll:max(0,root.choice-index - 4)*84px;
     animate list-scroll { duration:160ms; easing:ease-out; }
-    changed panel=>{root.choice-index=0;}
+    changed panel=>{if(root.panel>0){root.choice-index=0;root.displayed-panel=root.panel;}}
     changed shown=>{root.selected=-1;}
     public function take-focus(){ keys.focus(); }
     background:#111311;
@@ -79,19 +81,26 @@ export component Cinema inherits Rectangle {
         Text {text:root.title;width:parent.width;height:170px;wrap:word-wrap;font-size:27px;color:#f1f2eb;horizontal-alignment:center;vertical-alignment:center;}
         if !root.connected: Control {x:60px;y:195px;width:parent.width - 120px;height:78px;label:"Reconnect";selected:root.selected==3;icon:@image-url("../../../../assets/lucide/rotate-cw.svg");activate=>{root.action("retry",0);}}
     }
-    if root.panel>0: Rectangle {width:parent.width;height:parent.height;background:#00000066;TouchArea{} }
-    if root.panel>0: Rectangle {x:0px;y:parent.height - 620px;width:parent.width;height:620px;background:#1b1e1b;border-radius:24px;
-        Text {x:28px;y:26px;text:root.panel==1 ? "Chapters" : root.panel==2 ? "Audio" : root.panel==3 ? "Subtitles" : "TV controls";font-size:28px;color:#ffffff;}
-        Control {x:parent.width - 76px;y:18px;width:48px;height:48px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("back",0);}}
-        if root.panel-detail!="" && root.panel<4: Text {x:28px;y:110px;width:parent.width - 56px;height:250px;wrap:word-wrap;font-size:21px;color:#c0c7bc;text:root.panel-detail;}
-        if root.panel<4: Rectangle {x:28px;y:105px;width:parent.width - 56px;height:412px;clip:true;background:transparent;
-            for item[i] in root.choices: Rectangle {y:i*84px - root.list-scroll;width:parent.width;height:76px;background:i==root.choice-index ? #35303e : #242823;border-radius:12px;border-width:root.choice-index==i ? 2px : 0px;border-color:Theme.accent;
-                Text {x:18px;y:12px;width:parent.width - 36px;height:28px;text:item.title;overflow:elide;font-size:22px;color:#ffffff;}
-                Text {x:18px;y:43px;width:parent.width - 36px;height:22px;text:item.detail;font-size:16px;color:#b7beb2;overflow:elide;}
-                TouchArea {clicked=>{root.choice-index=i;root.action("choose",i);}}
+    tray := BottomTray {
+        width: parent.width; height: parent.height;
+        open: root.panel > 0;
+        active: root.shown;
+        dismiss => { root.action("back",0); }
+        // Explicit bounds keep projected children relative to the inset surface.
+        Rectangle { x: Theme.overlay-inset; y: tray.content-y; width: tray.content-width; height: tray.content-height;
+            TouchArea { }
+            Text {x:28px;y:26px;text:root.displayed-panel==1 ? "Chapters" : root.displayed-panel==2 ? "Audio" : root.displayed-panel==3 ? "Subtitles" : "TV controls";font-size:28px;color:#ffffff;}
+            Control {x:parent.width - 76px;y:18px;width:48px;height:48px;icon:@image-url("../../../../assets/lucide/x.svg");activate=>{root.action("back",0);}}
+            if root.panel-detail!="" && root.displayed-panel<4: Text {x:28px;y:110px;width:parent.width - 56px;height:250px;wrap:word-wrap;font-size:21px;color:#c0c7bc;text:root.panel-detail;}
+            if root.displayed-panel<4: Rectangle {x:28px;y:105px;width:parent.width - 56px;height:412px;clip:true;background:transparent;
+                for item[i] in root.choices: Rectangle {y:i*84px - root.list-scroll;width:parent.width;height:76px;background:i==root.choice-index ? #35303e : #242823;border-radius:12px;border-width:root.choice-index==i ? 2px : 0px;border-color:Theme.accent;
+                    Text {x:18px;y:12px;width:parent.width - 36px;height:28px;text:item.title;overflow:elide;font-size:22px;color:#ffffff;}
+                    Text {x:18px;y:43px;width:parent.width - 36px;height:22px;text:item.detail;font-size:16px;color:#b7beb2;overflow:elide;}
+                    TouchArea {clicked=>{root.choice-index=i;root.action("choose",i);}}
+                }
             }
-        }
 
+        }
     }
     if root.message!="": Rectangle {x:24px;y:parent.height - 150px;width:parent.width - 48px;height:100px;border-radius:16px;background:#30263e;
         Text {x:16px;y:12px;width:parent.width - 32px;height:parent.height - 24px;text:root.message;wrap:word-wrap;font-size:20px;color:#ffffff;}

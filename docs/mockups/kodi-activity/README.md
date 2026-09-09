@@ -127,13 +127,7 @@ item changes during downloads, reconnects and Back during delayed replies.
 
 ## Asset attribution
 
-- `assets/fanart.png`: unmodified frame `graded_edit_final_04500.png`,
-  *Tears of Steel*, © Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/),
-  [original frame](https://media.xiph.org/tearsofsteel/tearsofsteel-1080-png/graded_edit_final_04500.png),
-  [source license](https://media.xiph.org/tearsofsteel/README.txt). CSS crops and
-  darkens its presentation; it is sample fanart, not a live video feed.
-- The transparent title SVG is an original typographic stand-in for a clearlogo,
-  not the official movie logo. Production displays the user's Kodi artwork.
+- `assets/fanart.jpg` and `assets/clearlogo.png`: user-supplied *Tears of Steel* artwork from fanart.tv ([fanart](https://images.fanart.tv/fanart/tears-of-steel-5381d834a3024.jpg), [clearlogo](https://images.fanart.tv/fanart/tears-of-steel-53836a24417d1.png)). Film © Blender Foundation, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). CSS crops and darkens the fanart for the screen; the source files are unmodified. The WASM preview embeds these same assets.
 - Inter is copied from `assets/inter` in this repository, including its OFL license.
 - Lucide SVG paths are copied from the repository's licensed catalog; see
   `assets/LUCIDE-LICENSE`.

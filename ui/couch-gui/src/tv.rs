@@ -784,6 +784,167 @@ impl Controller {
 mod tests {
     use super::*;
     #[test]
+    fn trays_slide_both_ways_with_toast_margins() {
+        if std::env::var_os("COUCH_TEST_TRAYS").is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tv::tests::trays_slide_both_ways_with_toast_margins",
+                ])
+                .env("COUCH_TEST_TRAYS", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+        use slint::platform::{Platform, PlatformError, WindowAdapter};
+        use slint::ComponentHandle;
+        struct TestPlatform {
+            window: Rc<MinimalSoftwareWindow>,
+            clock: Rc<std::cell::Cell<Duration>>,
+        }
+        impl Platform for TestPlatform {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+                Ok(self.window.clone())
+            }
+            fn duration_since_start(&self) -> Duration {
+                self.clock.get()
+            }
+        }
+        // Advance animation time explicitly: a compiler running in parallel
+        // must not turn a requested middle frame into a completed animation.
+        let clock = Rc::new(std::cell::Cell::new(Duration::ZERO));
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        window.set_size(slint::PhysicalSize::new(480, 800));
+        slint::platform::set_platform(Box::new(TestPlatform {
+            window: window.clone(),
+            clock: clock.clone(),
+        }))
+        .unwrap();
+        let app = App::new().unwrap();
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let received = actions.clone();
+        app.on_tv_action(move |action| received.borrow_mut().push(action.to_string()));
+        let received = actions.clone();
+        app.on_player_action(move |action, _| received.borrow_mut().push(action.to_string()));
+        app.show().unwrap();
+        window.dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(true));
+        let mut pixels = vec![slint::Rgb8Pixel::default(); 480 * 800];
+        let mut draw = |wait| {
+            clock.set(clock.get() + Duration::from_millis(wait));
+            slint::platform::update_timers_and_animations();
+            window.request_redraw();
+            window.draw_if_needed(|r| {
+                r.render(&mut pixels, 480);
+            });
+            pixels.clone()
+        };
+        let surface = |p: slint::Rgb8Pixel| [p.r, p.g, p.b] == [31, 28, 23];
+        let top = |frame: &[slint::Rgb8Pixel]| (0..800).find(|&y| surface(frame[y * 480 + 60]));
+        for (tv, panel) in [
+            (true, 1),
+            (true, 2),
+            (true, 3),
+            (true, 4),
+            (false, 1),
+            (false, 2),
+            (false, 3),
+        ] {
+            app.set_tv_shown(tv);
+            app.set_player_shown(!tv);
+            if tv {
+                app.invoke_focus_tv();
+            } else {
+                app.invoke_focus_player();
+            }
+            let baseline = draw(220);
+            if tv {
+                app.set_tv_panel(panel);
+            } else {
+                app.set_player_panel(panel);
+            }
+            draw(0);
+            let entering = draw(65);
+            let entered = draw(220);
+            assert!(
+                top(&entering).unwrap() > top(&entered).unwrap(),
+                "tray must move upward"
+            );
+            assert_eq!(top(&entered), Some(145));
+            assert!(surface(entered[400 * 480 + 40]));
+            assert!(!surface(entered[400 * 480 + 35]));
+            assert!(!surface(entered[400 * 480 + 444]));
+            assert!(!surface(entered[780 * 480 + 60]));
+            use slint::platform::{PointerEventButton, WindowEvent};
+            for event in [
+                WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(392., 190.),
+                },
+                WindowEvent::PointerPressed {
+                    position: slint::LogicalPosition::new(392., 190.),
+                    button: PointerEventButton::Left,
+                },
+                WindowEvent::PointerReleased {
+                    position: slint::LogicalPosition::new(392., 190.),
+                    button: PointerEventButton::Left,
+                },
+            ] {
+                window.dispatch_event(event);
+                draw(16);
+            }
+            if actions.borrow().is_empty() {
+                let bytes: Vec<u8> = entered.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+                image::save_buffer(
+                    "/private/tmp/tray-entered.png",
+                    &bytes,
+                    480,
+                    800,
+                    image::ColorType::Rgb8,
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                actions.borrow_mut().pop().as_deref(),
+                Some(if tv { "dismiss" } else { "back" }),
+                "close button must remain inside the inset tray"
+            );
+            if tv {
+                app.set_tv_panel(0);
+            } else {
+                app.set_player_panel(0);
+            }
+            draw(0);
+            let exiting = draw(65);
+            assert!(
+                top(&exiting).unwrap() > top(&entered).unwrap(),
+                "tray must stay mounted and move down"
+            );
+            let closed = draw(220);
+            if closed != baseline {
+                let bytes: Vec<u8> = closed.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+                image::save_buffer(
+                    "/private/tmp/tray-closed.png",
+                    &bytes,
+                    480,
+                    800,
+                    image::ColorType::Rgb8,
+                )
+                .unwrap();
+            }
+            assert!(
+                closed == baseline,
+                "dismissal must restore the closed screen: tv={tv} panel={panel}"
+            );
+        }
+        app.hide().unwrap();
+    }
+    #[test]
     fn android_screen_routes_physical_keys_without_an_overlay() {
         if std::env::var_os("COUCH_TEST_ANDROID_KEYS").is_none() {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
