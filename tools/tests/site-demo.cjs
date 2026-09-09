@@ -1,6 +1,7 @@
 // Exercise the real Slint canvas through on-page physical controls and touch.
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
+const tmp=require('node:os').tmpdir();
 (async()=>{const browser=await chromium.launch();try{
  const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[],requests=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
@@ -17,14 +18,14 @@ const assert=require('node:assert/strict');
  await touch(200,120);assert.equal((await state()).level,0,'tap toggles a light in the cropped browser preview');
  await button('ok');assert.equal((await state()).level,56);
  await button('volume-up');assert.equal((await state()).level,61);assert.equal((await state()).brightness,true);
- await page.screenshot({path:'/private/tmp/couch-slint-brightness.png'});
+ await page.screenshot({path:`${tmp}/couch-slint-brightness.png`});
  await button('back');assert.equal((await state()).room,null);assert.equal((await state()).brightness,false,'navigation clears toast');
  await button('ok');await button('channel-up');assert.equal((await state()).level,100,'channel recalls next scene');
  await button('down');await button('down');await button('ok');assert.equal((await state()).player,true);
  await touch(240,600);assert.equal((await state()).paused,true,'touch pauses movie');
  await touch(95,705);assert.equal((await state()).panel,1,'chapter sheet');
  await touch(160,320);assert.equal((await state()).panel,0,'chapter selection');
- await page.screenshot({path:'/private/tmp/couch-slint-cinema.png'});
+ await page.screenshot({path:`${tmp}/couch-slint-cinema.png`});
  const back=page.locator('[data-remote="back"]');await back.hover();await page.mouse.down();await page.waitForTimeout(650);await page.mouse.up();await page.waitForTimeout(250);
  assert.equal((await state()).player,false,'long Back exits media');assert.equal((await state()).room,0);
  await button('back');
@@ -32,7 +33,7 @@ const assert=require('node:assert/strict');
  await button('ok');assert.equal((await state()).room,5,'D-pad scroll reaches offscreen room');
  await button('home');assert.equal((await state()).room,null);
  await button('power');assert.equal(await page.locator('#demo-sleep').isVisible(),true);await button('power');assert.equal(await page.locator('#demo-sleep').isVisible(),false);
- for(const width of [1440,390,320]){await page.setViewportSize({width,height:1100});await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page overflow '+width);const size=await frame.locator('canvas').evaluate(e=>({width:e.clientWidth,height:e.clientHeight}));assert.deepEqual(size,{width:480,height:800});await page.screenshot({path:`/private/tmp/couch-slint-${width}.png`,fullPage:true});}
+ for(const width of [1440,390,320]){await page.setViewportSize({width,height:1100});await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page overflow '+width);const size=await frame.locator('canvas').evaluate(e=>({width:e.clientWidth,height:e.clientHeight}));assert.deepEqual(size,{width:480,height:800});await page.screenshot({path:`${tmp}/couch-slint-${width}.png`,fullPage:true});}
  const autoPage=await browser.newPage({viewport:{width:1440,height:1100}});
  autoPage.on('pageerror',e=>errors.push(e.message));
  await autoPage.goto(process.env.SITE_URL||'http://127.0.0.1:8098/');

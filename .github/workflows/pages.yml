@@ -2,7 +2,7 @@ name: Publish Couch site
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'preview/**', 'ui/couch-gui/ui/**', 'ui/couch-gui/fonts/**', 'ui/couch-gui/assets/**', 'assets/lucide/**', 'docs/mockups/kodi-activity/assets/**', 'tools/build-preview.sh', '.github/workflows/pages.yml']
+    paths: ['site/**', 'preview/**', 'ui/couch-gui/ui/**', 'ui/couch-gui/fonts/**', 'ui/couch-gui/assets/**', 'assets/lucide/**', 'docs/mockups/kodi-activity/assets/**', 'tools/build-preview.sh', 'tools/tests/site-demo.cjs', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -42,6 +42,19 @@ jobs:
           fi
       - name: Build actual Slint remote preview
         run: tools/build-preview.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install browser checks
+        run: |
+          npm install --prefix "$RUNNER_TEMP/preview-browser" --no-package-lock --no-save playwright@1.57.0
+          "$RUNNER_TEMP/preview-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify Slint interaction and automatic walkthrough
+        run: |
+          python3 -m http.server 8098 --directory site > "$RUNNER_TEMP/preview-server.log" 2>&1 &
+          preview_server_pid=$!
+          trap 'kill "$preview_server_pid"' EXIT
+          NODE_PATH="$RUNNER_TEMP/preview-browser/node_modules" node tools/tests/site-demo.cjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
