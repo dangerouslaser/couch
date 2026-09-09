@@ -11,7 +11,7 @@ use couch_webos::{Button, Playback, Settings};
 use serde_json::json;
 use slint::{ModelRc, VecModel};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -258,6 +258,8 @@ struct Work {
     generation: u64,
     action: Command,
     at: Instant,
+    repeat: bool,
+    config: Option<Arc<couch_model::Config>>,
 }
 #[derive(Default, Clone)]
 struct Details {
@@ -612,7 +614,8 @@ pub struct Controller {
     choices: Vec<(String, String, String)>,
     settings_app: Option<String>,
     connection: String,
-    input: Rc<RefCell<Vec<String>>>,
+    input: Rc<RefCell<Vec<(String, bool, Option<Arc<couch_model::Config>>)>>> ,
+    physical_repeat: Rc<Cell<bool>>,
     tx: mpsc::SyncSender<Work>,
     rx: mpsc::Receiver<Event>,
     active: Arc<AtomicU64>,
@@ -622,9 +625,11 @@ impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
         let q = input.clone();
-        app.on_open_tv(move |id, name| q.borrow_mut().push(format!("open:{id}/{name}")));
+        app.on_open_tv(move |id, name| q.borrow_mut().push((format!("open:{id}/{name}"),false,crate::connections::config())));
         let q = input.clone();
-        app.on_tv_action(move |action| q.borrow_mut().push(action.to_string()));
+        let physical_repeat=Rc::new(Cell::new(false));
+        let repeat=physical_repeat.clone();
+        app.on_tv_action(move |action| q.borrow_mut().push((action.to_string(),repeat.get(),crate::connections::config())));
         let (tx, requests) = mpsc::sync_channel(8);
         let (events, rx) = mpsc::sync_channel(16);
         let active = Arc::new(AtomicU64::new(0));
@@ -635,21 +640,29 @@ impl Controller {
             settings_app: None,
             connection: String::new(),
             input,
+            physical_repeat,
             tx,
             rx,
             active,
             generation: 0,
         }
     }
+    /// Slint synthesizes releases after each press; preserve physical repeat
+    /// metadata only during this dispatch, without affecting touch callbacks.
+    pub fn physical_input(&self, repeat: bool, dispatch: impl FnOnce()) {
+        let previous=self.physical_repeat.replace(repeat);
+        dispatch();
+        self.physical_repeat.set(previous);
+    }
     pub fn navigation_pending(&self) -> bool {
         self.input
             .borrow()
             .iter()
-            .any(|action| action.starts_with("open:") || action == "close")
+            .any(|(action,_,_)| action.starts_with("open:") || action == "close")
     }
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
-        for action in inputs {
+        for (action,repeat,config) in inputs {
             let action = if let Some(target) = action.strip_prefix("open:") {
                 let (connection, name) = target.split_once('/').unwrap_or(("", target));
                 self.connection = connection.into();
@@ -779,6 +792,8 @@ impl Controller {
                         generation: self.generation,
                         action,
                         at: Instant::now(),
+                        repeat,
+                        config,
                     })
                     .is_err()
                 {
@@ -1110,6 +1125,18 @@ mod tests {
             ]
         );
         assert_eq!(app.get_tv_panel(), 0);
+        if app.get_tv_ir() {
+            let controls=Controller::new(&app);
+            for repeat in [false,true,false] {
+                controls.physical_input(repeat,||{
+                    window.dispatch_event(WindowEvent::KeyPressed{text:char::from(Key::F23).to_string().into()});
+                    window.dispatch_event(WindowEvent::KeyReleased{text:char::from(Key::F23).to_string().into()});
+                });
+            }
+            app.invoke_tv_action("commands".into());
+            let queued=controls.input.borrow();
+            assert_eq!(queued.iter().map(|(action,repeat,_)|(action.as_str(),*repeat)).collect::<Vec<_>>(),vec![("volume-up",false),("volume-up",true),("volume-up",false),("commands",false)]);
+        }
         if let Some(path) = std::env::var_os("COUCH_ANDROID_SCREENSHOT") {
             app.set_tv_title(if app.get_tv_ir(){"Living room TV"}else{"Android TV"}.into());
             app.set_tv_source(if app.get_tv_ir(){"Infrared controls"}else{"MiTV-AFMU0"}.into());

@@ -42,6 +42,19 @@ fn function(action: &Command) -> Result<Option<String>, String> {
     }))
 }
 
+fn request_current(
+    work: &Work,
+    active: &AtomicU64,
+    latest: Option<&std::sync::Arc<couch_model::Config>>,
+) -> bool {
+    super::android::current(work, active)
+        && work
+            .config
+            .as_ref()
+            .zip(latest)
+            .is_some_and(|(expected, latest)| std::sync::Arc::ptr_eq(expected, latest))
+}
+
 pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, String> {
     if !super::android::current(work, active) {
         return Ok(None);
@@ -50,7 +63,11 @@ pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, Stri
         .connection
         .strip_prefix("ir:")
         .ok_or("Missing IR device")?;
-    let config = crate::connections::config().ok_or("Configuration unavailable")?;
+    let config = work.config.as_ref().ok_or("Configuration unavailable")?;
+    let current = || request_current(work, active, crate::connections::config().as_ref());
+    if !current() {
+        return Ok(None);
+    }
     let (_, device) = config
         .devices()
         .find(|(_, d)| d.id.as_str() == id)
@@ -78,17 +95,22 @@ pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, Stri
         })
         .collect();
     let command = function(&work.action)?;
-    if !super::android::current(work, active) {
+    if !current() {
         return Ok(None);
     }
     let status = if let Some(command) = command {
-        crate::activity_buttons::execute(
+        crate::activity_buttons::execute_with_input(
             &config,
             &Action::new(device.id.clone(), command),
             &mut Default::default(),
             &mut Default::default(),
             &mut Default::default(),
+            work.repeat,
+            &current,
         )?;
+        if !current() {
+            return Ok(None);
+        }
         "IR command sent · No device feedback"
     } else {
         "Infrared · No device feedback"
@@ -107,6 +129,31 @@ pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_ir_commands_cancel_after_close_config_change_or_expiry() {
+        use std::{
+            sync::{atomic::Ordering, Arc},
+            time::{Duration, Instant},
+        };
+        let config = Arc::new(couch_model::Config::default());
+        let active = AtomicU64::new(9);
+        let mut work = Work {
+            connection: "ir:test".into(),
+            generation: 9,
+            action: Command::Volume(true),
+            at: Instant::now(),
+            repeat: false,
+            config: Some(config.clone()),
+        };
+        assert!(request_current(&work, &active, Some(&config)));
+        let edited = Arc::new((*config).clone());
+        assert!(!request_current(&work, &active, Some(&edited)));
+        active.store(0, Ordering::SeqCst);
+        assert!(!request_current(&work, &active, Some(&config)));
+        active.store(9, Ordering::SeqCst);
+        work.at = Instant::now() - Duration::from_secs(1);
+        assert!(!request_current(&work, &active, Some(&config)));
+    }
     #[test]
     fn physical_commands_use_explicit_ir_functions() {
         assert_eq!(
