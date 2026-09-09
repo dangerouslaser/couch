@@ -179,3 +179,29 @@ must not be presented as automatic installer completion.
 Before a controlled reboot from running Couch, allow its 90-second startup
 interval to finish and verify the BCB state. Rebooting while it remains armed
 can select recovery even when the normal image is intact.
+
+
+## Capture eight: USB teardown cause and explicit boot experiment
+
+A second full hardware capture again verified the runtime layout, CID and all
+five identity backups. Precise diagnostics located ENOENT at kernel-driver
+reattachment on interface 0. Ollie's kernel logged `Zero length descriptor
+references` and a failed `cdc_acm` probe with `-22`: the running DA does not
+provide descriptors that the serial driver accepts. This is not evidence of a
+corrupted backup, and blindly ignoring ENOENT would hide the failed restoration.
+
+The experimental `capture_readonly.py --boot-after-capture` option requests the
+legacy DA's HOME_SCREEN exit **only after** successful backup and independent
+readback. It requires a complete runtime CID/calibration baseline, checks both
+ACK bytes, and waits within a ten-second deadline for the original USB address
+to disappear before cleanup. It never performs a USB reset, reconnect, or flash
+write; an error in capture skips the exit command entirely. The pinned upstream
+`finish()` compares an indexed integer to a bytes ACK using identity comparison,
+so Couch implements the small strict exchange directly. See the
+[pinned legacy finish implementation](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_lib.py#L972)
+and [Linux CDC descriptor validation](https://github.com/torvalds/linux/blob/master/drivers/usb/class/cdc-acm.c).
+
+This exit path has regression coverage but is awaiting physical validation.
+Reports distinguish requested/acknowledged boot from normal-OS verification;
+a protocol ACK alone does not prove a successful Couch boot. The default capture
+still sends no exit command. Physical installation remains disabled.

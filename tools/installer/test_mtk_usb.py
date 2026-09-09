@@ -145,6 +145,42 @@ class UsbBackendTests(unittest.TestCase):
         self.assertIn("dispose", self.events)
         self.assertIsNone(self.backend.device)
 
+    def test_boot_request_checks_exact_legacy_ack_and_never_resets(self):
+        self.start()
+        writes = []
+        replies = iter([b"\x5a", b"\x5a"])
+        self.backend.ep_out = NS(write=lambda data, **kw: writes.append(data) or len(data))
+        self.backend.ep_in = NS(read=lambda *a, **kw: next(replies))
+        self.backend.enumerate = lambda: []
+        self.backend.boot_after_capture()
+        self.assertEqual(writes, [b"\xd9", b"\x00\x00\x00\x01"])
+        with self.assertRaisesRegex(InstallError, "already attempted"):
+            self.backend.boot_after_capture()
+
+    def test_boot_request_rejects_short_write_and_final_nack(self):
+        self.start()
+        writes = []
+        for short in (True, False):
+            with self.subTest(short=short):
+                self.backend.boot_requested = False
+                replies = iter([b"\x5a", b"\xa5"])
+                self.backend.ep_out = NS(write=lambda data, **kw: writes.append(data) or
+                                         (0 if short else len(data)))
+                self.backend.ep_in = NS(read=lambda *a, **kw: next(replies))
+                with self.assertRaisesRegex(InstallError, "Short DA finish|not acknowledged"):
+                    self.backend.boot_after_capture()
+
+    def test_boot_request_never_continues_after_bad_ack(self):
+        self.start()
+        writes = []
+        self.backend.ep_out = NS(write=lambda data, **kw: writes.append(data) or len(data))
+        self.backend.ep_in = NS(read=lambda *a, **kw: b"\xa5")
+        with self.assertRaisesRegex(InstallError, "not acknowledged"):
+            self.backend.boot_after_capture()
+        self.assertEqual(writes, [b"\xd9"])
+        with self.assertRaisesRegex(InstallError, "already attempted"):
+            self.backend.boot_after_capture()
+
     def test_direct_da_start_disables_reconnect_and_write_entries(self):
         mtk = self.start()
         self.assertIn("upload", self.events)

@@ -74,6 +74,13 @@ class CaptureTests(unittest.TestCase):
         self.assertIn("Identity backup and independent readback verified", output.getvalue())
         self.assertNotIn("session closed", output.getvalue())
 
+    def test_boot_requires_complete_baseline_before_usb(self):
+        self.args.boot_after_capture = True
+        def forbidden(*args, **kwargs):
+            self.fail("USB attempted without baseline")
+        with self.assertRaisesRegex(InstallError, "complete runtime identity baseline"):
+            capture(self.args, session=forbidden)
+
     def test_changed_cid_is_rejected_before_backing_up(self):
         baseline = {"capacity": self.reader.capacity, "partitions": self.reader.description["partitions"], "cid": "12" * 16}
         with self.assertRaisesRegex(InstallError, "CID differs"):

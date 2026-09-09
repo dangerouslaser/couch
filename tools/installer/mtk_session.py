@@ -123,7 +123,7 @@ def select_candidate(observed, expected):
 
 
 @contextmanager
-def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None):
+def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None, boot_after_capture=False):
     """Gate an explicitly supplied backend for the read-only capture CLI.
 
     Factory must be side-effect-free until claim(), and expose enumerate(),
@@ -154,6 +154,8 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
             mtk = backend.start_readonly(data, ReadPolicy())
             verify_loaded_sources(pinned)
             yield ConnectedMtkReader(mtk, REVIEWED_REVISION)
+            if boot_after_capture:
+                backend.boot_after_capture()
         finally:
             original_error = sys.exc_info()[1]
             try:

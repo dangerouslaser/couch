@@ -53,6 +53,22 @@ class SessionGateTests(unittest.TestCase):
         with session.exclusive_lock(self.root / "locks"):
             pass  # Previous session released it on failure.
 
+    def test_explicit_boot_only_after_successful_consumer(self):
+        self.backend.boot_after_capture = lambda: self.events.append("boot")
+        for fail in (False, True):
+            self.events.clear()
+            with patch.object(session, "source_pin", return_value={}):
+                try:
+                    with session.read_session(self.root, self.loader, self.loader_hash,
+                            self.root / "locks", self.candidate, lambda path: self.backend,
+                            boot_after_capture=True):
+                        if fail:
+                            raise RuntimeError("backup failed")
+                except RuntimeError:
+                    self.assertTrue(fail)
+            self.assertEqual(self.events, ["claim", "start"] +
+                             ([] if fail else ["boot"]) + [("close", False)])
+
     def test_import_and_loader_preparation_precedes_wait_window(self):
         self.backend.prepare = lambda data: self.events.append("prepare")
         def wait(enumerate_devices):

@@ -73,6 +73,10 @@ def capture(args, *, enumerate_devices=None, session=read_session):
     require(not destination.is_symlink() and not destination.exists(), "Use a new identity backup destination")
     require(not destination.resolve().is_relative_to(REPO), "Keep identity backups outside the repository")
     baseline = baseline_record(args.baseline)
+    boot_after_capture = getattr(args, "boot_after_capture", False)
+    if boot_after_capture:
+        require(baseline is not None and "cid" in baseline and "identity_sha256" in baseline,
+                "Boot-after-capture requires a complete runtime identity baseline")
     # Complete all file checks before even importing PyUSB for discovery.
     source_pin(args.checkout)
     loader_bytes(args.loader, args.loader_sha256)
@@ -81,14 +85,14 @@ def capture(args, *, enumerate_devices=None, session=read_session):
         print("Source, loader, board-data hashes and baseline syntax verified. No USB operation performed.")
         return
     def candidate_provider(enumerate_backend):
-        print(f"Prepared. Waiting on USB bus {args.bus}, port {args.ports}, preloader PID 2000. No reset will be sent.", flush=True)
+        print(f"Prepared. Waiting on USB bus {args.bus}, port {args.ports}, preloader PID 2000. No USB reset will be sent.", flush=True)
         candidate = wait_preloader(enumerate_devices or enumerate_backend, args.bus, ports, args.timeout)
         print("Selected preloader found. Starting a read-only DA session…", flush=True)
         return candidate
     factory = lambda checkout: ExactUsbBackend(checkout, preloader=args.preloader,
                                                preloader_sha256=args.preloader_sha256)
     with session(args.checkout, args.loader, args.loader_sha256, args.lock_dir, None, factory,
-                 candidate_provider=candidate_provider) as reader:
+                 candidate_provider=candidate_provider, boot_after_capture=boot_after_capture) as reader:
         # Hardware layout/CID only exist after DA startup. Baseline syntax was
         # checked before USB; actual metadata and bytes are compared here.
         progress = lambda message: print(message, flush=True)
@@ -108,12 +112,20 @@ def capture(args, *, enumerate_devices=None, session=read_session):
         report["loader_sha256"] = args.loader_sha256
         report["board_data_sha256"] = args.preloader_sha256
         report["revision"] = REVIEWED_REVISION
+        report["boot_requested"] = boot_after_capture
+        report["boot_acknowledged"] = False
+        report["normal_os_verified"] = False
         report["usb_cleanup_verified"] = False
         save_json(destination / "readback.json", report)
-        progress("Identity backup and independent readback verified. Releasing USB interfaces; Couch has not been rebooted.")
+        progress("Identity backup and independent readback verified. " +
+                 ("Requesting normal boot, then releasing USB interfaces." if boot_after_capture else
+                  "Releasing USB interfaces; Couch has not been rebooted."))
+    report["boot_acknowledged"] = boot_after_capture
     report["usb_cleanup_verified"] = True
     save_json(destination / "readback.json", report)
-    print("Read-only capture verified and session closed. No partition writes or reset were sent.")
+    print("Read-only capture verified and session closed. No partition writes were sent.")
+    if boot_after_capture:
+        print("Normal-boot request acknowledged; verify Couch startup separately.")
 
 
 def main():
@@ -129,6 +141,8 @@ def main():
     parser.add_argument("--ports", required=True, help="Physical USB port path, e.g. 1 or 1.3")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--lock-dir", type=Path, default=Path.home() / ".local/state/couch-installer/locks")
+    parser.add_argument("--boot-after-capture", action="store_true",
+                        help="Experimental: request normal boot only after verified capture; requires full baseline")
     parser.add_argument("--check-only", action="store_true", help="Validate local inputs without importing USB or waiting")
     args = parser.parse_args()
     try:

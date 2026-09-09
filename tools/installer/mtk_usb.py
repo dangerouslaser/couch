@@ -365,6 +365,27 @@ class ExactUsbBackend:
             mtk.daloader.readflash = bounded_read
             return mtk
 
+    def boot_after_capture(self):
+        """Request HOME_SCREEN on the existing legacy DA; never USB-reset/reconnect.
+
+        The pinned upstream finish() compares an indexed int with a bytes ACK
+        using `is`, so it cannot complete this exchange. Check exact byte replies.
+        This acknowledges a boot request; it does not verify that Couch booted.
+        """
+        require(self.started and self.mtk is not None, "No active DA session")
+        require(not getattr(self, "boot_requested", False), "Boot request already attempted")
+        self.boot_requested = True  # Never retry an ambiguous protocol result.
+        with bounded_operation(10):
+            require(self.ep_out.write(b"\xd9", timeout=1000) == 1, "Short DA finish command")
+            require(bytes(self.ep_in.read(1, timeout=1000)) == b"\x5a", "DA finish command was not acknowledged")
+            require(self.ep_out.write(struct.pack(">I", 1), timeout=1000) == 4, "Short DA normal-boot request")
+            require(bytes(self.ep_in.read(1, timeout=1000)) == b"\x5a", "DA normal-boot request was not acknowledged")
+            # Let firmware disconnect before cleanup. Do not attach cdc_acm to
+            # the DA's malformed CDC descriptors or claim the returning gadget.
+            original = self.claimed_candidate()
+            while original in self.enumerate():
+                time.sleep(0.05)
+
     def close(self, reset=False):
         require(reset is False, "USB reset is disabled")
         errors = []
