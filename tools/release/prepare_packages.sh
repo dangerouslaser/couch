@@ -1,0 +1,23 @@
+#!/bin/sh
+# Run inside a digest-pinned Alpine container; never runs ARM programs/scripts.
+set -eu
+OUT=/out
+MIRROR=https://dl-cdn.alpinelinux.org/alpine/v3.21
+mkdir "$OUT/packages" "$OUT/indexes" "$OUT/keys"
+cp /usr/share/apk/keys/armv7/*.pub "$OUT/keys/"
+printf '%s\n' "$MIRROR/main" "$MIRROR/community" > /tmp/repositories
+cp /tmp/repositories "$OUT/repositories"
+apk --version > "$OUT/apk-version.txt"
+# A separate root prevents the x86 builder's installed packages satisfying ARM
+# dependencies. Keep signed indexes and keys as reviewable provenance inputs.
+mkdir -p /tmp/resolver/etc/apk /tmp/resolver/lib/apk/db
+touch /tmp/resolver/lib/apk/db/installed /tmp/resolver/etc/apk/world
+apk --root /tmp/resolver --arch armv7 --keys-dir "$OUT/keys" \
+    --repositories-file /tmp/repositories --cache-dir "$OUT/indexes" update
+apk --root /tmp/resolver --arch armv7 --keys-dir "$OUT/keys" \
+    --repositories-file /tmp/repositories --cache-dir "$OUT/indexes" \
+    fetch --recursive --simulate --url "$@" > "$OUT/package-urls.txt"
+apk --root /tmp/resolver --arch armv7 --keys-dir "$OUT/keys" \
+    --repositories-file /tmp/repositories --cache-dir "$OUT/indexes" \
+    fetch --recursive --output "$OUT/packages" "$@"
+sh /check.sh > "$OUT/offline-solve.txt"
