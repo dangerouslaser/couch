@@ -154,8 +154,8 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
 }
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
     let infrared = connection.provider == Provider::Ir;
-    let television = connection.provider == Provider::WebOs;
-    let receiver = matches!(connection.provider, Provider::Denon{..});
+    let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv);
+    let receiver = matches!(connection.provider, Provider::Denon { .. });
     let existing = assigned(app, &connection, "");
     let name = RwSignal::new(if infrared {
         String::new()
@@ -174,9 +174,30 @@ fn manual(app: App, connection: Connection, room: Id) -> AnyView {
 pub fn controls(app: App, device: &Device) -> AnyView {
     let config = app.config.get_untracked().unwrap_or_default();
     let (prefix, id) = match config.resolve_integration(&device.integration) {
-        Some(Integration::Denon{..})=>return match &device.integration {
-            Integration::Connection{connection_id,..}=>super::connections::denon_controls(app,connection_id.to_string()),_=>().into_any(),
-        },
+        Some(Integration::Denon { .. }) => {
+            return match &device.integration {
+                Integration::Connection { connection_id, .. } => {
+                    super::connections::denon_controls(app, connection_id.to_string())
+                }
+                _ => ().into_any(),
+            }
+        }
+        Some(Integration::AndroidTv | Integration::AppleTv) => {
+            let apple = matches!(
+                config.resolve_integration(&device.integration),
+                Some(Integration::AppleTv)
+            );
+            return match &device.integration {
+                Integration::Connection { connection_id, .. } => super::streaming_tv::controls(
+                    app,
+                    format!(
+                        "/api/connections/{connection_id}/{}",
+                        if apple { "appletv" } else { "androidtv" }
+                    ),
+                ),
+                _ => ().into_any(),
+            };
+        }
         Some(Integration::WebOs) => {
             let id=match &device.integration {Integration::Connection{connection_id,..}=>Some(connection_id.clone()),_=>config.connections.iter().find(|c|c.provider==Provider::WebOs).map(|c|c.id.clone())};
             return id.map(|id|super::webos::controls(app,format!("/api/connections/{id}/webos"))).unwrap_or_else(||().into_any());

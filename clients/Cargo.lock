@@ -229,6 +229,8 @@ dependencies = [
 name = "couch-control"
 version = "0.1.0"
 dependencies = [
+ "couch-androidtv",
+ "couch-appletv",
  "couch-denon",
  "couch-kodi",
  "couch-webos",

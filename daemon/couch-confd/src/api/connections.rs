@@ -18,13 +18,17 @@ impl Api {
             let settings=self.with(|s|match &s.config().connection(&Id::new(*id))?.provider {Provider::Denon{host,port}=>Some(couch_denon::Settings{host:host.clone(),port:*port}),_=>None});
             return match settings {Some(settings)=>super::denon::route(method,rest,body,settings),None=>Reply::error(404,"Denon connection not found")};
         }
-        if let [id, kind @ ("hue" | "ha" | "webos" | "kodi"), rest @ ..] = path {
+        if let [id, kind @ ("hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv"), rest @ ..] =
+            path
+        {
             let file = self.with(|s| {
                 let c = s.config().connection(&Id::new(*id))?;
                 let expected = match c.provider {
                     Provider::Hue => "hue",
                     Provider::HomeAssistant => "ha",
                     Provider::WebOs => "webos",
+                    Provider::AndroidTv => "androidtv",
+                    Provider::AppleTv => "appletv",
                     Provider::Kodi { .. } => "kodi",
                     _ => return None,
                 };
@@ -56,6 +60,9 @@ impl Api {
             return match *kind {
                 "hue" => super::hue::route_at(method, rest, body, file),
                 "ha" => super::ha::route_at(method, rest, body, file),
+                "androidtv" | "appletv" => {
+                    super::streaming_tv::route(method, rest, body, file, *kind == "appletv")
+                }
                 _ => super::webos::route_at(method, rest, body, file),
             };
         }

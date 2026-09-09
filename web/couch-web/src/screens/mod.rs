@@ -264,3 +264,5 @@ mod kodi;
 mod remote;
 
 mod activity_pages;
+
+mod streaming_tv;

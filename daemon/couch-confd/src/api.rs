@@ -25,6 +25,7 @@ mod kodi;
 mod remote;
 mod hue;
 mod webos;
+mod streaming_tv;
 mod connections;
 mod denon;
 

@@ -158,6 +158,8 @@ pub enum Integration {
     // Keep the legacy field name for backwards-compatible saved configurations.
     Hue { light_id: String },
     WebOs,
+    AndroidTv,
+    AppleTv,
     HomeAssistant {
         entity_id: String,
     },
@@ -181,6 +183,8 @@ impl Integration {
             Integration::Kodi { .. } => "kodi",
             Integration::Hue { .. } => "hue",
             Integration::WebOs => "web-os",
+            Integration::AndroidTv => "android-tv",
+            Integration::AppleTv => "apple-tv",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",
             Integration::Denon { .. } => "denon",

@@ -30,3 +30,7 @@ couch-hue = { path = "../../clients/couch-hue" }
 couch-webos = { path = "../../clients/couch-webos" }
 
 couch-kodi = { path = "../../clients/couch-kodi" }
+
+couch-androidtv = { path = "../../clients/couch-androidtv" }
+couch-appletv = { path = "../../clients/couch-appletv" }
+mdns-sd = "0.13"

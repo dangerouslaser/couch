@@ -223,6 +223,7 @@ fn connection_worker(
 ) {
     let mut denon = HashMap::new();
     let mut tv = HashMap::new();
+    let mut streaming = HashMap::new();
     let mut generation = current.load(Ordering::SeqCst);
     loop {
         let request = rx.recv_timeout(Duration::from_millis(100));
@@ -230,6 +231,7 @@ fn connection_worker(
         if now != generation {
             denon.clear();
             tv.clear();
+            streaming.clear();
             generation = now;
         }
         let r = match request {
@@ -240,7 +242,7 @@ fn connection_worker(
         if r.generation != generation || r.at.elapsed() > Duration::from_millis(750) {
             continue;
         }
-        if let Err(error) = execute(&r.config, &r.action, &mut denon, &mut tv) {
+        if let Err(error) = execute(&r.config, &r.action, &mut denon, &mut tv, &mut streaming) {
             let _ = reply.try_send((r.generation, error));
         }
     }
@@ -251,6 +253,7 @@ pub(crate) fn execute(
     action: &Action,
     denon: &mut HashMap<String, couch_control::Denon>,
     tv: &mut HashMap<String, couch_control::WebOs>,
+    streaming: &mut HashMap<String, couch_control::StreamingTv>,
 ) -> Result<(), String> {
     let device = config
         .devices()
@@ -268,6 +271,42 @@ pub(crate) fn execute(
         _ => "",
     };
     match integration {
+        Integration::AndroidTv | Integration::AppleTv => {
+            let kind = if matches!(integration, Integration::AppleTv) {
+                "appletv"
+            } else {
+                "androidtv"
+            };
+            if connection.is_empty() {
+                return Err("This TV needs a named connection".into());
+            }
+            let settings = couch_control::StreamingConnection::load(&crate::connections::file(
+                connection, kind,
+            ))
+            .map_err(|_| "Pair this TV in Connections first".to_string())?;
+            if settings.kind() != kind {
+                return Err("TV credentials have the wrong provider".into());
+            }
+            let key = format!("{kind}:{connection}");
+            if !streaming
+                .get(&key)
+                .is_some_and(|client| client.matches(&settings))
+            {
+                streaming.insert(
+                    key.clone(),
+                    couch_control::StreamingTv::connect(&settings).map_err(|e| e.to_string())?,
+                );
+            }
+            let result = streaming
+                .get(&key)
+                .unwrap()
+                .command(&command.id())
+                .map_err(|e| e.to_string());
+            if result.is_err() {
+                streaming.remove(&key);
+            }
+            result
+        }
         Integration::Denon { host, port } => {
             let key = format!("{host}:{port}");
             if !denon.contains_key(&key) {

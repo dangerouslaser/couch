@@ -117,7 +117,7 @@ impl Config {
                     None=>problems.push(Problem{at,message:"This device refers to a missing connection; remove its devices before deleting the connection".into()}),
                     Some(c)=>{
                         let valid=match c.provider {
-                            crate::Provider::Kodi{..}|crate::Provider::Denon{..}|crate::Provider::WebOs=>resource_id.is_empty(),
+                            crate::Provider::Kodi{..}|crate::Provider::Denon{..}|crate::Provider::WebOs|crate::Provider::AndroidTv|crate::Provider::AppleTv=>resource_id.is_empty(),
                             crate::Provider::HomeAssistant=>resource_id.starts_with("light.") && resource_id.len()>6 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'.'),
                             crate::Provider::Hue=>{ let id=resource_id.strip_prefix("room:").unwrap_or(resource_id); id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) },
                             crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),

@@ -17,7 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 mod proxies;
+mod streaming;
 pub use proxies::{Denon, Kodi, WebOs};
+pub use streaming::{StreamingConnection, StreamingTv};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Error {
     Protocol,
@@ -89,6 +91,7 @@ enum Spec {
     },
     WebOs(couch_webos::Settings),
     Denon(couch_denon::Settings),
+    Streaming(StreamingConnection),
 }
 impl Spec {
     fn key(&self) -> String {
@@ -96,6 +99,7 @@ impl Spec {
             Self::Kodi { host, port, .. } => format!("kodi:{host}:{port}"),
             Self::WebOs(s) => format!("webos:{}", s.url),
             Self::Denon(s) => format!("denon:{}:{}", s.host, s.port),
+            Self::Streaming(s) => format!("{}:{}:{}", s.kind(), s.address(), s.port()),
         }
     }
 }
@@ -120,6 +124,8 @@ enum Op {
     AvrToggleMute,
     AvrSources,
     AvrCommand(couch_denon::Command),
+    StreamingStatus,
+    StreamingCommand(String),
 }
 #[derive(Serialize, Deserialize)]
 struct Packet {
@@ -203,6 +209,7 @@ enum Client {
     Kodi(couch_kodi::Kodi),
     Tv(couch_webos::Client),
     Avr(couch_denon::Client),
+    Streaming(streaming::Client),
 }
 impl Client {
     fn open(spec: &Spec) -> Result<Self> {
@@ -224,6 +231,7 @@ impl Client {
             ),
             Spec::WebOs(s) => Self::Tv(couch_webos::Client::connect(s)?),
             Spec::Denon(s) => Self::Avr(couch_denon::Client::connect(s)?),
+            Spec::Streaming(s) => Self::Streaming(streaming::Client::open(s)?),
         })
     }
     fn execute(&mut self, op: Op) -> Result<Value> {
@@ -234,6 +242,11 @@ impl Client {
         }
         match (self, op) {
             (_, Op::Open) => Ok(Value::Null),
+            (Self::Streaming(c), Op::StreamingStatus) => c.status(),
+            (Self::Streaming(c), Op::StreamingCommand(name)) => {
+                c.command(&name)?;
+                Ok(Value::Null)
+            }
             (Self::Kodi(c), Op::KodiCall(m, p)) => c.call(&m, p).map_err(Error::from),
             (Self::Kodi(c), Op::KodiPlayback) => encode!(c.playback()),
             (Self::Kodi(c), Op::KodiSelect) => encode!(c.select()),
@@ -290,7 +303,16 @@ fn run_lane(rx: mpsc::Receiver<Job>, stats: Arc<Counters>) {
         }
         let job = match job {
             Ok(j) => j,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Android TV keepalives must be answered even with no command
+                // queued; each endpoint already owns an independent lane.
+                if let Some(Client::Streaming(c)) = client.as_mut() {
+                    if c.idle().is_err() {
+                        client = None;
+                    }
+                }
+                continue;
+            }
             Err(_) => return,
         };
         if matches!(job.packet.op, Op::Release) {

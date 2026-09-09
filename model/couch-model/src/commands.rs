@@ -140,7 +140,7 @@ impl Function {
                 }
                 _ => false,
             },
-            Self::App(id) => matches!(integration, Integration::WebOs) && valid_id(id),
+            Self::App(id) => matches!(integration, Integration::WebOs | Integration::AppleTv) && valid_id(id),
             _ => crate::buttons::functions(integration)
                 .iter()
                 .any(|f| f.0 == self.id()),

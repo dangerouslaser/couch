@@ -447,6 +447,12 @@ impl Remote {
                 return Err(Error::Timeout);
             }
         }
+        remote
+            .connection
+            .stream
+            .sock
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .map_err(|_| Error::Transport)?;
         Ok(remote)
     }
     /// Poll at least once per second while idle; replies to TV pings automatically.

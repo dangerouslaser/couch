@@ -2,8 +2,9 @@
 
 The new `couch-androidtv` and `couch-appletv` crates are native Rust libraries in
 `clients/`. They do not invoke Python, ADB or an external remote-control program.
-Both are **experimental and not yet exposed in Connections or deployed to the
-remote**. Protocol-peer tests and ARMv7 compilation are not physical TV validation.
+Both are **experimental**. Connections now offers network discovery and explicit
+PIN pairing; deployment and physical TV validation remain pending. Protocol-peer
+tests and ARMv7 compilation are not physical TV validation.
 
 ## Android TV / Google TV
 
@@ -28,7 +29,7 @@ for this first version. Text input, current-app tracking and voice streaming rem
 future additions. [Protocol implementation and schemas](https://github.com/tronikos/androidtvremote2)
 
 Needed for hardware testing: **TV address/model and its displayed pairing code**.
-Default ports are configurable. Discovery/UI integration is still pending.
+Default ports are configurable. The Connections finder uses Bonjour and also permits manual address entry.
 
 ## Apple TV
 
@@ -52,9 +53,9 @@ full now-playing support. Those need a separate AirPlay/MRP implementation.
 [pyatv protocol documentation](https://pyatv.dev/documentation/protocols/),
 [Companion implementation](https://github.com/postlund/pyatv/tree/master/pyatv/protocols/companion)
 
-Needed for hardware testing: **Apple TV address, tvOS version, discovered
-Companion port and on-screen PIN**. No Apple ID password is requested. Discovery,
-web pairing and physical-button routing remain integration work.
+Needed for hardware testing: **Apple TV address, tvOS version and on-screen PIN**.
+Discovery fills the Companion port. No Apple ID password is requested; physical
+TV validation remains pending.
 
 ## Validation
 
@@ -66,5 +67,32 @@ OPACK/TLV limits, authenticated-encryption rejection and certificate-bound codes
 Apple SRP output is compared with an independent `srptools==1.0.1` vector, and
 accessory signatures/server proofs must validate before pairing completes.
 
-The libraries compile for `armv7-unknown-linux-musleabihf`. This is client-side
-compilation; every kernel build remains on Ollie.
+The libraries compile for `armv7-unknown-linux-musleabihf`. The host browser bundle
+and configuration daemon also build. Model, broker and daemon regression tests
+cover provider resolution, private credentials and pairing session handling. A
+Playwright fixture verified both connection types through mocked discovery, PIN
+entry, saved status and mobile layout without contacting a TV. This is client-side
+validation; every kernel build remains on Ollie.
+
+## Couch integration
+
+Add a named **Android / Google TV** or **Apple TV** connection, find/select the
+TV (or enter its address), request its code, then **Verify & save pairing**.
+Pairing sessions expire after two minutes and can be cancelled; private JSON
+credentials are written atomically with mode 0600 under
+`connections/<id>/{androidtv,appletv}-connection.json`. Ordinary connection reads
+return only paired status, address and port. Exported configuration contains only
+the named provider reference.
+
+Add the TV to a room. The room editor provides basic test controls; activities
+can map its supported functions to physical buttons, ordered start/stop steps,
+and custom command pages. A dedicated full-screen Android/Apple TV media view is
+not implemented. Use custom activity pages for the first iteration. Unsupported
+Apple functions such as mute and stop are omitted from the capability catalog.
+
+The shared control broker owns each endpoint, answers Android keepalives while
+idle, expires stale queued commands, and reconnects only on a later request after
+failure. Activity navigation releases retained connection handles. Credentials
+changed through pairing replace the next mapped command's connection settings.
+Discovery is an explicit three-second IPv4 Bonjour search; IPv6 addresses can be
+entered manually, but scoped/link-local IPv6 discovery is not implemented.

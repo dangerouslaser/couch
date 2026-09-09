@@ -17,6 +17,8 @@ pub enum Provider {
     HomeAssistant,
     Hue,
     WebOs,
+    AndroidTv,
+    AppleTv,
     Ir,
 }
 impl Provider {
@@ -27,6 +29,8 @@ impl Provider {
             Self::HomeAssistant => "home-assistant",
             Self::Hue => "hue",
             Self::WebOs => "web-os",
+            Self::AndroidTv => "android-tv",
+            Self::AppleTv => "apple-tv",
             Self::Ir => "ir",
         }
     }
@@ -37,6 +41,8 @@ impl Provider {
             Self::HomeAssistant => "Home Assistant",
             Self::Hue => "Philips Hue",
             Self::WebOs => "LG webOS",
+            Self::AndroidTv => "Android / Google TV",
+            Self::AppleTv => "Apple TV",
             Self::Ir => "Infrared",
         }
     }
@@ -76,6 +82,8 @@ impl Config {
                 light_id: alloc::format!("{connection_id}/{resource_id}"),
             },
             Provider::WebOs => Integration::WebOs,
+            Provider::AndroidTv => Integration::AndroidTv,
+            Provider::AppleTv => Integration::AppleTv,
             Provider::Ir => Integration::Ir {
                 codeset: resource_id.clone(),
             },
@@ -205,5 +213,35 @@ mod tests {
     fn old_config_remains_readable_without_connections() {
         let c: Config = serde_json::from_str(r#"{"schema_version":1,"rooms":[]}"#).unwrap();
         assert!(c.connections.is_empty());
+    }
+    #[test]
+    fn streaming_tv_connections_resolve_and_do_not_invent_capabilities() {
+        let mut config = Config::default();
+        for (name, provider, integration) in [
+            ("android", Provider::AndroidTv, Integration::AndroidTv),
+            ("apple", Provider::AppleTv, Integration::AppleTv),
+        ] {
+            config.connections.push(Connection {
+                id: name.into(),
+                name: name.into(),
+                provider,
+            });
+            let saved = Integration::Connection {
+                connection_id: name.into(),
+                resource_id: String::new(),
+            };
+            assert_eq!(
+                config.resolve_integration(&saved),
+                Some(integration.clone())
+            );
+            assert!(crate::commands::Function::Ok.supports(&integration));
+        }
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            serde_json::from_str::<Config>(&serde_json::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+        assert!(!crate::commands::Function::Mute.supports(&Integration::AppleTv));
+        assert!(crate::commands::Function::Mute.supports(&Integration::AndroidTv));
     }
 }

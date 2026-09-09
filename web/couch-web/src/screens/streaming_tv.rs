@@ -1,0 +1,139 @@
+//! Explicit begin → on-screen PIN → save pairing, without exposing credentials.
+use crate::{api, App};
+use couch_model::{Connection, Provider};
+use leptos::{prelude::*, task::spawn_local};
+use serde_json::json;
+#[derive(Clone, serde::Deserialize)]
+struct Found {
+    name: String,
+    address: String,
+    port: u16,
+}
+pub fn setup(app: App, connection: &Connection) -> AnyView {
+    let apple = connection.provider == Provider::AppleTv;
+    let kind = if apple { "appletv" } else { "androidtv" };
+    let base = StoredValue::new(format!("/api/connections/{}/{kind}", connection.id));
+    let address = RwSignal::new(String::new());
+    let port = RwSignal::new(if apple { String::new() } else { "6466".into() });
+    let code = RwSignal::new(String::new());
+    let token = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let paired = RwSignal::new(false);
+    let message = RwSignal::new(String::new());
+    let found = RwSignal::new(Vec::<Found>::new());
+    spawn_local(async move {
+        if let Ok(value) = api::ha("GET", &format!("{}/connection", base.get_value()), None).await {
+            if paired.try_get_untracked().is_none() {
+                return;
+            }
+            paired.set(value["paired"] == true);
+            if let Some(saved) = value["address"].as_str() {
+                address.set(saved.into());
+            }
+            if let Some(saved) = value["port"].as_u64() {
+                port.set(saved.to_string());
+            }
+        }
+    });
+    let request = move |operation: &'static str| {
+        if busy.get_untracked() {
+            return;
+        }
+        let body = match operation {
+            "pair-start" => {
+                let Ok(port) = port.get_untracked().parse::<u16>() else {
+                    message.set("Choose a discovered TV or enter its port".into());
+                    return;
+                };
+                if port == 0 || address.get_untracked().trim().is_empty() {
+                    message.set("Choose a TV or enter its address and port".into());
+                    return;
+                }
+                Some(json!({"address":address.get_untracked().trim(),"port":port}))
+            }
+            "pair-finish" => {
+                Some(json!({"token":token.get_untracked(),"code":code.get_untracked().trim()}))
+            }
+            _ => None,
+        };
+        busy.set(true);
+        message.set(
+            match operation {
+                "pair-start" => "Asking the TV to display a code…",
+                "pair-finish" => "Verifying the code and saving this connection…",
+                "discover" => "Looking for TVs on this network…",
+                _ => "Checking connection…",
+            }
+            .into(),
+        );
+        spawn_local(async move {
+            let method = if operation == "pairing" {
+                "DELETE"
+            } else if matches!(operation, "status" | "discover") {
+                "GET"
+            } else {
+                "POST"
+            };
+            let result = api::ha(method, &format!("{}/{operation}", base.get_value()), body).await;
+            if busy.try_get_untracked().is_none() {
+                return;
+            }
+            match result {
+                Ok(value) => match operation {
+                    "discover" => {
+                        let values: Vec<Found> = serde_json::from_value(value).unwrap_or_default();
+                        message.set(if values.is_empty(){"No TVs found. Make sure the TV is awake and on this network, or enter its address manually."}else{"Select your TV below."}.into());
+                        found.set(values);
+                    }
+                    "pair-start" => {
+                        token.set(value["token"].as_str().unwrap_or("").into());
+                        code.set(String::new());
+                        message.set("Enter the code shown on the TV within two minutes.".into());
+                    }
+                    "pair-finish" => {
+                        paired.set(true);
+                        token.set(String::new());
+                        code.set(String::new());
+                        message.set(
+                            "Paired. Add this TV to a room, then map its controls in an activity."
+                                .into(),
+                        );
+                    }
+                    "pairing" => {
+                        token.set(String::new());
+                        code.set(String::new());
+                        message.set("Pairing cancelled.".into());
+                    }
+                    _ => message.set("Connected successfully.".into()),
+                },
+                Err(error) => {
+                    if error.unauthorized {
+                        app.paired.set(Some(false));
+                    }
+                    message.set(error.message);
+                }
+            }
+            busy.set(false);
+        });
+    };
+    view!{
+  <p class="notice">"Experimental Rust client. Pairing and controls still need validation on your TV."</p>
+  <p>{move ||if paired.get(){"Paired connection"}else{"Not paired yet"}}</p>
+  <div class="actions"><button disabled=move ||busy.get()||!token.get().is_empty() on:click=move |_|request("discover")>"Find TVs on this network"</button></div>
+  <div class="destination-grid">{move ||found.get().into_iter().map(|tv|{let name=tv.name.clone();view!{<button disabled=move ||busy.get()||!token.get().is_empty() on:click=move |_|{address.set(tv.address.clone());port.set(tv.port.to_string());}>{name}</button>}}).collect_view()}</div>
+  {super::connections::field("TV IP address",address,"192.168.1.100")}
+  {super::connections::field(if apple{"Companion port"}else{"Remote control port"},port,if apple{"Choose a discovered TV"}else{"6466"})}
+  <p class="dim">{if apple{"Discovery fills in the Companion port. Keep the Apple TV awake while pairing; an Apple ID password is not needed."}else{"Keep Android TV Remote Service enabled. Pairing uses port 6467; ADB and developer mode are not required."}}</p>
+  {move ||if token.get().is_empty(){view!{<div class="actions"><button class="primary" disabled=move ||busy.get() on:click=move |_|request("pair-start")>{move ||if paired.get(){"Pair again"}else{"Show pairing code on TV"}}</button><button disabled=move ||busy.get()||!paired.get() on:click=move |_|request("status")>"Test connection"</button></div>}.into_any()}else{view!{<label class="field">"Code shown on the TV"<input aria-label="TV pairing code" autocomplete="off" maxlength=if apple{4}else{6} prop:value=move ||code.get() on:input=move |e|code.set(event_target_value(&e))/></label><div class="actions"><button class="primary" disabled=move ||busy.get() on:click=move |_|request("pair-finish")>"Verify & save pairing"</button><button disabled=move ||busy.get() on:click=move |_|request("pairing")>"Cancel pairing"</button></div>}.into_any()}}
+  <p role="status">{move ||message.get()}</p>
+ }.into_any()
+}
+
+pub(super) fn controls(app: App, base: String) -> AnyView {
+    let base = StoredValue::new(base);
+    let busy = RwSignal::new(false);
+    let message = RwSignal::new(String::new());
+    view!{<section><p class="dim">"Experimental controls. Add this device to an activity to map physical buttons."</p><div class="actions">{
+  [("up","Up"),("down","Down"),("left","Left"),("right","Right"),("ok","OK"),("back","Back"),("home","Home"),("play-pause","Play / pause"),("volume-down","Volume −"),("volume-up","Volume +")].into_iter().map(move |(command,label)|view!{<button disabled=move ||busy.get() on:click=move |_|{if busy.get_untracked(){return}busy.set(true);spawn_local(async move{let result=api::ha("POST",&format!("{}/command",base.get_value()),Some(json!({"command":command}))).await;if busy.try_get_untracked().is_none(){return}match result{Ok(_)=>message.set("Command sent.".into()),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>{label}</button>}).collect_view()
+ }</div><p role="status">{move ||message.get()}</p></section>}.into_any()
+}

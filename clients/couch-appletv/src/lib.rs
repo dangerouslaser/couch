@@ -433,6 +433,10 @@ impl Remote {
         if remote > u32::MAX as u64 {
             return Err(Error::Protocol);
         }
+        connection
+            .stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .map_err(|_| Error::Transport)?;
         Ok(Self {
             connection,
             session: remote << 32 | local,
