@@ -311,6 +311,10 @@ MT6580 PWM IR driver. Comparing its actual probe/write/ioctl machine code with
 Couch is the remaining software-only route to finding omitted output setup.
 The generic donor driver and matching pinmux alone do not establish LED wiring.
 
+The completed [stock-driver audit](ha100-stock-ir-audit.md) found no omitted
+GPIO, pinctrl or regulator enable operation in the original IR paths. Optical
+measurement remains necessary; no speculative output-pin changes are justified.
+
 ## Remaining hardware checks
 
 - Confirm PWM0 reaches the IR LED and its idle polarity is correct.
