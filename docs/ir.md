@@ -172,6 +172,45 @@ check held-key cadence, simultaneous display activity, wake/sleep and separate
 callers with different carrier frequencies. The Couch driver polls completion;
 it does not retain the vendor driver's fixed 100 ms post-send sleep.
 
+## Bounded bringup probe
+
+Build the diagnostic independently of the GUI:
+
+```sh
+cd clients
+cargo build -p couch-ir --release --target armv7-unknown-linux-musleabihf --example irtx_probe
+cargo run -p couch-ir --example irtx_probe -- --pulse --dry-run
+```
+
+The ARM executable is `clients/target/armv7-unknown-linux-musleabihf/release/examples/irtx_probe`.
+On the device, its default operation only opens `/dev/irtx`, queries solution 1
+and sets 38 kHz on that descriptor. `--zero` and `--pulse` are explicit write
+operations; `--dry-run` opens nothing for any mode.
+
+- `--zero`: writes `[0x00000000, 281]`, one zero waveform word and a duration trailer.
+- `--pulse`: writes `[0x49249249, 281]`, eleven high samples spaced three ticks
+  apart, ending low. This is a short carrier burst, not a television command.
+- Both send exactly eight bytes in **one syscall with no retry**, even on EINTR
+  or a short write. At 228 clocks per sample the actual waveform lasts about
+  281 µs. Logs flush before the write and report return value, errno and elapsed
+  time afterward. A successful return proves driver completion, not optical output.
+
+Run registration-only checks before zero-waveform, pulse and finally a verified
+real target command. Collect kernel messages, elapsed time, advancing GUI
+heartbeat and display/wake state between stages. Stop after an error.
+
+Before the first physical test, retain a verified normal boot image and recovery
+partition backup. The boot-health process eventually clears the recovery BCB;
+wait for that process to finish before arming recovery for a risky write, and
+verify its value. Restore normal boot intent after the controlled test. A shell
+`timeout` cannot recover a CPU wedged in MMIO; watchdog/physical recovery must
+remain available. USB enumeration alone does not prove a responsive kernel.
+
+The historical failure was a four-byte zero waveform on `15b9bb34`, followed by
+watchdog reboot. Corrected clock ordering did not eliminate it. No captured
+trace proves its exact cause, so do not attribute it solely to the ABI mismatch.
+The candidate's minimum valid frame is eight bytes including the trailer.
+
 ## Remaining hardware checks
 
 - Confirm PWM0 reaches the IR LED and its idle polarity is correct.
