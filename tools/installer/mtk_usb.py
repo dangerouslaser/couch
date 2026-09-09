@@ -5,6 +5,7 @@ The installer CLI deliberately does not invoke this backend yet.
 """
 from contextlib import contextmanager
 import importlib
+import errno
 import importlib.abc
 import importlib.util
 import logging
@@ -83,6 +84,18 @@ def descriptor(device):
     return Candidate(device.bus, device.address, tuple(device.port_numbers or ()), device.idVendor, device.idProduct)
 
 
+def strict_handshake(cdc):
+    # No primer byte: an extra A0 can leave an unread 5F and shift every reply.
+    cdc.set_line_coding(921600, 0, 8, 1)
+    cdc.setcontrollinestate(rts=True)
+    for byte in (0xa0, 0x0a, 0x50, 0x05):
+        written = cdc.EP_OUT.write(bytes([byte]), timeout=500)
+        require(written == 1, f"Preloader handshake write failed at {byte:02x}")
+        reply = cdc.EP_IN.read(1, timeout=500)
+        require(len(reply) == 1 and reply[0] == (byte ^ 0xff),
+                f"Preloader handshake echo mismatch at {byte:02x}: {bytes(reply).hex() or 'empty'}")
+
+
 class ExactUsbBackend:
     def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None):
         self.checkout = checkout
@@ -156,10 +169,9 @@ class ExactUsbBackend:
     def _forbidden(self, *args, **kwargs):
         raise InstallError("Reset, reconnect, security bypass and flash writes are disabled")
 
-    def start_readonly(self, loader, policy):
-        require(policy == ReadPolicy(), "Unsupported MTK startup policy")
-        require(self.device is not None and not self.started, "Claim a fresh USB session before starting")
-        self.started = True
+    def prepare(self, loader):
+        require(self.device is None and self.mtk is None, "Prepare the backend before waiting for USB")
+        self.prepared_loader = bytes(loader)
         with bounded_operation(30):
             Config, Mtk = self._bindings()
             self.work = tempfile.TemporaryDirectory(prefix="couch-mtk-session-")
@@ -174,8 +186,8 @@ class ExactUsbBackend:
             config.reconnect = False
             config.write_preloader_to_file = False
             config.hwparam_path = self.work.name
-            config.vid, config.pid = self.device.idVendor, self.device.idProduct
-            config.interface = self.interface.bInterfaceNumber
+            config.vid, config.pid = 0x0e8d, 0x2000
+            config.interface = -1
             self.mtk = Mtk(config=config, loglevel=logging.CRITICAL)
             mtk = self.mtk
             daconfig = mtk.daloader.daconfig
@@ -200,6 +212,17 @@ class ExactUsbBackend:
                 mtk.daloader.da.pathconfig.get_loader_path = lambda: self.work.name
                 return result
             mtk.daloader.set_da = set_legacy_da
+
+    def start_readonly(self, loader, policy):
+        require(policy == ReadPolicy(), "Unsupported MTK startup policy")
+        require(self.device is not None and not self.started, "Claim a fresh USB session before starting")
+        require(self.mtk is not None and self.prepared_loader == loader, "Prepare the verified loader before USB capture")
+        self.started = True
+        with bounded_operation(30):
+            mtk = self.mtk
+            config = mtk.config
+            config.vid, config.pid = self.device.idVendor, self.device.idProduct
+            config.interface = self.interface.bInterfaceNumber
             cdc = mtk.port.cdc
             cdc.device, cdc.interface = self.device, self.interface.bInterfaceNumber
             cdc.EP_IN, cdc.EP_OUT = self.ep_in, self.ep_out
@@ -222,7 +245,7 @@ class ExactUsbBackend:
             # One handshake only: bypass Port.handshake's rediscovery loop and
             # Preloader.init's thousand retries. Exceptions stop the transaction.
             def handshake(**kwargs):
-                require(mtk.port.run_handshake(retries=1), "Preloader handshake failed")
+                strict_handshake(cdc)
                 return True
             mtk.port.handshake = handshake
             # Guard init_hwcode before upstream can take an unrelated chip's
@@ -289,11 +312,15 @@ class ExactUsbBackend:
             except Exception as error:
                 errors.append(error)
         self.interfaces, self.detached, self.device = [], [], None
+        if self.mtk is not None:
+            self.mtk.port.cdc.connected = False
+            self.mtk = None
         if self.work is not None:
             self.work.cleanup()
             self.work = None
         if self.imports is not None:
             self.imports.close()
             self.imports = None
+        errors = [error for error in errors if getattr(error, "errno", None) != errno.ENODEV]
         if errors:
-            raise InstallError("USB cleanup failed; disconnect the cable before another session") from errors[0]
+            raise InstallError(f"USB cleanup failed: {errors[0]}; disconnect the cable before another session") from errors[0]

@@ -6,6 +6,8 @@ import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
+from contextlib import redirect_stderr
+import io
 
 from couch_install import InstallError
 import mtk_session as session
@@ -50,6 +52,27 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(self.events, ["claim", "start", ("close", False)])
         with session.exclusive_lock(self.root / "locks"):
             pass  # Previous session released it on failure.
+
+    def test_import_and_loader_preparation_precedes_wait_window(self):
+        self.backend.prepare = lambda data: self.events.append("prepare")
+        def wait(enumerate_devices):
+            self.events.append("wait")
+            return self.candidate
+        with patch.object(session, "source_pin", return_value={}):
+            with session.read_session(self.root, self.loader, self.loader_hash, self.root / "locks",
+                                      None, lambda path: self.backend, candidate_provider=wait):
+                pass
+        self.assertEqual(self.events, ["prepare", "wait", "claim", "start", ("close", False)])
+
+    def test_cleanup_error_does_not_mask_startup_failure(self):
+        def fail(**kwargs):
+            raise OSError("cleanup failure")
+        self.backend.close = fail
+        with patch.object(session, "source_pin", return_value={}), redirect_stderr(io.StringIO()) as output:
+            with self.assertRaisesRegex(RuntimeError, "original"):
+                with self.gate():
+                    raise RuntimeError("original")
+        self.assertIn("cleanup failure", output.getvalue())
 
     def test_loader_mismatch_precedes_backend_claim(self):
         self.loader.write_bytes(b"changed")

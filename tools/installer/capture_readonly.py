@@ -10,7 +10,7 @@ import time
 from couch_install import IDENTITY_PARTITIONS, InstallError, REPO, layout, read_json, require, save_json
 from mtk_readonly import REVIEWED_REVISION
 from mtk_session import DOWNLOAD_PIDS, loader_bytes, read_session, source_pin
-from mtk_usb import ExactUsbBackend, descriptor
+from mtk_usb import ExactUsbBackend
 
 
 def baseline_record(path):
@@ -77,15 +77,15 @@ def capture(args, *, enumerate_devices=None, session=read_session):
     if args.check_only:
         print("Source, loader, board-data hashes and baseline syntax verified. No USB operation performed.")
         return
-    if enumerate_devices is None:
-        import usb.core
-        enumerate_devices = lambda: [descriptor(dev) for dev in usb.core.find(find_all=True, idVendor=0x0e8d)]
-    print(f"Waiting on USB bus {args.bus}, port {args.ports}, preloader PID 2000. No reset will be sent.", flush=True)
-    candidate = wait_preloader(enumerate_devices, args.bus, ports, args.timeout)
-    print("Selected preloader found. Starting a read-only DA session…", flush=True)
+    def candidate_provider(enumerate_backend):
+        print(f"Prepared. Waiting on USB bus {args.bus}, port {args.ports}, preloader PID 2000. No reset will be sent.", flush=True)
+        candidate = wait_preloader(enumerate_devices or enumerate_backend, args.bus, ports, args.timeout)
+        print("Selected preloader found. Starting a read-only DA session…", flush=True)
+        return candidate
     factory = lambda checkout: ExactUsbBackend(checkout, preloader=args.preloader,
                                                preloader_sha256=args.preloader_sha256)
-    with session(args.checkout, args.loader, args.loader_sha256, args.lock_dir, candidate, factory) as reader:
+    with session(args.checkout, args.loader, args.loader_sha256, args.lock_dir, None, factory,
+                 candidate_provider=candidate_provider) as reader:
         # Hardware layout/CID only exist after DA startup. Baseline syntax was
         # checked before USB; actual metadata and bytes are compared here.
         compare_baseline(reader, baseline)

@@ -123,7 +123,7 @@ def select_candidate(observed, expected):
 
 
 @contextmanager
-def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory):
+def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None):
     """Gate an explicitly supplied backend; not exposed as a hardware CLI command.
 
     Factory must be side-effect-free until claim(), and expose enumerate(),
@@ -139,9 +139,14 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
         data = loader_bytes(loader, loader_sha256)
         backend = backend_factory(Path(checkout).resolve())
         try:
+            if hasattr(backend, "prepare"):
+                backend.prepare(data)
             # Check module provenance again after the factory's imports, before
             # claiming any USB interface or invoking any protocol operation.
             verify_loaded_sources(pinned)
+            if candidate_provider is not None:
+                require(expected is None, "Choose a fixed candidate or a candidate provider")
+                expected = candidate_provider(backend.enumerate)
             candidate = select_candidate(backend.enumerate(), expected)
             backend.claim(candidate)
             require(backend.claimed_candidate() == candidate, "Backend claimed a different USB device")
@@ -149,4 +154,10 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
             verify_loaded_sources(pinned)
             yield ConnectedMtkReader(mtk, REVIEWED_REVISION)
         finally:
-            backend.close(reset=False)
+            original_error = sys.exc_info()[1]
+            try:
+                backend.close(reset=False)
+            except Exception as cleanup_error:
+                if original_error is None:
+                    raise
+                print(f"USB cleanup also failed: {cleanup_error}", file=sys.stderr)

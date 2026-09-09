@@ -1,4 +1,5 @@
 import hashlib
+import errno
 import importlib
 from pathlib import Path
 import signal
@@ -11,7 +12,7 @@ from unittest.mock import patch
 
 from couch_install import InstallError
 from mtk_session import ReadPolicy, read_session
-from mtk_usb import ExactUsbBackend, PinnedImports, bounded_operation, descriptor
+from mtk_usb import ExactUsbBackend, PinnedImports, bounded_operation, descriptor, strict_handshake
 from test_mtk_readonly import fake_session
 
 
@@ -33,7 +34,14 @@ class DALegacy:
 class UsbBackendTests(unittest.TestCase):
     def setUp(self):
         self.events = []
-        interface = Interface([NS(bmAttributes=2, bEndpointAddress=0x81), NS(bmAttributes=2, bEndpointAddress=2)])
+        self.handshake_bytes = []
+        def write(data, **kwargs):
+            self.handshake_bytes.extend(data)
+            return len(data)
+        def read(length, **kwargs):
+            return bytes([self.handshake_bytes[-1] ^ 0xff if self.handshake_result else 0])
+        interface = Interface([NS(bmAttributes=2, bEndpointAddress=0x81, read=read),
+                               NS(bmAttributes=2, bEndpointAddress=2, write=write)])
         self.dev = NS(bus=1, address=2, port_numbers=(3,), idVendor=0x0e8d, idProduct=0x2000,
                       get_active_configuration=lambda: Configuration([interface]),
                       is_kernel_driver_active=lambda number: True,
@@ -58,7 +66,7 @@ class UsbBackendTests(unittest.TestCase):
     def mtk(self, config, **kwargs):
         mtk, _, _ = fake_session()
         mtk.config = config
-        mtk.port = NS(cdc=NS(), run_handshake=lambda retries: self.handshake_result)
+        mtk.port = NS(cdc=NS(set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None))
         def initialize(**kwargs):
             mtk.port.handshake()
             config.init_hwcode(self.hwcode)
@@ -83,6 +91,7 @@ class UsbBackendTests(unittest.TestCase):
         return mtk
 
     def start(self):
+        self.backend.prepare(b"loader")
         self.backend.claim(descriptor(self.dev))
         return self.backend.start_readonly(b"loader", ReadPolicy())
 
@@ -106,9 +115,20 @@ class UsbBackendTests(unittest.TestCase):
         self.assertIn(("attach", 1), self.events)
         self.assertIn("dispose", self.events)
 
+    def test_disconnected_device_cleanup_is_not_a_second_failure(self):
+        self.backend.claim(descriptor(self.dev))
+        def gone(*args):
+            raise OSError(errno.ENODEV, "Device gone")
+        self.usb.util.release_interface = gone
+        self.dev.attach_kernel_driver = gone
+        self.usb.util.dispose_resources = gone
+        self.backend.close()
+        self.assertIsNone(self.backend.device)
+
     def test_direct_da_start_disables_reconnect_and_write_entries(self):
         mtk = self.start()
         self.assertIn("upload", self.events)
+        self.assertEqual(self.handshake_bytes, [0xa0, 0x0a, 0x50, 0x05])
         for function in (mtk.port.cdc.connect, mtk.port.close, mtk.bypass_security,
                          mtk.daloader.writeflash, mtk.daloader.formatflash):
             with self.assertRaises(InstallError):
@@ -141,7 +161,7 @@ class UsbBackendTests(unittest.TestCase):
 
     def test_failed_handshake_does_not_retry_or_upload(self):
         self.handshake_result = False
-        with self.assertRaisesRegex(InstallError, "handshake failed"):
+        with self.assertRaisesRegex(InstallError, "handshake echo mismatch"):
             self.start()
         self.assertNotIn("upload", self.events)
 
@@ -161,6 +181,7 @@ class UsbBackendTests(unittest.TestCase):
                                       preloader_sha256=hashlib.sha256(data).hexdigest(),
                                       usb=self.usb, bindings=(self.config, self.mtk))
             try:
+                backend.prepare(b"loader")
                 backend.claim(descriptor(self.dev))
                 mtk = backend.start_readonly(b"loader", ReadPolicy())
                 self.assertEqual(mtk.config.preloader, data)

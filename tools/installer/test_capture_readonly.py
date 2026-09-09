@@ -47,7 +47,7 @@ class CaptureTests(unittest.TestCase):
         self.args.baseline.write_text(json.dumps(baseline))
         closed = []
         @contextmanager
-        def session(*args):
+        def session(*args, **kwargs):
             try:
                 yield self.reader
             finally:
