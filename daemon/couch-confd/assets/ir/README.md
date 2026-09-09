@@ -26,3 +26,37 @@ python3 tools/ir/update_catalog.py build/irdb-source
 No hardware has been verified merely by including a code. An exact model match
 is preferable; brand matching alone does not establish compatibility. The LG
 DVX7900 entry is a VCR/DVD remote, not evidence for LG webOS TV power commands.
+
+## Flipper Devices catalog (MIT)
+
+`official-index.json` and `official-data.irpack` contain a separate dataset
+from [flipperdevices/IRDB](https://github.com/flipperdevices/IRDB), revision
+`f7b15366521cc81ba11b341538f0097bddbb748b`. The repository explicitly publishes
+its contents under MIT (`LICENSE-Flipper-MIT.txt`); no documented third-party
+license exceptions were found. This is a different license source from the
+historically restricted Lucaslhm database above. Matching numerical device
+codes do not themselves change that source attribution.
+
+The snapshot contains 5,433 remotes across TVs, receivers, DVD players,
+streaming boxes, projectors, fans, cameras and air purifiers. Original names
+may identify a handset or codeset rather than an appliance model. Upstream
+source bytes are unchanged inside individually compressed records; the index
+adds SHA-256/Git blob provenance, offsets and supported-command counts.
+The daemon decodes only the selected record. Its list response omits command
+data and detailed provenance to reduce Wi-Fi transfers. All 163,075 commands
+marked encodable by the index are checked against the Rust importer in tests;
+this validates encoding support, not appliance compatibility.
+
+```sh
+# Check out the exact revision first; this tool rejects other HEADs.
+python3 tools/ir/update_official_catalog.py build/flipper-official-irdb
+```
+
+Both refresh tools read committed source bytes. Do not silently repin them.
+The LG AKB75095307 source supplies a concrete unverified NEC power-toggle
+candidate, address `0x04`, command `0x08`. It is not a discrete on/off pair;
+use only a codeset appropriate for the user's TV and validate physically.
+
+`probonopd/irdb` was reviewed but not included: its custom license requires
+prior project notification and an obligation to supply product units on
+request. No notification was sent or such obligation accepted by Couch.

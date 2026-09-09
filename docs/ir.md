@@ -287,6 +287,11 @@ Flipper NECext carries a 16-bit command: conversion requires its second byte
 to be the first byte's inverse, because Couch generates that inverse itself.
 See the [official Flipper format](https://github.com/flipperdevices/flipperzero-firmware/blob/dev/documentation/file_formats/InfraredFileFormats.md)
 and [NEC decoder](https://github.com/flipperdevices/flipperzero-firmware/blob/dev/lib/infrared/encoder_decoder/nec/infrared_decoder_nec.c).
-The initial 44-model catalog's licensing boundary and refresh procedure are
+The combined 5,477-model catalog's source licenses and refresh procedures are
 recorded in [catalog provenance](../daemon/couch-confd/assets/ir/README.md).
 User imports are local data; importing does not grant redistribution rights.
+
+The larger Flipper Devices source uses MIT, independently of the older
+Flipper-IRDB CC0 boundary. Detailed commands decompress on demand; the full
+database is not expanded into command tables at daemon startup. SIRC20
+imports preserve all 13 address bits (5-bit device plus 8-bit extension).

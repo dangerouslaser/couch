@@ -194,6 +194,35 @@ fn flipper(text: &str) -> Result<Value, String> {
     }
     Ok(json!({"commands":commands,"text":lines.join("\n") + "\n","physically_verified":false}))
 }
+fn official_catalog() -> Value {
+    serde_json::from_str(include_str!("../../assets/ir/official-index.json"))
+        .expect("embedded official IR index")
+}
+fn detail(item: &Value) -> Result<Value, String> {
+    use std::io::Read;
+    if let (Some(offset), Some(length)) = (item["offset"].as_u64(), item["length"].as_u64()) {
+        let packed = include_bytes!("../../assets/ir/official-data.irpack");
+        let end = offset.checked_add(length).ok_or("Invalid catalog offset")?;
+        let bytes = packed
+            .get(offset as usize..end as usize)
+            .ok_or("Invalid catalog offset")?;
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(bytes)
+            .take(256 * 1024 + 1)
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        let preview = flipper(&text)?;
+        let mut value = item.clone();
+        value["text"] = preview["text"].clone();
+        value["commands"] = preview["commands"].clone();
+        value["physically_verified"] = json!(false);
+        value.as_object_mut().unwrap().remove("offset");
+        value.as_object_mut().unwrap().remove("length");
+        return Ok(value);
+    }
+    Ok(item.clone())
+}
+
 fn catalog() -> &'static Value {
     static CATALOG: OnceLock<Value> = OnceLock::new();
     CATALOG.get_or_init(|| {
@@ -215,6 +244,10 @@ fn catalog() -> &'static Value {
             item["supported_commands"] = json!(supported);
             item["supported"] = json!(supported > 0);
         }
+        let official = official_catalog();
+        value["sources"] = json!([value["source"], official["source"]]);
+        value["source"] = json!({"name":"Couch IR library · Flipper Devices + Flipper-IRDB", "license":"MIT + CC0-1.0", "url":"https://github.com/flipperdevices/IRDB", "license_text":include_str!("../../assets/ir/LICENSE-Flipper-MIT.txt")});
+        value["codesets"].as_array_mut().unwrap().extend(official["codesets"].as_array().unwrap().iter().cloned());
         value
     })
 }
@@ -300,13 +333,27 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], directory: &Path) 
         ("GET", ["catalog"]) => {
             use std::os::unix::fs::FileTypeExt;
             let full = catalog();
-            let mut value = full.clone();
-            for item in value["codesets"].as_array_mut().unwrap() {
-                for key in ["commands", "text"] {
-                    item.as_object_mut().unwrap().remove(key);
-                }
-            }
-            let items = value["codesets"].as_array().unwrap().clone();
+            let items = full["codesets"].as_array().unwrap();
+            let summaries = items
+                .iter()
+                .map(|item| {
+                    let mut summary = serde_json::Map::new();
+                    for key in [
+                        "id",
+                        "brand",
+                        "device_type",
+                        "model",
+                        "commands_count",
+                        "supported_commands",
+                        "supported",
+                    ] {
+                        summary.insert(key.into(), item[key].clone());
+                    }
+                    Value::Object(summary)
+                })
+                .collect::<Vec<_>>();
+            let mut value =
+                json!({"source":full["source"],"sources":full["sources"],"codesets":summaries});
             for (key, field) in [("brands", "brand"), ("device_types", "device_type")] {
                 let unique = items
                     .iter()
@@ -324,7 +371,7 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], directory: &Path) 
             .iter()
             .find(|v| v["id"] == *id)
         {
-            Some(v) => Ok(v.clone()),
+            Some(v) => detail(v),
             None => return Reply::error(404, "Codeset not found"),
         },
         ("POST", ["import"]) => {
@@ -454,11 +501,29 @@ mod tests {
         let mut ids = std::collections::HashSet::new();
         for item in items {
             assert!(ids.insert(item["id"].as_str().unwrap()));
-            assert_eq!(item["license"], "CC0-1.0");
-            assert_eq!(item["physically_verified"], false);
+            assert!(["CC0-1.0", "MIT"].contains(&item["license"].as_str().unwrap()));
+            let detailed = detail(item).unwrap_or_else(|e| panic!("{}: {e}", item["path"]));
+            assert_eq!(
+                detailed["commands"].as_array().unwrap().len() as u64,
+                item["commands_count"].as_u64().unwrap(),
+                "{}",
+                item["path"]
+            );
+            assert_eq!(
+                detailed["commands"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c["supported"] == true)
+                    .count() as u64,
+                item["supported_commands"].as_u64().unwrap(),
+                "{}",
+                item["path"]
+            );
+            assert_eq!(detailed["physically_verified"], false);
             assert_eq!(item["sha256"].as_str().unwrap().len(), 64);
             if item["supported"] == true {
-                parsed(item["text"].as_str().unwrap()).unwrap();
+                parsed(detailed["text"].as_str().unwrap()).unwrap();
             }
         }
     }

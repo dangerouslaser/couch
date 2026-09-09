@@ -146,7 +146,10 @@ pub fn encode(protocol: Protocol, address: u32, command: u32, toggle: bool) -> R
         Protocol::Rc6 => Ok(rc6(address, command, toggle)?),
         Protocol::Sony12 => Ok(sony(12, address, command, 0)?),
         Protocol::Sony15 => Ok(sony(15, address, command, 0)?),
-        Protocol::Sony20 => Ok(sony(20, address, command, 0)?),
+        Protocol::Sony20 => {
+            fits("address", address, 13)?;
+            Ok(sony(20, address & 31, command, address >> 5)?)
+        }
         Protocol::Samsung => Ok(samsung(address, command)?),
         Protocol::Raw => Err(Error::Encode(
             "raw takes a timing table, not an address/command - use `couch-ir raw`".into(),
@@ -491,6 +494,15 @@ pub fn raw(carrier_hz: u32, pattern_us: Vec<u32>) -> Result<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sony20_packed_address_preserves_extended_bits() {
+        assert_eq!(
+            encode(Protocol::Sony20, 0x125, 21, false).unwrap(),
+            sony(20, 5, 21, 9).unwrap()
+        );
+        assert!(encode(Protocol::Sony20, 8192, 21, false).is_err());
+    }
 
     // Build the mark/space runs of a byte the long way, so the tests do not
     // reuse the code under test.

@@ -39,7 +39,7 @@ def generate(checkout):
         # Converted external databases need their own rights review.
         if any(marker in content.lower() for marker in (b'irdb.tk', b'lirc', b'irdb/irdb', b'converted from')):
             continue
-        text = content.decode('utf-8-sig')
+        text = content.decode('utf-8')
         if 'Filetype: IR signals file' not in text or 'Version: 1' not in text:
             continue
         entries.append(dict(id='irdb-' + hashlib.sha256(path.encode()).hexdigest()[:16], brand=parts[1].replace('_', ' '), device_type=parts[0].replace('_', ' '), model=Path(path).stem.replace('_', ' '), path=path, source_url=f'{URL}/blob/{REVISION}/{path}', introduced_commit=additions[-1], blob_sha1=blob, sha256=hashlib.sha256(content).hexdigest(), license='CC0-1.0', text=text))
