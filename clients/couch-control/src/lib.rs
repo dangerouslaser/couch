@@ -105,6 +105,7 @@ enum Op {
     Release,
     KodiCall(String, Value),
     KodiPlayback,
+    KodiSelect,
     KodiVolumeStep(i64),
     KodiChapters(i64),
     KodiNotification(u64),
@@ -235,6 +236,7 @@ impl Client {
             (_, Op::Open) => Ok(Value::Null),
             (Self::Kodi(c), Op::KodiCall(m, p)) => c.call(&m, p).map_err(Error::from),
             (Self::Kodi(c), Op::KodiPlayback) => encode!(c.playback()),
+            (Self::Kodi(c), Op::KodiSelect) => encode!(c.select()),
             (Self::Kodi(c), Op::KodiVolumeStep(delta)) => {
                 let current = c.volume().map_err(Error::from)?;
                 encode!(c.set_volume((current.volume + delta).clamp(0, 100)))

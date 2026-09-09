@@ -330,8 +330,14 @@ impl Kodi {
     pub fn right(&self) -> Result<()> {
         self.input("Right")
     }
+    /// Contextual OK: let Kodi resolve the remote key against its active window.
+    /// Input.Select bypasses keymaps and cannot open the fullscreen player OSD.
     pub fn select(&self) -> Result<()> {
-        self.input("Select")
+        self.call(
+            "Input.ButtonEvent",
+            json!({"button": "select", "keymap": "R1", "holdtime": 0}),
+        )
+        .map(|_| ())
     }
     pub fn back(&self) -> Result<()> {
         self.input("Back")
@@ -589,6 +595,35 @@ fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_sends_one_contextual_remote_press_and_propagates_rejection() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for rejected in [false, true] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "Input.ButtonEvent");
+                assert_eq!(request["params"], json!({"button":"select","keymap":"R1","holdtime":0}));
+                let reply = if rejected {
+                    json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}})
+                } else {
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":"OK"})
+                };
+                writeln!(stream, "{reply}").unwrap();
+            }
+        });
+        let client = Kodi::tcp("127.0.0.1", port);
+        client.select().unwrap();
+        assert!(matches!(client.select(), Err(Error::Rpc { .. })));
+        server.join().unwrap();
+    }
 
     #[test]
     fn image_urls_are_encoded_once_more() {

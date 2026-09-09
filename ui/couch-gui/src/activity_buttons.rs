@@ -307,13 +307,13 @@ fn execute(
                 .unwrap_or_else(|| couch_control::Kodi::tcp(&host, port))
                 .with_timeout(Duration::from_secs(2));
             let result = match command {
-                F::Up | F::Down | F::Left | F::Right | F::Ok | F::Back | F::Home | F::Menu => {
+                F::Ok => c.select(),
+                F::Up | F::Down | F::Left | F::Right | F::Back | F::Home | F::Menu => {
                     let method = match command {
                         F::Up => "Input.Up",
                         F::Down => "Input.Down",
                         F::Left => "Input.Left",
                         F::Right => "Input.Right",
-                        F::Ok => "Input.Select",
                         F::Back => "Input.Back",
                         F::Home => "Input.Home",
                         _ => "Input.ContextMenu",

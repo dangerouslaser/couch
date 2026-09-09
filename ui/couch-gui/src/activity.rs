@@ -147,7 +147,9 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
             Ok((g, Request::Command(method, params, item))) if g == generation => {
                 let result = (|| {
                     let c = client.as_ref().ok_or("Kodi is unavailable")?;
-                    if method.starts_with("Input.") || method == "Application.SetMute" {
+                    if method == "Input.Select" {
+                        c.select().map_err(|_| "Kodi rejected OK")?;
+                    } else if method.starts_with("Input.") || method == "Application.SetMute" {
                         c.call(&method, params)
                             .map_err(|_| "Kodi rejected that input")?;
                     } else if method == "Application.SetVolume" {

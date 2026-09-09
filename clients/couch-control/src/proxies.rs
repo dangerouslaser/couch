@@ -36,6 +36,9 @@ impl Kodi {
     pub fn call(&self, method: &str, params: Value) -> Result<Value> {
         self.handle.call(Op::KodiCall(method.into(), params))
     }
+    pub fn select(&self) -> Result<()> {
+        self.handle.get(Op::KodiSelect)
+    }
     pub fn ping(&self) -> Result<()> {
         self.call("JSONRPC.Ping", json!({})).map(|_| ())
     }
