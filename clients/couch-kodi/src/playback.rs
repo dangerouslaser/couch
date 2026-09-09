@@ -3,13 +3,13 @@ use crate::{Error, Kodi, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Playback {
     pub player: i64,
     pub item: Value,
     pub properties: Value,
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct Chapter {
     pub index: u32,
     #[serde(default)]

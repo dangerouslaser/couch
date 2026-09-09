@@ -85,7 +85,7 @@ impl Settings {
         result.map_err(Into::into)
     }
 }
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub on: Option<bool>,
     pub muted: Option<bool>,
@@ -93,7 +93,7 @@ pub struct State {
     pub volume_minimum: bool,
     pub input: Option<String>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
     Power(bool),
     Mute(bool),

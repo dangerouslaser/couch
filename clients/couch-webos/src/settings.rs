@@ -2,7 +2,7 @@
 use crate::{endpoint, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub url: String,
     pub client_key: String,

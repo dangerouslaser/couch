@@ -1,9 +1,9 @@
 //! The Couch config server.
 //!
 //! One static binary that owns `/opt/couch/config.json` and serves both the
-//! REST API over it and the web UI that drives that API. It is a *config*
-//! daemon, not a hub: it never talks to a light or a TV, which is what lets it
-//! stay this small and why a crash in it cannot take the remote's UI with it.
+//! REST API over it and the web UI that drives that API. It also owns media
+//! control connections through a private Unix socket shared with the GUI.
+//! Network work runs outside the GUI rendering loop.
 //!
 //! It does not replace `stage2/portal.sh`. The setup portal answers the
 //! question "which network should this join", runs on port 80 out of an AP the
@@ -116,6 +116,7 @@ fn main() {
         });
     }
 
+    couch_control::serve(&store.path().with_file_name("control.sock")).expect("start private control socket");
     let api = Arc::new(Api::new(store, assets, auth));
     let mut workers = Vec::new();
     for _ in 1..WORKERS {

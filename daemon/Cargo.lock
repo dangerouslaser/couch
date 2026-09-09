@@ -84,6 +84,7 @@ dependencies = [
 name = "couch-confd"
 version = "0.1.0"
 dependencies = [
+ "couch-control",
  "couch-denon",
  "couch-ha",
  "couch-hue",
@@ -93,6 +94,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny_http",
+]
+
+[[package]]
+name = "couch-control"
+version = "0.1.0"
+dependencies = [
+ "couch-denon",
+ "couch-kodi",
+ "couch-webos",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

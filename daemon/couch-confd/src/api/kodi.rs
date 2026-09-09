@@ -53,7 +53,7 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], file: PathBuf, hos
                 password,
                 http_control: input.http_control,
             };
-            if settings.client().ping().is_err() {
+            if couch_control::Kodi::settings(&settings).ping().is_err() {
                 return Reply::error(502,"Kodi did not accept the connection. Check its web port, username, password and HTTP control setting.");
             }
             if std::fs::create_dir_all(file.parent().unwrap())

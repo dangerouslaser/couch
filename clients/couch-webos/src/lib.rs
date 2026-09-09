@@ -41,7 +41,7 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     Up,
     Down,
@@ -78,7 +78,7 @@ impl Button {
         }
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Playback {
     Play,
     Pause,
@@ -86,7 +86,7 @@ pub enum Playback {
     Rewind,
     FastForward,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Update {
     pub subscription: String,
     pub payload: Value,

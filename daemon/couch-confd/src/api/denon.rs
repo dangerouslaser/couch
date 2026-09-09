@@ -1,5 +1,6 @@
 use super::{parse, Reply};
-use couch_denon::{Client, Command, Settings};
+use couch_denon::{Command, Settings};
+use couch_control::Denon as Client;
 use serde::Deserialize;
 #[derive(Deserialize)]
 struct Input {

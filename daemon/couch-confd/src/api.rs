@@ -296,6 +296,7 @@ impl Api {
             ("POST", ["auth", "logout"]) => self.auth_logout(&cookies),
             ("GET", ["meta"]) => self.meta(),
 
+            ("GET", ["diagnostics", "control"]) => Reply::json(200, &couch_control::metrics()),
             ("GET", ["config"]) => self.with(|s| Reply::json(200, s.config()).at(s.revision())),
             ("GET", ["remote", "timezones"]) => Reply::json(200, &remote::timezones()),
             ("PUT", ["remote"]) => {

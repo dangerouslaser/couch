@@ -418,7 +418,7 @@ pub struct Player {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Volume {
     pub volume: i64,
@@ -472,7 +472,7 @@ impl NowPlaying {
 }
 
 /// One of the events Kodi pushes down the TCP connection unasked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Notification {
     /// "Player.OnPause", "Application.OnVolumeChanged" and so on.
     pub method: String,

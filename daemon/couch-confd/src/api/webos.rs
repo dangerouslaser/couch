@@ -94,7 +94,7 @@ pub(super) fn route_at(method: &str,path:&[&str],body:&[u8],file:PathBuf)->Reply
         Ok(s) => s,
         Err(_) => return Reply::error(400, "Pair the LG webOS TV in Connections first"),
     };
-    let mut client = match Client::connect(&settings) {
+    let mut client = match couch_control::WebOs::connect(&settings) {
         Ok(c) => c,
         Err(e) => {
             return Reply::error(
