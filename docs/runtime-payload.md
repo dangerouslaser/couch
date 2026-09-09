@@ -29,7 +29,7 @@ Both existing Lato font files matched upstream Google Fonts binaries; the previo
 
 The vendor report hashes expected WMT binaries, stock recovery modules, firmware patches, Bionic loader/libraries and SELinux property contexts. It records the entire existing firmware/context directory contents for review. Their presence does not establish redistribution permission; vendor files remain rejected by clean artifact staging.
 
-The audited local bundle lacks:
+The original local bundle lacked (subsequently recovered in a private verified bundle; see below):
 
 - `vendor/etc/selinux/nonplat_property_contexts`
 - `system/etc/selinux/plat_property_contexts`
@@ -46,3 +46,53 @@ Boot/recovery candidate images are inspected in memory for Android v0/zImage str
 The audit found 21 clean runtime artifacts, verified all 2,087 current web assets in the daemon, and inventoried 470 GUI/179 daemon dependency records. On Ollie this payload assembled into a 1,301-entry rootfs and a full-size userdata ext4 file that passed `e2fsck`. The resulting archive contains the actual Couch GUI/daemon/scripts, replacing the earlier Alpine+CGI-only fixture; vendor inputs are still absent.
 
 The inventory reports `clean_runtime_ready` separately from `payload_complete` and `installable`; the latter remain false. Clean source-to-binary attestations, vendor completeness/provenance/rights, project/dependency license review, a signed complete release inventory, and physical boot/recovery validation remain gates. The user's existing source changes were preserved, and no physical device interaction occurred.
+
+## Private offline vendor recovery
+
+`private_vendor.py` is a separate, deliberately private workflow. It verifies
+both complete original image hashes, reads raw ext4 with host `debugfs` in
+read-only mode, checks every retained file against its original image, and
+extracts only the three missing property/linker configuration files. Its fixed
+33-file allowlist excludes NVRAM, calibration, property snapshots and personal
+configuration. It refuses extra files, symlinks, mismatches and existing output
+directories. It does not execute a vendor binary, mount an image, contact a
+device, or fall back to ADB.
+
+```sh
+python3 tools/release/private_vendor.py PRIVATE_EXISTING_BUNDLE PRIVATE_NEW_BUNDLE \
+  --system-image PRIVATE_BACKUPS/system.img --system-sha256 ORIGINAL_SYSTEM_SHA256 \
+  --vendor-image PRIVATE_BACKUPS/vendor.img --vendor-sha256 ORIGINAL_VENDOR_SHA256
+python3 tools/release/audit_vendor_elf.py PRIVATE_NEW_BUNDLE PRIVATE_ELF_AUDIT.json
+python3 tools/release/prepare_private_rootfs.py CLEAN_PACKAGED_ROOTFS \
+  PRIVATE_NEW_BUNDLE PRIVATE_ROOTFS
+python3 tools/release/prepare_ext4.py PRIVATE_ROOTFS OFFLINE_E2FSPROGS \
+  tools/release/ha100_userdata_geometry.json PRIVATE_IMAGE \
+  --private-vendor-bundle PRIVATE_NEW_BUNDLE
+```
+
+The private overlay validates the original clean archive first, accepts only
+exact vendor paths and hashes from verified provenance, and preserves all
+clean configuration/credential checks. The default image-builder path rejects
+private staging; the explicit flag and matching bundle provenance are required.
+All resulting manifests retain `private_only: true`, `installable: false`, and
+`redistribution_authorized: false`. These outputs must remain outside Git and
+public release artifacts.
+
+Offline validation on Ollie recovered the missing three files and verified all
+30 retained files against the original system/vendor backups. The latest
+runtime package contains 23 explicit Couch artifacts, including the IR catalog's
+MIT and CC0 notices. Its private vendor overlay contains 1,348 entries; a raw
+5,905,055,744-byte userdata image passed `e2fsck -fn`. Independent repeats
+produced byte-identical normalized archives and raw ext4 images. The 32 release
+tests cover source mismatches, forbidden files, private/default-path separation,
+hash checks, reproducibility and dependency-closure classification. These are private candidate
+artifacts, not clean-HEAD build attestations or boot validation.
+
+The ELF audit finds no missing **WMT loader/launcher transitive** dependency
+names. Bionic supplies `ld-android.so` through the linker, as documented in
+[Android O's linker implementation](https://android.googlesource.com/platform/bionic/+/refs/heads/oreo-r4-release/linker/dlfcn.cpp).
+The additional bundled `libutils.so`, outside that WMT dependency closure,
+references absent `libvndksupport.so`; resolve or remove that unused-library
+branch before claiming the entire historical bundle is dependency-complete.
+Static dependency-name checks do not validate dynamic namespaces, symbol
+versions, firmware behavior or physical Wi-Fi startup.

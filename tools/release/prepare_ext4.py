@@ -70,19 +70,29 @@ def validate_image(path, size):
             'Unexpected filesystem features for the legacy kernel')
 
 
-def prepare(staging_dir, tools_dir, geometry, output):
+def prepare(staging_dir, tools_dir, geometry, output, private_bundle=None):
     geometry = validate_geometry(geometry)
     require(not output.exists(), 'Output directory must be new')
     staging = json.loads((staging_dir / 'staging.json').read_text())
-    require(staging.get('kind') == 'couch-packaged-staging' and staging.get('installable') is False,
-            'Expected reviewed packaged staging input')
+    private_files = None
+    if private_bundle is not None:
+        from private_vendor import verify_bundle
+        vendor = verify_bundle(private_bundle)
+        require(staging.get('kind') == 'couch-private-vendor-staging' and staging.get('private_only') is True,
+                'Expected explicitly private staging input')
+        require(staging.get('vendor_provenance_sha256') == file_hash(private_bundle/'vendor-provenance.json'),
+                'Private vendor provenance mismatch')
+        private_files = {'opt/couch/'+r['path']:r['sha256'] for r in vendor['files']}
+    else:
+        require(staging.get('kind') == 'couch-packaged-staging', 'Private staging requires --private-vendor-bundle')
+    require(staging.get('installable') is False, 'Expected noninstallable staging input')
     source = staging_dir / 'rootfs-staging.tar.gz'
     require(source.is_file() and not source.is_symlink(), 'Expected regular rootfs archive')
     data = source.read_bytes()
     require(checksum(data) == staging['archive_sha256'], 'Rootfs archive checksum mismatch')
     epoch = staging['source_date_epoch']
     require(type(epoch) is int and 0 <= epoch <= 0xffffffff, 'Invalid build timestamp')
-    normalize(data, epoch)  # Rescan archive safety/defaults without host extraction.
+    normalize(data, epoch, private_files)  # Rescan archive safety/defaults without host extraction.
     tools_dir = tools_dir.resolve()
     tool_manifest = verify(tools_dir)
     require(tool_manifest['architecture'] == 'x86_64', 'Image tools must be x86_64')
@@ -111,6 +121,7 @@ def prepare(staging_dir, tools_dir, geometry, output):
     artifact = output / 'userdata.ext4'
     validate_image(artifact, geometry['size'])
     result = {'schema': 1, 'kind': 'couch-userdata-image-preparation', 'installable': False,
+              'private_only': private_bundle is not None, 'redistribution_authorized': False,
               'geometry': geometry, 'source_date_epoch': epoch, 'filesystem_uuid': filesystem_uuid,
               'rootfs_archive_sha256': staging['archive_sha256'],
               'staging_manifest_sha256': file_hash(staging_dir / 'staging.json'),
@@ -130,8 +141,9 @@ def main():
     parser.add_argument('tools', type=Path)
     parser.add_argument('geometry', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--private-vendor-bundle', type=Path, help='Explicit private-only input; never a public release')
     args = parser.parse_args()
-    result = prepare(args.staging, args.tools, json.loads(args.geometry.read_text()), args.output)
+    result = prepare(args.staging, args.tools, json.loads(args.geometry.read_text()), args.output, args.private_vendor_bundle)
     print(f"Prepared noninstallable raw ext4 file: {result['image']['size']} bytes")
 
 

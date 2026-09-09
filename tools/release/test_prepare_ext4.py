@@ -1,9 +1,10 @@
 from pathlib import Path
 import struct
+import json
 import tempfile
 import unittest
 from clean_stage import StageError
-from prepare_ext4 import validate_geometry, validate_image
+from prepare_ext4 import validate_geometry, validate_image, prepare
 
 
 class Ext4PreparationTests(unittest.TestCase):
@@ -19,6 +20,14 @@ class Ext4PreparationTests(unittest.TestCase):
             geometry = self.geometry(); geometry[field] = value
             with self.subTest(field=field), self.assertRaises(StageError):
                 validate_geometry(geometry)
+
+    def test_private_staging_cannot_enter_default_public_image_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);staging=root/'staging';staging.mkdir()
+            (staging/'staging.json').write_text(json.dumps({'kind':'couch-private-vendor-staging','private_only':True,'installable':False}))
+            with self.assertRaisesRegex(StageError,'private-vendor-bundle'):
+                prepare(staging,root/'tools',self.geometry(),root/'output')
+            self.assertFalse((root/'output').exists())
 
     def test_raw_geometry_magic_and_legacy_feature_checks(self):
         with tempfile.TemporaryDirectory() as directory:

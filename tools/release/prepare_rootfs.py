@@ -16,8 +16,14 @@ from clean_stage import (GENERATED, StageError, archive_name, build, checksum,
 from package_closure import verify
 
 
-def normalize(data, epoch):
+def normalize(data, epoch, private_files=None):
     """Validate without host extraction and normalize order/times, retaining IDs."""
+    private_files = private_files or {}
+    if private_files:
+        from private_vendor import ALLOWED
+        require(set(private_files) == {'opt/couch/' + p for p in ALLOWED}, 'Incomplete private vendor allowlist')
+        require(all(re.fullmatch('[0-9a-f]{64}', h) for h in private_files.values()), 'Invalid private vendor digest')
+    private_dirs = {str(parent) for name in private_files for parent in PurePosixPath(name).parents}
     entries = {}
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         for member in archive:
@@ -25,7 +31,7 @@ def normalize(data, epoch):
             if name == '.':
                 continue
             require(name not in entries, 'Duplicate assembled path')
-            require(not secret_path(name), f'Private runtime state in assembled rootfs: {name}')
+            require(not secret_path(name) or name in private_files or (member.isdir() and name in private_dirs), f'Private runtime state in assembled rootfs: {name}')
             require(member.isdir() or member.isreg() or member.issym() or member.islnk(),
                     'Special filesystem entry after package installation')
             require(not member.mode & 0o6000, 'Set-ID package file requires separate review')
@@ -36,10 +42,13 @@ def normalize(data, epoch):
                     posixpath.dirname(name) if member.issym() else '', member.linkname))
                 require(target != '..' and not target.startswith('../'), 'Assembled link escape')
             content = archive.extractfile(member).read() if member.isreg() else b''
+            if name in private_files:
+                require(member.isreg() and checksum(content) == private_files[name], 'Private vendor member mismatch')
             if name == 'etc/shadow':
                 require(all(len(line.split(b':')) >= 2 and line.split(b':')[1] in (b'!', b'*', b'!!')
                             for line in content.splitlines() if line), 'Assembled password credentials')
             entries[name] = (member, content)
+    require(set(private_files) <= set(entries), 'Missing private vendor member')
     for name, content in GENERATED.items():
         require(name in entries and entries[name][0].isreg() and entries[name][1] == content,
                 f'Package installation changed clean defaults: {name}')

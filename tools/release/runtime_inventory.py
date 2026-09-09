@@ -22,7 +22,9 @@ SCRIPTS = ('stage2.sh', 'confd.sh', 'setup-mode.sh', 'portal.sh', 'setup-watch.s
            'wifi-conf.sh', 'sshd.sh', 'confirm.sh', 'scanjson.sh', 'join.sh')
 CGI = ('save', 'setpw', 'scan', 'enroll')
 LICENSES = {'Lato-OFL.txt': 'tools/release/licenses/Lato-OFL.txt',
-            'Inter-OFL.txt': 'assets/inter/LICENSE.txt', 'Lucide-ISC.txt': 'assets/lucide/LICENSE'}
+            'Inter-OFL.txt': 'assets/inter/LICENSE.txt', 'Lucide-ISC.txt': 'assets/lucide/LICENSE',
+            'IRDB-MIT.txt': 'daemon/couch-confd/assets/ir/LICENSE-Flipper-MIT.txt',
+            'IRDB-CC0.txt': 'daemon/couch-confd/assets/ir/LICENSE-CC0.txt'}
 VENDOR_REQUIRED = (
     'vendor/lib/modules/wmt_drv.ko', 'vendor/lib/modules/wmt_chrdev_wifi.ko',
     'vendor/lib/modules/wlan_drv.ko', 'vendor/bin/wmt_loader', 'vendor/bin/wmt_launcher',

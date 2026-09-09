@@ -53,3 +53,14 @@ Validation on Ollie installed 19 additional packages over the pinned base, execu
 ## Inventory the actual Couch payload
 
 `runtime_inventory.py` now prepares the explicit GUI/daemon/script/portal/notice artifact list, verifies embedded web assets and reports vendor/boot provenance gaps. See [runtime payload inventory](runtime-payload.md). Its clean Couch staging spec replaces the earlier fixture-only payload; `clean_runtime_ready` does not mean the complete release is installable.
+
+## Private vendor candidate preparation
+
+For personal-device validation, a separate [private offline workflow](runtime-payload.md#private-offline-vendor-recovery)
+can verify original Android image inputs, recover missing static property
+contexts, overlay the reviewed files, and build a private userdata image. It
+requires an explicit private-bundle flag; ordinary clean staging still rejects
+vendor inputs. No backup, firmware, credentials or private image belongs in
+Git or a public release. The workflow records provenance without granting
+redistribution rights, and keeps signing, source/build review and physical
+boot/recovery validation outstanding.
