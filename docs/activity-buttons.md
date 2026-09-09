@@ -1,11 +1,29 @@
 # Activity button mappings
 
-![Physical button editor](activity-buttons.png)
+![Command picker](activity-buttons-picker.png)
 
 In the web UI, open **Activities**, choose an activity, and use **Physical
-buttons**. Click a key in the remote illustration, choose a press type, then
-select **Device function**, a device, and its function. **Save button mapping**
-only saves configuration; reopen the activity on the remote to load changes.
+buttons**. Every key shows its short-press (dot) and long-press (line) slots.
+Click a slot to open the command picker, search for a function or device,
+and select a command to save it immediately. The slot displays the saved
+function and target device. Saving does not send the command; reopen the
+activity on the remote to load changes.
+
+Choose a device in the picker to discover Denon inputs or LG webOS inputs
+and apps. Previously saved mappings remain intact when discovery is unavailable.
+Use **Use activity default** to remove an override, or **Do nothing** to consume
+the press. Close the picker without choosing to leave a mapping unchanged.
+The dialog supports keyboard navigation, focus trapping and Escape; when the
+search field contains text, the first Escape clears it.
+
+The interaction follows Unfolded Circle’s [official activity configuration
+guide](https://support.unfoldedcircle.com/hc/en-us/articles/13269248303516-How-to-create-an-activity)
+and [button mapping documentation](https://support.unfoldedcircle.com/hc/en-us/articles/13214914883356-Button-mapping):
+visible press slots open a searchable command picker. The same slot layout is
+shown in the [Remote 3 setup guide](https://unfolded.community/t/getting-started-with-the-unfolded-circle-remote-3/5722).
+Couch retains its own 600 ms threshold and repeat-key restrictions.
+
+![Mobile command picker](activity-buttons-picker-mobile.png)
 
 For example, use a Kodi source with D-pad/OK left at their defaults, volume and
 mute assigned to a Denon receiver, and power assigned to an LG TV. Targets may
@@ -20,16 +38,16 @@ remains unavailable until the built-in blaster can send codes.
   a repeat-capable button is assigned to a toggle or power function.
 - Overrides apply while the activity screen is open, including its touch sheets.
   Directly opening a device uses normal controls. The touch back arrow always
-  exits to Couch. Closing an activity cancels pending holds and queued commands;
-  commands already sent to a device cannot be recalled.
+  exits to Couch. Closing an activity cancels pending holds and local queued mappings;
+  commands already dispatched cannot be recalled.
 - Deleting a mapped device disables its bindings instead of silently redirecting
   them to the source device. Missing references and unsupported commands are
   rejected before saving.
 
-The illustration follows the [HA100 front-panel layout](https://www.sanytron.com/cdn/shop/files/A.2066.png).
+Key names follow the [HA100 front-panel layout](https://www.sanytron.com/cdn/shop/files/A.2066.png).
 The four shortcut buttons above the colored keys were physically captured as
 Linux codes 62, 63, 64 and 65 (left to right). Other measured keys are recorded in
-`model/couch-model/src/buttons.rs`; the illustration uses accessible HTML buttons.
+`model/couch-model/src/buttons.rs`; mapping slots use accessible HTML buttons.
 
 `Activity.buttons` stores `{button, gesture, action}` entries. `gesture` defaults
 to `short`; `action: null` disables the key. Old configurations default to no
