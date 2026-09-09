@@ -29,6 +29,23 @@ clock shutdown. It changes no interrupt enable or transmit behavior.
 zero progress instead points toward clock/configuration/DMA. Neither is assumed
 in advance. The legacy computed-clock helper is not used as frequency evidence.
 
+The diagnostic zero transfer completed one hardware waveform (`sent_before=0`,
+`sent_after=1`, `requested_waves=1`), while interrupt enable and status remained
+zero. The channel was enabled with the expected 228-clock durations. This
+supports masked completion status as the cause of the timeout; it does not
+prove optical emission. The [MediaTek PWM HAL API](https://android.googlesource.com/kernel/mediatek/+/android-mtk-3.18/drivers/misc/mediatek/pwm/mt_pwm.c)
+provides a sent-wave counter independently of interrupt status.
+
+The next candidate (`9b699dde`) polls that counter for exactly one completed
+waveform. It requires a zero baseline before or during the current transfer,
+so a retained `1` cannot falsely finish a repeated write. It also waits the full
+computed waveform duration after configuration returns. If a tiny repeated
+frame finishes before a counter reset can be observed, the conservative result
+is a bounded timeout, not assumed success. Existing timeout, error diagnostics,
+channel disable/drain and DMA cleanup remain in place; no IRQ is enabled.
+`kernel/test-irtx-completion.c` exercises the actual kernel helper on Ollie for
+minimum duration, stale counts, observed reset and full-length frames.
+
 An earlier driver revision hung during transmission. Compilation and successful
 probe do **not** validate LED output, carrier frequency, completion interrupts,
 or display coexistence. Physical validation remains pending; see below.
