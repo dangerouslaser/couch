@@ -8,7 +8,8 @@ fn fail(app: App, message: RwSignal<String>, error: api::ApiError) {
     }
     message.set(error.message);
 }
-pub fn setup(app: App) -> AnyView {
+pub fn setup(app: App, connection: &couch_model::Connection) -> AnyView {
+    let base=StoredValue::new(format!("/api/connections/{}/ha",connection.id));
     let url = RwSignal::new(String::new());
     let token = RwSignal::new(String::new());
     let token_set = RwSignal::new(false);
@@ -16,7 +17,7 @@ pub fn setup(app: App) -> AnyView {
     let message = RwSignal::new(String::new());
 
     spawn_local(async move {
-        match api::ha("GET", "/api/ha/connection", None).await {
+        match api::ha("GET", &format!("{}/connection",base.get_value()), None).await {
             Ok(s) => {
                 url.set(s["url"].as_str().unwrap_or("").into());
                 token_set.set(s["token_set"].as_bool().unwrap_or(false));
@@ -32,21 +33,10 @@ pub fn setup(app: App) -> AnyView {
         message.set("Testing the connection…".into());
         let data = json!({"url":url.get_untracked().trim(),"token":token.get_untracked().trim()});
         spawn_local(async move {
-            match api::ha("PUT", "/api/ha/connection", Some(data)).await {
+            match api::ha("PUT", &format!("{}/connection",base.get_value()), Some(data)).await {
                 Ok(_result) => {
                     token.set(String::new());
                     token_set.set(true);
-                    if !app.config.get_untracked().is_some_and(|c| {
-                        c.connections
-                            .iter()
-                            .any(|c| c.provider.kind() == "home-assistant")
-                    }) {
-                        app.run(api::post(
-                            "/api/connections",
-                            json!({"name":"Home Assistant","provider":{"kind":"home-assistant"}}),
-                        ));
-                    }
-
                     message.set("Connected and saved. Add devices from Rooms & devices.".into());
                 }
                 Err(e) => fail(app, message, e),
@@ -61,14 +51,15 @@ pub fn setup(app: App) -> AnyView {
         <label class="field">"Long-lived access token"<input type="password" autocomplete="new-password" placeholder=move || if token_set.get() {"Saved — leave blank to keep"} else {"Paste a token from your Home Assistant profile"} prop:value=move || token.get() disabled=move || busy.get() on:input=move |e| token.set(event_target_value(&e))/></label>
         <p class="dim">"Stored privately on the remote, separately from your house configuration."</p>
         <div class="actions"><button class="primary" disabled=move || busy.get() on:click=save>"Test & save connection"</button>
-        <Show when=move || token_set.get() && !app.config.get().is_some_and(|c|c.connections.iter().any(|c|c.provider.kind()=="home-assistant"))><button class="ghost" disabled=move ||busy.get() on:click=move |_|app.run(api::post("/api/connections",json!({"name":"Home Assistant","provider":{"kind":"home-assistant"}})))>"Use saved connection"</button></Show>
+
         </div>
         <p role="status">{move || message.get()}</p>
 
         </section>
     }.into_any()
 }
-pub(super) fn controls(app: App, initial: Value) -> AnyView {
+pub(super) fn controls(app: App, initial: Value, path: String) -> AnyView {
+    let base=StoredValue::new(path);
     let light = RwSignal::new(initial);
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
@@ -86,7 +77,7 @@ pub(super) fn controls(app: App, initial: Value) -> AnyView {
             if let Some(action) = action {
                 if let Err(e) = api::ha(
                     "POST",
-                    &format!("/api/ha/lights/{id}/command"),
+                    &format!("{}/lights/{id}/command",base.get_value()),
                     Some(action),
                 )
                 .await
@@ -99,7 +90,7 @@ pub(super) fn controls(app: App, initial: Value) -> AnyView {
             } else {
                 message.set(String::new());
             }
-            match api::ha("GET", &format!("/api/ha/lights/{id}"), None).await {
+            match api::ha("GET", &format!("{}/lights/{id}",base.get_value()), None).await {
                 Ok(value) => light.set(value),
                 Err(e) => fail(app, message, e),
             }

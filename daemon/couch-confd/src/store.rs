@@ -76,6 +76,7 @@ impl Store {
                         store.write()?;
                     }
                 }
+                store.migrate_connection_credentials()?;
                 Ok(store)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -85,6 +86,53 @@ impl Store {
             }
             Err(e) => Err(Error::Io(e)),
         }
+    }
+
+    /// Bind former singleton credentials once, preserving originals and existing scoped pairings.
+    fn migrate_connection_credentials(&mut self)->Result<(),Error> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let root=self.path.parent().unwrap_or(Path::new("."));
+        let marker=root.join("connection-legacy-map.json");
+        let mut mapped:std::collections::BTreeMap<String,String>=match fs::read(&marker) {
+            Ok(b)=>serde_json::from_slice(&b).map_err(Error::Parse)?,
+            Err(e) if e.kind()==io::ErrorKind::NotFound=>Default::default(),Err(e)=>return Err(e.into()),
+        };
+        for (kind,prefix) in [("hue","hue"),("home-assistant","ha"),("web-os","webos")] {
+            if mapped.contains_key(kind){continue;}
+            let Some(c)=self.config.connections.iter().find(|c|c.provider.kind()==kind) else{continue;};
+            let directory=root.join("connections").join(c.id.as_str());fs::create_dir_all(&directory)?;
+            for filename in [format!("{prefix}-connection.json"),format!("{prefix}-wake.json")] {
+                let source=root.join(&filename);let target=directory.join(&filename);
+                if source.is_file() && !target.exists() {
+                    let data=fs::read(source)?;
+                    let tmp=target.with_extension("migrate-new");
+                    let mut f=fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+                    std::io::Write::write_all(&mut f,&data)?;f.sync_all()?;fs::rename(tmp,target)?;
+                }
+            }
+            mapped.insert(kind.into(),c.id.to_string());
+        }
+        let mut changed=false;
+        for room in &mut self.config.rooms {for device in &mut room.devices {
+            let legacy=match &device.integration {
+                couch_model::Integration::Hue{light_id}=>Some(("hue",light_id.clone())),
+                couch_model::Integration::HomeAssistant{entity_id}=>Some(("home-assistant",entity_id.clone())),_=>None,
+            };
+            if let Some((kind,resource_id))=legacy {
+                if let Some(id)=mapped.get(kind).filter(|id|self.config.connections.iter().any(|c|c.id.as_str()==id.as_str())) {
+                    device.integration=couch_model::Integration::Connection{connection_id:couch_model::Id::new(id.clone()),resource_id};changed=true;
+                }
+            }
+        }}
+        if changed {self.config.revision=self.config.revision.wrapping_add(1);self.config.validate().map_err(Error::Invalid)?;self.write()?;}
+        let data=serde_json::to_vec(&mapped).map_err(Error::Parse)?;
+        if fs::read(&marker).ok().as_deref()!=Some(data.as_slice()) {
+            let tmp=marker.with_extension("new");
+            let mut f=fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+            std::io::Write::write_all(&mut f,&data)?;f.sync_all()?;fs::rename(tmp,marker)?;
+            fs::File::open(root)?.sync_all()?;
+        }
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -241,5 +289,30 @@ mod connection_migration_tests {
         let mut store=Store::open(&path).unwrap();assert_eq!(store.revision(),4);assert_eq!(store.config().connections.len(),1);
         store.mutate(Some(4),|c|c.connections.clear()).unwrap();drop(store);
         assert!(Store::open(&path).unwrap().config().connections.is_empty());assert_eq!(fs::read(&credential).unwrap(),b"private fixture");fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod scoped_credentials_tests {
+    use super::*;
+    #[test]
+    fn legacy_pairing_is_copied_once_and_never_reassigned_to_second_tv() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir=std::env::temp_dir().join(format!("couch-multi-migration-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);fs::create_dir_all(&dir).unwrap();
+        let mut config=Config::default();
+        for id in ["tv-a","tv-b"] {config.connections.push(couch_model::Connection{id:id.into(),name:id.into(),provider:couch_model::Provider::WebOs});}
+        fs::write(dir.join("config.json"),serde_json::to_vec(&config).unwrap()).unwrap();
+        fs::write(dir.join("webos-connection.json"),b"private-pairing").unwrap();
+        let mut store=Store::open(dir.join("config.json")).unwrap();
+        let first=dir.join("connections/tv-a/webos-connection.json");
+        assert_eq!(fs::read(&first).unwrap(),b"private-pairing");
+        assert_eq!(fs::metadata(first).unwrap().permissions().mode()&0o777,0o600);
+        assert!(!dir.join("connections/tv-b/webos-connection.json").exists());
+        store.mutate(None,|c|{c.connections.remove(0);}).unwrap();drop(store);
+        Store::open(dir.join("config.json")).unwrap();
+        assert!(!dir.join("connections/tv-b/webos-connection.json").exists());
+        assert_eq!(fs::read(dir.join("webos-connection.json")).unwrap(),b"private-pairing");
+        fs::remove_dir_all(dir).unwrap();
     }
 }

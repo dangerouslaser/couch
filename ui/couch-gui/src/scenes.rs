@@ -71,7 +71,7 @@ impl Controller {
                     {
                         return Err("Hue connection was removed".into());
                     }
-                    couch_hue::settings::Settings::load(&home::path("hue-connection.json"))
+                    couch_hue::settings::Settings::load(&crate::connections::file(hue.connection_id.as_str(),"hue"))
                         .and_then(|s| s.client())
                         .and_then(|c| c.recall_scene(&hue.scene_id))
                         .map_err(|e| e.to_string())

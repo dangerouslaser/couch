@@ -3,9 +3,9 @@ use super::Reply;
 use couch_webos::{settings::Settings, Client};
 use serde::Deserialize;
 use serde_json::json;
-use std::{net::IpAddr, path::PathBuf, sync::Mutex};
+use std::{net::IpAddr,path::PathBuf};
 
-static CONNECTION: Mutex<()> = Mutex::new(());
+
 #[derive(Deserialize)]
 struct Setup {
     address: String,
@@ -28,16 +28,22 @@ fn url(input: &Setup) -> Option<String> {
     ))
 }
 pub(super) fn route(method: &str, path: &[&str], body: &[u8]) -> Reply {
-    let Ok(_guard) = CONNECTION.try_lock() else {
+    let file = PathBuf::from(
+        std::env::var("COUCH_WEBOS_CONNECTION")
+            .unwrap_or_else(|_| "/opt/couch/webos-connection.json".into()),
+    );
+    route_at(method,path,body,file)
+}
+pub(super) fn route_at(method: &str,path:&[&str],body:&[u8],file:PathBuf)->Reply {
+    if let Some(parent)=file.parent(){if std::fs::create_dir_all(parent).is_err(){return Reply::error(500,"Cannot create private connection directory");}}
+    let connection_lock=super::connections::lock_for(&file);
+    let Ok(_guard) = connection_lock.try_lock() else {
         return Reply::error(
             409,
             "TV connection is busy. Finish pairing or try again shortly.",
         );
     };
-    let file = PathBuf::from(
-        std::env::var("COUCH_WEBOS_CONNECTION")
-            .unwrap_or_else(|_| "/opt/couch/webos-connection.json".into()),
-    );
+
     if method == "GET" && path == ["connection"] {
         return Reply::json(
             200,

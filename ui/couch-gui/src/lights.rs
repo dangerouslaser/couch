@@ -1,6 +1,6 @@
 //! Room light controls. Network requests run on one worker, never on Slint's thread.
 use crate::{home, App, ChoiceItem};
-use couch_ha::{settings::Settings, Command, Light};
+use couch_ha::{Command, Light};
 use couch_model::{Config, DeviceKind, Id, Integration};
 use slint::{Model, ModelRc, VecModel};
 use std::{
@@ -58,7 +58,7 @@ pub struct Controller {
     room: Option<Id>,
     entries: Vec<Entry>,
     cache: StateCache,
-    hue: Arc<couch_hue::live::Live>,
+    hue: Arc<crate::connections::HueFleet>,
     busy: Option<String>,
     refreshing: bool,
     last_refresh: Instant,
@@ -120,21 +120,15 @@ fn toggle_command(state: &Light) -> Result<Command, String> {
         None => Err("This light is unavailable".into()),
     }
 }
-fn perform(room: &Id, operation: Operation, hue: &couch_hue::live::Live) -> Result<Answer, String> {
+fn perform(room: &Id, operation: Operation, hue: &crate::connections::HueFleet) -> Result<Answer, String> {
     let mut entries = configured(room)?;
-    let ha = || {
-        Settings::load(&home::path("ha-connection.json"))
-            .and_then(|s| s.client())
-            .map_err(|e| e.to_string())
-    };
     match operation {
         Operation::List => {
             let ha_states = if entries
                 .iter()
                 .any(|e| !e.hue && !e.id.starts_with("device:"))
             {
-                ha().and_then(|c| c.lights().map_err(|e| e.to_string()))
-                    .unwrap_or_default()
+                crate::connections::ha_lights()
             } else {
                 Vec::new()
             };
@@ -166,10 +160,10 @@ fn perform(room: &Id, operation: Operation, hue: &couch_hue::live::Live) -> Resu
             } else if id.starts_with("device:") {
                 return Err("This device does not support brightness".into());
             } else {
-                let c = ha()?;
-                c.command(&id, Command::Brightness(percent))
+                let (c, raw) = crate::connections::ha(&id)?;
+                c.command(&raw, Command::Brightness(percent))
                     .map_err(|e| e.to_string())?;
-                c.light(&id).map_err(|e| e.to_string())?
+                c.light(&raw).map_err(|e| e.to_string())?
             };
             state.entity_id = id;
             Ok(Answer::State(state))
@@ -191,11 +185,11 @@ fn perform(room: &Id, operation: Operation, hue: &couch_hue::live::Live) -> Resu
             } else if id.starts_with("device:") {
                 return Err("Controls for this device are not available yet".into());
             } else {
-                let c = ha()?;
-                let state = c.light(&id).map_err(|e| e.to_string())?;
-                c.command(&id, toggle_command(&state)?)
+                let (c, raw) = crate::connections::ha(&id)?;
+                let state = c.light(&raw).map_err(|e| e.to_string())?;
+                c.command(&raw, toggle_command(&state)?)
                     .map_err(|e| e.to_string())?;
-                c.light(&id).map_err(|e| e.to_string())?
+                c.light(&raw).map_err(|e| e.to_string())?
             };
             state.entity_id = id;
             Ok(Answer::State(state))
@@ -223,9 +217,7 @@ impl Controller {
         app.on_light_back(move || q.borrow_mut().push_back(Input::Back));
         let (tx, requests) = mpsc::sync_channel::<(u64, Id, Operation)>(1);
         let (events, rx) = mpsc::channel();
-        let hue = Arc::new(couch_hue::live::Live::new(home::path(
-            "hue-connection.json",
-        )));
+        let hue = Arc::new(crate::connections::HueFleet::default());
         let worker_hue = hue.clone();
         std::thread::spawn(move || {
             let _ = worker_hue.lights(); // Warm the cache without delaying GUI startup.
@@ -251,7 +243,7 @@ impl Controller {
             last_brightness_send: Instant::now() - Duration::from_secs(1),
         }
     }
-    pub fn hue_live(&self) -> Arc<couch_hue::live::Live> {
+    pub fn hue_live(&self) -> Arc<crate::connections::HueFleet> {
         self.hue.clone()
     }
     pub fn wake(&mut self) {
@@ -494,7 +486,10 @@ impl Controller {
                         let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
                         if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
                         let tv=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration))).is_some_and(|i|matches!(i,Integration::WebOs));
-                        if tv {app.invoke_open_tv(e.name.as_str().into());continue;}
+                        if tv {
+                            let connection=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|match &d.integration {Integration::Connection{connection_id,..}=>Some(connection_id.to_string()),_=>c.connections.iter().find(|c|c.provider==couch_model::Provider::WebOs).map(|c|c.id.to_string())})).unwrap_or_default();
+                            app.invoke_open_tv(connection.as_str().into(),e.name.as_str().into());continue;
+                        }
                         app.set_light_detail(
                             "Controls for this device are not available yet.".into(),
                         );

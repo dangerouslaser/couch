@@ -590,3 +590,9 @@ unimplemented integration; these controls configure ownership/source/steps.
 
 Regression: node web/tests/icons.mjs tests icon previews, search, persistence,
 mobile layout and room activity ownership with an isolated local daemon.
+
+## Connection and remote settings updates
+
+See [Connections](connections.md) for multiple bridges/servers/TVs and private Kodi
+credentials, and [Remote settings](remote-settings.md) for timezone, clock format
+and the docked clock display.

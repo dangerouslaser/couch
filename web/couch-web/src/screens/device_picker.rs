@@ -29,7 +29,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
 fn assigned(app: App, connection: &Connection, resource: &str) -> Option<String> {
     app.config.get_untracked().and_then(|cfg|cfg.devices().find_map(|(r,d)|{
         let same=matches!(&d.integration,Integration::Connection{connection_id,resource_id} if connection_id==&connection.id && resource_id==resource)
-            || match cfg.resolve_integration(&d.integration){Some(Integration::Hue{light_id})=>connection.provider==Provider::Hue && light_id==resource,Some(Integration::HomeAssistant{entity_id})=>connection.provider==Provider::HomeAssistant && entity_id==resource,Some(Integration::Kodi{host,port})=>connection.provider==Provider::Kodi{host,port},_=>false};
+            || match cfg.resolve_integration(&d.integration){Some(Integration::Hue{light_id})=>connection.provider==Provider::Hue && light_id==format!("{}/{resource}",connection.id),Some(Integration::HomeAssistant{entity_id})=>connection.provider==Provider::HomeAssistant && entity_id==format!("{}/{resource}",connection.id),Some(Integration::Kodi{host,port})=>connection.provider==Provider::Kodi{host,port},_=>false};
         same.then(||r.name.clone())
     }))
 }
@@ -42,6 +42,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     } else {
         "ha"
     };
+    let base=StoredValue::new(format!("/api/connections/{}/{prefix}",connection.id));
     let category = if prefix == "hue" {
         app.hue_category
     } else {
@@ -55,7 +56,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         message.set("Finding devices…".into());
         let category = category.get_untracked();
         spawn_local(async move {
-            match api::ha("GET", &format!("/api/{prefix}/{category}"), None).await {
+            match api::ha("GET", &format!("{}/{category}",base.get_value()), None).await {
                 Ok(v) => {
                     let values = v.as_array().cloned().unwrap_or_default();
                     message.set(format!(
@@ -172,7 +173,10 @@ fn manual(app: App, connection: Connection, room: Id) -> AnyView {
 pub fn controls(app: App, device: &Device) -> AnyView {
     let config = app.config.get_untracked().unwrap_or_default();
     let (prefix, id) = match config.resolve_integration(&device.integration) {
-        Some(Integration::WebOs) => return super::webos::controls(app),
+        Some(Integration::WebOs) => {
+            let id=match &device.integration {Integration::Connection{connection_id,..}=>Some(connection_id.clone()),_=>config.connections.iter().find(|c|c.provider==Provider::WebOs).map(|c|c.id.clone())};
+            return id.map(|id|super::webos::controls(app,format!("/api/connections/{id}/webos"))).unwrap_or_else(||().into_any());
+        },
         Some(Integration::Hue { light_id }) => ("hue", light_id),
         Some(Integration::HomeAssistant { entity_id })
             if device.kind == couch_model::DeviceKind::Light =>
@@ -181,8 +185,10 @@ pub fn controls(app: App, device: &Device) -> AnyView {
         }
         _ => return ().into_any(),
     };
+    let (base,id)=if let Some((connection,resource))=id.split_once('/') {(format!("/api/connections/{connection}/{prefix}"),resource.to_string())}else{(format!("/api/{prefix}"),id)};
+    let base=StoredValue::new(base);
     let value = RwSignal::new(None::<Value>);
     let message = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
-    view!{<button class="ghost" disabled=move ||busy.get() on:click=move |_|{let id=id.clone();busy.set(true);spawn_local(async move{match api::ha("GET",&format!("/api/{prefix}/lights/{id}"),None).await{Ok(v)=>value.set(Some(v)),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>"Show light controls"</button><p role="status">{move ||message.get()}</p>{move ||value.get().map(|v|if prefix=="hue"{super::hue::controls(app,v)}else{super::home_assistant::controls(app,v)})}}.into_any()
+    view!{<button class="ghost" disabled=move ||busy.get() on:click=move |_|{let id=id.clone();busy.set(true);spawn_local(async move{match api::ha("GET",&format!("{}/lights/{id}",base.get_value()),None).await{Ok(v)=>value.set(Some(v)),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>"Show light controls"</button><p role="status">{move ||message.get()}</p>{move ||value.get().map(|v|if prefix=="hue"{super::hue::controls(app,v,base.get_value())}else{super::home_assistant::controls(app,v,base.get_value())})}}.into_any()
 }

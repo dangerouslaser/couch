@@ -58,7 +58,7 @@ pub fn list(app: App, config: &Config) -> AnyView {
     let empty = config.areas.is_empty();
     view! {
         {ui::page_header(app, "Areas".to_string(), None)}
-        {super::appearance::editor(app, config)}
+
         <p class="dim pad-x">
             "Each area is one remote screen, such as Whole home or Upstairs. Choose its rooms, activity strip and scene shortcuts. Use the arrows to set the left-to-right screen order."
         </p>

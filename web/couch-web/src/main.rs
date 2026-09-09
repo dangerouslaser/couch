@@ -190,6 +190,7 @@ fn Shell() -> impl IntoView {
                 (Route::Overview, "Overview"),
                 (Route::Rooms, "Rooms & devices"),
                 (Route::Connections, "Connections"),
+                (Route::Settings, "Remote settings"),
                 (Route::Areas, "Areas"),
                 (Route::Activities, "Activities"),
             ]

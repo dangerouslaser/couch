@@ -71,54 +71,6 @@ pub fn wifi_dbm() -> Option<i32> {
         .and_then(|text| crate::wifi::signal_dbm(&text))
 }
 
-/// Local time as "H:MM AM/PM".
-///
-/// The offset comes from `date`, which is a process spawn - so it is cached by
-/// the caller and refreshed hourly rather than every tick.
-pub fn utc_offset_seconds() -> i64 {
-    let out = match Command::new("date").arg("+%z").output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => return 0,
-    };
-    // +HHMM
-    if out.len() < 5 {
-        return 0;
-    }
-    let sign = if out.starts_with('-') { -1 } else { 1 };
-    let hours: i64 = out[1..3].parse().unwrap_or(0);
-    let mins: i64 = out[3..5].parse().unwrap_or(0);
-    sign * (hours * 3600 + mins * 60)
-}
-
-/// HH:MM, 24-hour, per the design's status bar.
-pub fn clock_24h(offset_seconds: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-        + offset_seconds;
-    let secs_today = now.rem_euclid(86_400);
-    format!("{:02}:{:02}", secs_today / 3600, (secs_today % 3600) / 60)
-}
-
-#[allow(dead_code)]
-pub fn clock_string(offset_seconds: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-        + offset_seconds;
-    let secs_today = now.rem_euclid(86_400);
-    let h24 = secs_today / 3600;
-    let minute = (secs_today % 3600) / 60;
-    let suffix = if h24 < 12 { "AM" } else { "PM" };
-    let h12 = match h24 % 12 {
-        0 => 12,
-        h => h,
-    };
-    format!("{h12}:{minute:02} {suffix}")
-}
-
 /// Setup mode is a marker file, not an environment variable: the GUI is
 /// supervised in a restart loop whose environment is fixed at boot, so an env
 /// flag could never be cleared while running - which is exactly what joining a

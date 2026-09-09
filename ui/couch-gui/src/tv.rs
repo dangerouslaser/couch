@@ -101,7 +101,7 @@ fn volume(c: &mut Client) -> couch_webos::Result<String> {
 }
 // Bind the learned wake address to this exact pairing endpoint. It is private
 // device state, not part of exported room configuration.
-fn remember_wake(settings: &Settings) {
+fn remember_wake(settings: &Settings, credentials:&std::path::Path) {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let Ok(address) = settings.address() else {
         return;
@@ -124,7 +124,7 @@ fn remember_wake(settings: &Settings) {
         return;
     }
     let data = serde_json::json!({"url":settings.url,"mac":mac}).to_string();
-    let file = home::path("webos-wake.json");
+    let file = credentials.with_file_name("webos-wake.json");
     if std::fs::read_to_string(&file).ok().as_deref() == Some(&data) {
         return;
     }
@@ -143,8 +143,8 @@ fn remember_wake(settings: &Settings) {
         let _ = std::fs::remove_file(tmp);
     }
 }
-fn wake_tv(settings: &Settings) -> Result<(), String> {
-    let saved = std::fs::read(home::path("webos-wake.json"))
+fn wake_tv(settings: &Settings, credentials:&std::path::Path) -> Result<(), String> {
+    let saved = std::fs::read(credentials.with_file_name("webos-wake.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .ok_or("Connect while the TV is on once to learn its wake address")?;
@@ -161,9 +161,10 @@ fn power(
     client: &mut Option<Client>,
     active: &AtomicU64,
     generation: u64,
+    credentials:&std::path::Path,
 ) -> Result<String, String> {
     let settings =
-        Settings::load(&home::path("webos-connection.json")).map_err(|e| e.to_string())?;
+        Settings::load(credentials).map_err(|e| e.to_string())?;
     if client.is_none() {
         match Client::connect(&settings) {
             Ok(c) => *client = Some(c),
@@ -171,7 +172,7 @@ fn power(
                 if active.load(Ordering::SeqCst) != generation {
                     return Ok(String::new());
                 }
-                wake_tv(&settings)?;
+                wake_tv(&settings,credentials)?;
                 return Ok("Wake requested…".into());
             }
             Err(e) => return Err(e.to_string()),
@@ -180,7 +181,7 @@ fn power(
     if active.load(Ordering::SeqCst) != generation {
         return Ok(String::new());
     }
-    remember_wake(&settings);
+    remember_wake(&settings,credentials);
     let status = client
         .as_mut()
         .unwrap()
@@ -193,7 +194,7 @@ fn power(
         return Ok(String::new());
     }
     if state != "Active" {
-        wake_tv(&settings)?;
+        wake_tv(&settings,credentials)?;
         *client = None;
         return Ok("Wake requested…".into());
     }
@@ -207,6 +208,7 @@ fn power(
     Ok("TV powered off · Press Power to wake".into())
 }
 struct Work {
+    connection:String,
     generation: u64,
     action: Command,
     at: Instant,
@@ -216,6 +218,7 @@ struct Event {
     status: Result<String, String>,
 }
 fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<AtomicU64>) {
+    let mut credentials=home::path("webos-connection.json");
     let mut client = None;
     let mut generation = 0;
     let mut refreshed = Instant::now();
@@ -240,9 +243,11 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             {
                 continue;
             }
+            credentials=crate::connections::file(&w.connection,"webos");
+            if !w.connection.is_empty() && !crate::connections::config().is_some_and(|c|c.connection(&couch_model::Id::new(&w.connection)).is_some_and(|c|c.provider==couch_model::Provider::WebOs)) {continue;}
             if matches!(w.action, Command::Power) {
                 waking = None;
-                let result = power(&mut client, &active, generation);
+                let result = power(&mut client, &active, generation,&credentials);
                 if result.as_deref() == Ok("Wake requested…") {
                     waking = Some(Instant::now() + Duration::from_secs(30));
                 }
@@ -258,10 +263,10 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             }
             let result = (|| {
                 if matches!(w.action, Command::Retry) || client.is_none() {
-                    let settings = Settings::load(&home::path("webos-connection.json"))?;
+                    let settings = Settings::load(&credentials)?;
                     let mut connected = Client::connect(&settings)?;
                     connected.prepare_input()?;
-                    remember_wake(&settings);
+                    remember_wake(&settings,&credentials);
                     client = Some(connected);
                 }
                 // Opening or closing another screen cancels queued keys, including
@@ -294,7 +299,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             });
             refreshed = Instant::now();
         } else if current != 0 && waking.is_some() && refreshed.elapsed() > Duration::from_secs(2) {
-            let connected = Settings::load(&home::path("webos-connection.json"))
+            let connected = Settings::load(&credentials)
                 .and_then(|s| Client::connect(&s))
                 .and_then(|mut c| {
                     if c.power_state()?["state"] == "Active" {
@@ -338,6 +343,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     }
 }
 pub struct Controller {
+    connection:String,
     input: Rc<RefCell<Vec<String>>>,
     tx: mpsc::SyncSender<Work>,
     rx: mpsc::Receiver<Event>,
@@ -348,7 +354,7 @@ impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
         let q = input.clone();
-        app.on_open_tv(move |name| q.borrow_mut().push(format!("open:{name}")));
+        app.on_open_tv(move |id,name| q.borrow_mut().push(format!("open:{id}/{name}")));
         let q = input.clone();
         app.on_tv_action(move |action| q.borrow_mut().push(action.to_string()));
         let (tx, requests) = mpsc::sync_channel(8);
@@ -357,6 +363,7 @@ impl Controller {
         let current = active.clone();
         std::thread::spawn(move || worker(requests, events, current));
         Self {
+            connection:String::new(),
             input,
             tx,
             rx,
@@ -367,7 +374,9 @@ impl Controller {
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
         for action in inputs {
-            let action = if let Some(name) = action.strip_prefix("open:") {
+            let action = if let Some(target) = action.strip_prefix("open:") {
+                let (connection,name)=target.split_once('/').unwrap_or(("",target));
+                self.connection=connection.into();
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 app.set_tv_title(name.into());
@@ -397,7 +406,7 @@ impl Controller {
                 if self
                     .tx
                     .try_send(Work {
-                        generation: self.generation,
+                        connection:self.connection.clone(),                        generation: self.generation,
                         action,
                         at: Instant::now(),
                     })

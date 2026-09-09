@@ -16,6 +16,7 @@ use std::{
 
 #[derive(Clone)]
 struct Target {
+    connection: String,
     host: String,
     port: u16,
     name: String,
@@ -50,6 +51,7 @@ fn target(config: &Config, id: &str) -> Result<Target, String> {
     };
     match config.resolve_integration(&device.integration) {
         Some(Integration::Kodi { host, port }) => Ok(Target {
+            connection: match &device.integration { Integration::Connection{connection_id,..}=>connection_id.to_string(),_=>String::new() },
             host,
             port,
             name,
@@ -57,6 +59,12 @@ fn target(config: &Config, id: &str) -> Result<Target, String> {
         }),
         _ => Err("This activity needs a Kodi source device".into()),
     }
+}
+fn kodi_client(t: &Target) -> Kodi {
+    if let Ok(s) = couch_kodi::settings::Settings::load(&crate::connections::file(&t.connection,"kodi")) {
+        if s.host == t.host && s.http_control { return s.client(); }
+    }
+    Kodi::tcp(&t.host,t.port)
 }
 fn seconds(v: &Value) -> f64 {
     ["hours", "minutes", "seconds", "milliseconds"]
@@ -118,7 +126,7 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
         match rx.recv_timeout(Duration::from_millis(40)) {
             Ok((g, Request::Open(t))) => {
                 generation = g;
-                client = Some(Kodi::tcp(t.host, t.port).with_timeout(Duration::from_secs(2)));
+                client = Some(kodi_client(&t).with_timeout(Duration::from_secs(2)));
                 known.clear();
                 chapters = None;
                 current = None;
@@ -249,7 +257,8 @@ impl Controller {
             let source = config.activities.iter().find(|a|a.id.as_str()==id).and_then(|a|a.source.as_ref());
             if let Some((_, device)) = config.devices().find(|(_,d)|Some(&d.id)==source) {
                 if matches!(config.resolve_integration(&device.integration),Some(Integration::WebOs)) {
-                    app.invoke_open_tv(device.name.as_str().into());
+                    let connection=match &device.integration {Integration::Connection{connection_id,..}=>connection_id.to_string(),_=>config.connections.iter().find(|c|c.provider==couch_model::Provider::WebOs).map(|c|c.id.to_string()).unwrap_or_default()};
+                    app.invoke_open_tv(connection.as_str().into(),device.name.as_str().into());
                     return;
                 }
             }
@@ -530,6 +539,7 @@ impl Controller {
                                         self.generation,
                                         key.clone(),
                                         t.host.clone(),
+                                        t.connection.clone(),
                                         art(p, "fanart"),
                                         art(p, "clearlogo"),
                                     ) {

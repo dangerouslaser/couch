@@ -44,12 +44,20 @@ impl Config {
     }
     /// Legacy inline integrations remain readable. New devices refer to a
     /// connection, so changing a Kodi address updates every referring device.
+    /// Resolved Hue/HA IDs are runtime cache keys (connection/resource); strip
+    /// the connection prefix before calling the upstream API. Stored IDs stay raw.
     pub fn resolve_integration(&self, integration: &Integration) -> Option<Integration> {
         let Integration::Connection {
             connection_id,
             resource_id,
         } = integration
         else {
+            let legacy = match integration {Integration::Hue{light_id}=>Some(("hue",light_id)),Integration::HomeAssistant{entity_id}=>Some(("home-assistant",entity_id)),_=>None};
+            if let Some((kind,resource))=legacy {
+                if let Some(c)=self.connections.iter().find(|c|c.provider.kind()==kind) {
+                    return self.resolve_integration(&Integration::Connection{connection_id:c.id.clone(),resource_id:resource.clone()});
+                }
+            }
             return Some(integration.clone());
         };
         Some(match &self.connection(connection_id)?.provider {
@@ -58,10 +66,10 @@ impl Config {
                 port: *port,
             },
             Provider::HomeAssistant => Integration::HomeAssistant {
-                entity_id: resource_id.clone(),
+                entity_id: alloc::format!("{connection_id}/{resource_id}"),
             },
             Provider::Hue => Integration::Hue {
-                light_id: resource_id.clone(),
+                light_id: alloc::format!("{connection_id}/{resource_id}"),
             },
             Provider::WebOs => Integration::WebOs,
             Provider::Ir => Integration::Ir {
@@ -163,7 +171,31 @@ mod tests {
         assert!(saved.contains("web-os"));
         assert_eq!(serde_json::from_str::<Config>(&saved).unwrap(),config);
         config.connections.push(Connection {id:"second".into(),name:"Second TV".into(),provider:Provider::WebOs});
-        assert!(config.validate().is_err());
+        assert!(config.validate().is_ok());
+    }
+    #[test]
+    fn identical_resources_on_different_servers_remain_distinct() {
+        let mut c=Config::default();
+        for (id,provider) in [("ha-a",Provider::HomeAssistant),("ha-b",Provider::HomeAssistant),("hue-a",Provider::Hue),("hue-b",Provider::Hue)] {
+            c.connections.push(Connection{id:id.into(),name:id.into(),provider});
+        }
+        assert!(c.validate().is_ok());
+        for (a,b,resource) in [("ha-a","ha-b","light.same"),("hue-a","hue-b","00000000-0000-0000-0000-000000000001")] {
+            let left=c.resolve_integration(&Integration::Connection{connection_id:a.into(),resource_id:resource.into()});
+            let right=c.resolve_integration(&Integration::Connection{connection_id:b.into(),resource_id:resource.into()});
+            assert_ne!(left,right);
+        }
+        c.connections[0].id="../escape".into();assert!(c.validate().is_err());
+    }
+    #[test]
+    fn built_in_ir_is_shared_but_each_device_keeps_its_own_codeset() {
+        let mut c=Config::default();
+        c.connections.push(Connection{id:"ir".into(),name:"Built-in IR".into(),provider:Provider::Ir});
+        c.rooms.push(Room{id:"room".into(),name:"Room".into(),icon:None,devices:vec![
+            Device::new("tv".into(),"TV",DeviceKind::Tv).with_integration(Integration::Connection{connection_id:"ir".into(),resource_id:"lg-tv".into()}),
+            Device::new("amp".into(),"Amplifier",DeviceKind::Speaker).with_integration(Integration::Connection{connection_id:"ir".into(),resource_id:"denon".into()})]});
+        assert!(c.validate().is_ok());
+        c.connections.push(Connection{id:"another-ir".into(),name:"Duplicate blaster".into(),provider:Provider::Ir});assert!(c.validate().is_err());
     }
     #[test]
     fn old_config_remains_readable_without_connections() {

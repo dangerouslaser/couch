@@ -10,6 +10,7 @@ struct Job {
     generation: u64,
     key: String,
     host: String,
+    connection: String,
     fanart: String,
     logo: String,
 }
@@ -29,7 +30,7 @@ pub struct Worker {
     tx: mpsc::SyncSender<Job>,
     rx: mpsc::Receiver<Reply>,
 }
-fn fetch(host: &str, path: &str, logo: bool) -> Option<Pixels> {
+fn fetch(host: &str, connection: &str, path: &str, logo: bool) -> Option<Pixels> {
     if path.is_empty() {
         return None;
     }
@@ -37,9 +38,15 @@ fn fetch(host: &str, path: &str, logo: bool) -> Option<Pixels> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    let settings = &settings[host];
-    let port = settings["port"]
+    let scoped =
+        couch_kodi::settings::Settings::load(&crate::connections::file(connection, "kodi"))
+            .ok()
+            .filter(|s| s.host == host);
+    let scoped = scoped.and_then(|s| serde_json::to_value(s).ok());
+    let settings = scoped.as_ref().unwrap_or(&settings[host]);
+    let port = settings["web_port"]
         .as_u64()
+        .or_else(|| settings["port"].as_u64())
         .and_then(|n| u16::try_from(n).ok())
         .unwrap_or(8080);
     let kodi = couch_kodi::Kodi::tcp(host, 9090).with_web_port(port);
@@ -121,14 +128,17 @@ impl Worker {
             let mut cache: std::collections::VecDeque<(String, Option<Pixels>, Option<Pixels>)> =
                 std::collections::VecDeque::new();
             while let Ok(job) = rx.recv() {
-                let cache_key = format!("{}:{}:{}", job.host, job.fanart, job.logo);
+                let cache_key = format!(
+                    "{}:{}:{}:{}",
+                    job.connection, job.host, job.fanart, job.logo
+                );
                 let (fanart, logo) = if let Some((_, fanart, logo)) =
                     cache.iter().find(|(key, _, _)| key == &cache_key)
                 {
                     (fanart.clone(), logo.clone())
                 } else {
-                    let art = fetch(&job.host, &job.fanart, false);
-                    let logo = fetch(&job.host, &job.logo, true);
+                    let art = fetch(&job.host, &job.connection, &job.fanart, false);
+                    let logo = fetch(&job.host, &job.connection, &job.logo, true);
                     if art.is_some() || logo.is_some() {
                         cache.push_back((cache_key, art.clone(), logo.clone()));
                         while cache.len() > 2 {
@@ -155,6 +165,7 @@ impl Worker {
         generation: u64,
         key: String,
         host: String,
+        connection: String,
         fanart: String,
         logo: String,
     ) -> bool {
@@ -163,6 +174,7 @@ impl Worker {
                 generation,
                 key,
                 host,
+                connection,
                 fanart,
                 logo,
             })

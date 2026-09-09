@@ -21,6 +21,8 @@
 //! anybody's house.
 
 mod ha;
+mod kodi;
+mod remote;
 mod hue;
 mod webos;
 mod connections;
@@ -274,6 +276,12 @@ impl Api {
             return Reply::error(401, "not paired - open the page and enter the PIN on your remote");
         }
 
+        if let Some(kind @ ("hue"|"ha"|"webos"))=rest.first().copied() {
+            let provider=match kind {"ha"=>"home-assistant","webos"=>"web-os",_=>"hue"};
+            let ids=self.with(|s|s.config().connections.iter().filter(|c|c.provider.kind()==provider).map(|c|c.id.to_string()).collect::<Vec<_>>());
+            if ids.len()>1{return Reply::error(409,"Choose a specific connection");}
+            if let Some(id)=ids.first(){let mut scoped=vec![id.as_str(),kind];scoped.extend_from_slice(&rest[1..]);return self.connection_route(&method,&scoped,&body,if_match);}
+        }
         if rest.first() == Some(&"connections") { return self.connection_route(&method, &rest[1..], &body, if_match); }
         if rest.first() == Some(&"webos") { return webos::route(&method, &rest[1..], &body); }
         if rest.first() == Some(&"hue") { return hue::route(&method, &rest[1..], &body); }
@@ -288,6 +296,12 @@ impl Api {
             ("GET", ["meta"]) => self.meta(),
 
             ("GET", ["config"]) => self.with(|s| Reply::json(200, s.config()).at(s.revision())),
+            ("GET", ["remote", "timezones"]) => Reply::json(200, &remote::timezones()),
+            ("PUT", ["remote"]) => {
+                let settings: couch_model::RemoteSettings = match parse(&body) {Ok(value)=>value,Err(reply)=>return reply};
+                if !settings.timezone.is_empty() && !remote::timezones().contains(&settings.timezone) { return Reply::error(400,"Choose an installed IANA timezone"); }
+                self.edit(if_match, move |cfg| cfg.remote=settings)
+            }
             ("PUT", ["appearance"]) => {
                 let appearance: couch_model::Appearance = match parse(&body) {Ok(value)=>value,Err(reply)=>return reply};
                 self.edit(if_match, move |cfg| cfg.appearance=appearance)

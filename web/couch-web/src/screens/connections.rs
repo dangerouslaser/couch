@@ -14,7 +14,8 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("ir", "Infrared"),
     ]
     .into_iter()
-    .filter(|(kind, _)| *kind == "kodi" || !existing.iter().any(|c| c.provider.kind() == *kind))
+    .filter(|(kind,_)|*kind!="ir" || !existing.iter().any(|c|c.provider==Provider::Ir))
+
     .collect();
     view!{
         {ui::page_header(app,"Connections".into(),None)}
@@ -24,7 +25,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>super::home_assistant::setup(app),"hue"=>super::hue::setup(app),"web-os"=>super::webos::setup(app),_=>view!{<p class="dim">"Kodi supports multiple players. One LG webOS TV, Home Assistant server, Hue bridge and infrared transmitter are supported."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared uses the built-in blaster with a separate codeset on each room device."</p>}.into_any()}}
         </section>
     }.into_any()
 }
@@ -34,15 +35,15 @@ fn saved(app: App, c: Connection) -> AnyView {
     let id = c.id.clone();
     let usage=app.config.get_untracked().map(|cfg|cfg.devices().filter(|(_,d)|matches!(&d.integration,couch_model::Integration::Connection{connection_id,..} if connection_id==&id)).count()).unwrap_or(0);
     let edit = match c.provider {
-        Provider::Kodi { .. } => local_form(app, Some(c.clone()), false),
+        Provider::Kodi { .. } => view!{ {local_form(app, Some(c.clone()), false)} {super::kodi::setup(app, &c)} }.into_any(),
         Provider::Ir => local_form(app, Some(c.clone()), true),
-        Provider::HomeAssistant => super::home_assistant::setup(app),
-        Provider::Hue => super::hue::setup(app),
-        Provider::WebOs => super::webos::setup(app),
+        Provider::HomeAssistant => super::home_assistant::setup(app, &c),
+        Provider::Hue => super::hue::setup(app, &c),
+        Provider::WebOs => super::webos::setup(app, &c),
     };
     view!{<section class="card saved-connection"><h2>{title}</h2><p>{format!("{label} · {usage} assigned devices")}</p>
         <p class="dim">{match &c.provider{Provider::Kodi{host,port}=>format!("{host}:{port} · Saved address"),Provider::Ir=>"Built-in transmitter · Sending is currently unavailable on this device".into(),_=>"Credentials are kept privately on the remote".into()}}</p>
-        <details><summary>"Connection settings"</summary>{edit}</details>
+        <details open=usage==0><summary>"Connection settings"</summary>{edit}</details>
         <p class="dim">"Removing a connection requires removing its assigned devices first. Bridge credentials are retained for reconnecting."</p>
         {ui::danger_button("Remove connection",move ||app.run(api::delete(format!("/api/connections/{id}"))))}
     </section>}.into_any()
@@ -89,4 +90,12 @@ pub(super) fn label(c: &Connection) -> String {
     } else {
         format!("{} · {}", c.name, c.provider.label())
     }
+}
+
+fn create_named(app:App, provider:Provider)->AnyView {
+    let name=RwSignal::new(String::new());
+    view!{<form on:submit=move |e|{e.prevent_default();let name=name.get_untracked().trim().to_string();if !name.is_empty(){app.run(api::post("/api/connections",json!({"name":name,"provider":provider})));}}>
+    {field("Connection name",name,"Living room TV / Upstairs bridge")}
+    <p class="dim">"Create a named connection, then enter its address and pair it in Connection settings above."</p>
+    <button type="submit" class="primary">"Create connection"</button></form>}.into_any()
 }

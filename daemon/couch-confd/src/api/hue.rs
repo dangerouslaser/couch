@@ -2,10 +2,10 @@ use super::Reply;
 use couch_hue::{settings::Settings, Command};
 use serde::Deserialize;
 use serde_json::json;
-use std::{path::PathBuf, sync::Mutex};
+use std::path::PathBuf;
 
 // Serialize configuration changes and commands so they cannot cross servers.
-static CONNECTION: Mutex<()> = Mutex::new(());
+
 #[derive(Deserialize)]
 struct Setup {
     url: String,
@@ -16,13 +16,19 @@ struct Action {
     brightness: Option<u8>,
 }
 pub(super) fn route(method: &str, path: &[&str], body: &[u8]) -> Reply {
-    let Ok(_guard) = CONNECTION.lock() else {
-        return Reply::error(503, "Hue connection is busy");
-    };
     let file = PathBuf::from(
         std::env::var("COUCH_HUE_CONNECTION")
             .unwrap_or_else(|_| "/opt/couch/hue-connection.json".into()),
     );
+    route_at(method,path,body,file)
+}
+pub(super) fn route_at(method: &str,path:&[&str],body:&[u8],file:PathBuf)->Reply {
+    if let Some(parent)=file.parent(){if std::fs::create_dir_all(parent).is_err(){return Reply::error(500,"Cannot create private connection directory");}}
+    let connection_lock=super::connections::lock_for(&file);
+    let Ok(_guard) = connection_lock.try_lock() else {
+        return Reply::error(503, "Hue connection is busy");
+    };
+
     let saved = Settings::load(&file);
     if method == "GET" && path == ["connection"] {
         return Reply::json(

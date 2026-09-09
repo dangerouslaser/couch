@@ -1,0 +1,32 @@
+# Remote settings
+
+Open **Remote settings** in the configuration web UI (`/settings`). Clock/dock
+preferences and accent color live here; appearance was moved out of Areas.
+
+- **Timezone:** choose an installed IANA region, or follow the system timezone.
+  Regional rules apply daylight saving changes automatically; `tzdata` is included
+  by `tools/provision-alpine.sh`.
+- **Time format:** 12-hour with AM/PM, or 24-hour. Applies to the status bar and dock.
+- **Show a digital clock while charging:** after the normal dim timeout, keep a dim
+  clock on the display instead of switching the panel off. Enabled by default.
+  A small position change each minute avoids keeping glyphs fixed in one place.
+
+Tap or press a key to dismiss the clock. The wake action is consumed so it does
+not activate the underlying room/device; holding a wake key does not send repeats.
+The microphone key retains its hold-to-talk behavior. Undocking dismisses the clock
+and starts the usual idle timers. Pairing, setup and recording take precedence.
+
+The kernel battery status (`Charging` or `Full`) enables the dock behavior. It
+also applies while charging over USB; this hardware interface does not identify
+the physical dock separately. Charger presence without active charging is not
+sufficient. Normal dim/off timeouts remain adjustable on the remote itself.
+
+Settings are stored in `config.json` under `remote`, with backward-compatible
+defaults. `PUT /api/remote` validates timezone against `GET /api/remote/timezones`.
+The GUI reads updates without restarting. A worker formats the clock using local
+tzdata once a minute or when settings change; timezone subprocesses never block
+rendering. No system-wide timezone file or clock is changed.
+
+Validation includes browser save/reload, timezone path traversal rejection and
+an on-device mount-namespace fixture for charging, time format changes and wake.
+Physical dock detection should be checked against the real charging indicator.

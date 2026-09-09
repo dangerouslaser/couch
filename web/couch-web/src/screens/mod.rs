@@ -24,6 +24,7 @@ pub fn render(app: App, config: &Config, route: Route) -> AnyView {
         Route::Overview => overview::overview(app, config),
         Route::Rooms => overview::rooms(app, config),
         Route::Connections => overview::connections(app, config),
+        Route::Settings => remote::screen(app, config),
         Route::Areas => areas::list(app, config),
         Route::Area(id) => areas::detail(app, config, &id),
         Route::Room(id) => rooms::detail(app, config, &id),
@@ -255,3 +256,7 @@ mod device_picker;
 mod appearance;
 
 mod webos;
+
+mod kodi;
+
+mod remote;

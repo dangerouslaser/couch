@@ -106,9 +106,9 @@ impl Config {
             check_entity(&mut problems, &mut connection_ids, "connections", i, &c.id, &c.name);
             if let crate::Provider::Kodi{host,port}=&c.provider {
                 if host.trim().is_empty() || *port==0 { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Kodi needs an address and a TCP port from 1 to 65535".into()}); }
-            } else if self.connections[..i].iter().any(|old|old.provider.kind()==c.provider.kind()) {
-                problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Only one connection of this type is supported".into()});
             }
+            if c.provider==crate::Provider::Ir && self.connections[..i].iter().any(|old|old.provider==crate::Provider::Ir) { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Use the built-in IR connection and configure a separate codeset on each device".into()}); }
+            if c.id.as_str().len()>128 || !c.id.as_str().bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-' || b==b'_') { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Connection IDs must be safe alphanumeric identifiers".into()}); }
         }
         for (room,device) in self.devices() {
             if let crate::Integration::Connection{connection_id,resource_id}=&device.integration {

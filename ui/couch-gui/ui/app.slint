@@ -17,6 +17,9 @@ import { WifiSetup } from "components/wifi_setup.slint";
 export { LiveActivity, RoomRow, SceneCell }
 
 export component App inherits Window {
+    in-out property <bool> dock-clock-shown: false;
+    in-out property <int> dock-clock-shift: 0;
+
     width: 480px;
     height: 800px;
     background: Theme.bg;
@@ -112,7 +115,7 @@ export component App inherits Window {
     callback close-chooser();
 
     callback open-activity(string);
-    callback open-tv(string);
+    callback open-tv(string,string);
     callback tv-action(string);
     in-out property <bool> tv-shown: false;
     in-out property <string> tv-title;
@@ -503,5 +506,32 @@ export component App inherits Window {
         target: root.volume-target;
         value: root.volume;
         shown: root.volume-shown;
+    }
+    if root.dock-clock-shown: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #050505;
+        Text {
+            x: 24px;
+            y: 300px + root.dock-clock-shift * 16px;
+            width: parent.width - 48px;
+            height: 100px;
+            text: root.clock;
+            font-size: 62px;
+            font-weight: 600;
+            color: #b4b4b4;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            x: 24px;
+            y: 420px + root.dock-clock-shift * 16px;
+            width: parent.width - 48px;
+            height: 32px;
+            text: "Charging · " + root.battery + "%";
+            font-size: 20px;
+            color: #737373;
+            horizontal-alignment: center;
+        }
     }
 }

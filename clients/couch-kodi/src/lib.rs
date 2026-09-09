@@ -14,6 +14,7 @@
 //! not block - a wedged read is a frozen screen with no way back.
 
 mod error;
+pub mod settings;
 pub mod playback;
 mod http;
 mod net;

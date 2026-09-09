@@ -168,7 +168,7 @@ pub struct RoomMonitor {
     latest: std::collections::HashMap<Id, i32>,
 }
 impl RoomMonitor {
-    pub fn new(hue: std::sync::Arc<couch_hue::live::Live>) -> Self {
+    pub fn new(hue: std::sync::Arc<crate::connections::HueFleet>) -> Self {
         use std::{
             collections::HashMap,
             time::{Duration, Instant},
@@ -190,10 +190,7 @@ impl RoomMonitor {
                         )
                     });
                     if has_ha && ha_at.elapsed() >= Duration::from_secs(5) {
-                        ha_states = couch_ha::settings::Settings::load(&path("ha-connection.json"))
-                            .and_then(|s| s.client())
-                            .and_then(|c| c.lights())
-                            .unwrap_or_default()
+                        ha_states = crate::connections::ha_lights()
                             .into_iter()
                             .map(|s| (s.entity_id, s.on))
                             .collect();

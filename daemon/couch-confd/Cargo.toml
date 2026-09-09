@@ -26,3 +26,5 @@ couch-ha = { path = "../../clients/couch-ha" }
 couch-hue = { path = "../../clients/couch-hue" }
 
 couch-webos = { path = "../../clients/couch-webos" }
+
+couch-kodi = { path = "../../clients/couch-kodi" }

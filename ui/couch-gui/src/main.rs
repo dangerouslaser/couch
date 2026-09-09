@@ -24,6 +24,8 @@ mod lights;
 mod scenes;
 mod activity;
 mod tv;
+mod connections;
+mod remote_clock;
 mod activity_art;
 mod icons;
 use home::Area;
@@ -680,10 +682,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if pointer.present() { "present" } else { "absent" }
     );
 
-    // Cached because reading it spawns a process; the offset only changes when
-    // the timezone does.
-    let mut tz_offset = system::utc_offset_seconds();
-    let mut tz_checked = now_monotonic_us();
+    let remote_clock = remote_clock::Clock::new();
+    let mut dock_clock_enabled = true;
+    let mut swallow_dock_repeats = false;
     // COUCH_OPEN presses OK on whatever COUCH_FOCUS selected, so the chooser
     // can be photographed without driving the keypad. Fired from the loop a
     // moment in rather than here: a property set before the first frame has
@@ -869,10 +870,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 in_sum += press.latency_us;
                 in_max = in_max.max(press.latency_us);
             }
+            if !press.repeat {swallow_dock_repeats = app.get_dock_clock_shown();}
+            if press.repeat && swallow_dock_repeats {continue;}
             last_input = now_monotonic_us();
             // A key on a dark panel wakes it and does nothing else - except
             // the microphone key, whose press is the whole intent.
-            let swallow = standby == Standby::Off && press.mic != Some(true);
+            let swallow = (standby == Standby::Off || app.get_dock_clock_shown()) && press.mic != Some(true);
+            app.set_dock_clock_shown(false);
             if standby != Standby::Active {
                 println!("couch-gui: standby: wake on key ({:?})", standby);
                 if standby == Standby::Off { light_controls.wake(); }
@@ -938,6 +942,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match touch_disposition(standby, &event, &mut swallow_wake_touch) {
                 TouchDisposition::Ignore => continue,
                 TouchDisposition::Wake => {
+                    app.set_dock_clock_shown(false);
                     wake(&mut screen, active_level.get());
                     standby = Standby::Active;
                     last_input = now_monotonic_us();
@@ -1060,11 +1065,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Device state changes in seconds, not frames.
         if now - last_tick > 1_000_000 {
             last_tick = now;
-            if now - tz_checked > 3_600_000_000 {
-                tz_offset = system::utc_offset_seconds();
-                tz_checked = now;
+            if let Some((clock, settings)) = remote_clock.poll() {
+                app.set_clock(clock.into());
+                dock_clock_enabled = settings.dock_clock;
             }
-            app.set_clock(SharedString::from(system::clock_24h(tz_offset)));
             if let Some((raw, saved, accent)) = home::read(&loaded_home) {
                 home::apply_accent(&app,accent);
                 // Appearance updates in overlays too; defer home navigation changes
@@ -1092,7 +1096,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_battery(b.percent);
                     app.set_charging(b.charging);
                 }
-                None => app.set_battery(0),
+                None => {app.set_battery(0);app.set_charging(false);},
             }
             app.set_wifi_level(system::wifi_level());
             app.set_wifi_ssid(system::wifi_ssid().into());
@@ -1121,7 +1125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // the panel awake and restarts the clock; otherwise it dims, then
             // powers down, on the two idle timers.
             let hold = app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown() || app.get_light_shown();
-            let idle = now.saturating_sub(last_input);
+            let mut idle = now.saturating_sub(last_input);
             // The panel is meant to be showing something in every state but
             // Off. If the driver says it is asleep anyway - it has happened,
             // with nothing in this process asking - bring it back now rather
@@ -1134,7 +1138,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Off-after of 0 means never power the panel down, only dim.
             let off_us = off_after_us.get();
-            if hold {
+            let dock = dock_clock_enabled && app.get_charging() && !hold;
+            if !dock && app.get_dock_clock_shown() {
+                app.set_dock_clock_shown(false);
+                wake(&mut screen, active_level.get());
+                standby = Standby::Active;
+                last_input = now;
+                idle = 0;
+            }
+            if dock && idle >= dim_after_us.get() {
+                if standby == Standby::Off {wake(&mut screen, dim_level.get());}
+                if !app.get_dock_clock_shown() {Panel::set_backlight(dim_level.get());}
+                standby = Standby::Dim;
+                app.set_dock_clock_shown(true);
+                app.set_dock_clock_shift(((now / 60_000_000) % 5) as i32);
+            } else if hold {
+                app.set_dock_clock_shown(false);
                 last_input = now;
                 if standby != Standby::Active {
                     println!("couch-gui: standby: wake to show something ({:?})", standby);

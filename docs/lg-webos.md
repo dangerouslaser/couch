@@ -2,11 +2,12 @@
 
 Couch's Rust `couch-webos` client controls LG TVs over the SSAP WebSocket
 protocol. The Rust/Wasm configuration UI uses the Rust daemon's authenticated
-`/api/webos` routes; credentials are never included in exported house config.
+`/api/connections/{id}/webos` routes; credentials are never included in exported house config.
 
 ## Setup
 
-Open **Connections → Add a connection → LG webOS TV**. Turn on the TV,
+Open **Connections → Add a connection → LG webOS TV**, name the connection,
+and create it. Turn on the TV,
 enter its IP address, click **Pair TV**, and approve the prompt on the TV.
 If needed, enable LG Connect Apps/mobile-device control in the TV settings.
 Pairing waits up to 60 seconds. Saved credentials can be checked and adopted
@@ -15,15 +16,16 @@ with **Test connection & save**, without prompting again.
 Then open **Rooms & devices**, choose a room and the LG connection, and add
 the TV. Connection settings and the room's TV card provide status, volume,
 mute, input selection and app launch controls. Input/app buttons change the TV
-only when clicked. One LG TV is supported currently; re-pairing with another
-TV replaces this connection's private credentials. Removing the connection
+only when clicked. Add a separately named connection for each TV. Pairings,
+certificates, wake addresses and native control sessions are isolated by connection ID. Removing a connection
 requires removing its room assignments first and retains credentials.
 
 Encrypted `wss://IP:3001/` is the default. Explicit pairing trusts and pins
 the TV's certificate. Normal connections require that same certificate.
 The optional legacy checkbox uses unencrypted `ws://IP:3000/`; there is no
-silent security downgrade. Credentials live at `/opt/couch/webos-connection.json`
-(mode 0600); `COUCH_WEBOS_CONNECTION` overrides that location for daemon tests.
+silent security downgrade. Credentials live at `/opt/couch/connections/<id>/webos-connection.json`
+(mode 0600). Existing singleton credentials and wake settings migrate once; the
+original files remain available for rollback. See [connection storage](connections.md).
 
 ## Client and validation
 
