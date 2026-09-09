@@ -14,6 +14,14 @@ GUI heartbeats advanced and no TX errors were logged. These establish bounded
 DMA completion and repeated-write cleanup; **optical emission and actual target
 control remain unvalidated**.
 
+A subsequent single Volume Up test against an LG B4 OLED produced **no observed
+TV response**, although the API returned `sent: true` and the GUI remained
+responsive. The command was NEC address `0x04`, command `0x02`, with zero repeats,
+from the bundled LG C1 record; C9, OLED65C8PUA and MR21GC records agree. The user
+confirmed the original remote works from the same position. This is a failed
+end-to-end test, not evidence of working optical output; emitter routing, carrier
+timing and target compatibility remain under investigation. No retry was sent.
+
 The driver requests `/dev/irtx` mode 0600; runtime mdev sets 0660 (observed 10:61).
 The effective DT selects PWM channel 0, inversion 0. Read-only GPIO inspection
 confirmed GPIO8 mode 2, the MT6580 `PWM_A` function. Current IR probe and vendor
