@@ -153,7 +153,7 @@ The fifth controlled attempt completed the READY exchange and uploaded both unpa
 
 Bulk transfers can terminate with a zero-length packet. The input adapter now accepts at most eight such empty transfers per logical read, retains all nonempty bytes and keeps the existing operation deadline. Oversized transfers remain fatal with explicit lengths; partition-read errors include offset and requested size without exposing contents. These changes are covered by mock tests and await the next controlled capture. [libusb transfer termination](https://libusb.sourceforge.io/api-1.0/group__libusb__asyncio.html), [packet sizing](https://libusb.sourceforge.io/api-1.0/libusb_packetoverflow.html).
 
-CID representation was checked privately against the same unit's runtime baseline. The pinned upstream parser reads two big-endian 64-bit values, but its diagnostic formatter emits them as little-endian, so printed CID text is not canonical. Recovering the wire bytes and rendering their four little-endian 32-bit registers in big-endian order exactly matched Linux sysfs. This is a hardware-confirmed conversion for the tested MT6580 legacy path, not a general claim about other DAs. The adapter preserves its original wire-based `storage_id` and adds `runtime_cid_sha256` with an explicit encoding label. Baseline comparison accepts only this fixed representation; no alternate permutations are attempted. Synthetic tests cover distinct byte positions and rejection of the raw wire encoding as a runtime CID. A complete live USB backup still needs validation. [Pinned upstream parser/formatter](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_flash_param.py#L130), [Linux CID formatting](https://github.com/torvalds/linux/blob/master/drivers/mmc/core/mmc.c).
+CID representation was checked privately against the same unit's runtime baseline. The pinned upstream parser reads two big-endian 64-bit values, but its diagnostic formatter emits them as little-endian, so printed CID text is not canonical. Recovering the wire bytes and rendering their four little-endian 32-bit registers in big-endian order exactly matched Linux sysfs. This is a hardware-confirmed conversion for the tested MT6580 legacy path, not a general claim about other DAs. The adapter preserves its original wire-based `storage_id` and adds `runtime_cid_sha256` with an explicit encoding label. Baseline comparison accepts only this fixed representation; no alternate permutations are attempted. Synthetic tests cover distinct byte positions and rejection of the raw wire encoding as a runtime CID. Attempt six subsequently validated the complete USB identity backup (below). [Pinned upstream parser/formatter](https://github.com/bkerler/mtkclient/blob/60e07f3b343a4469389f15967626d63e049968d4/mtkclient/Library/DA/legacy/dalegacy_flash_param.py#L130), [Linux CID formatting](https://github.com/torvalds/linux/blob/master/drivers/mmc/core/mmc.c).
 
 
 ## Verified USB identity capture; teardown still unresolved
@@ -163,3 +163,19 @@ Attempt six completed both GPT checks, matched the runtime CID and layout, compa
 The process subsequently returned an error during USB teardown (`ENOENT`). This does not invalidate the verified files, but it does prevent claiming a cleanly closed session or a restored GUI. The operator must confirm normal Couch operation separately. Teardown now identifies each failing release, driver reattachment or resource-disposal operation; unexplained ENOENT remains fatal. New reports distinguish successful readback (`complete`) from successful teardown (`usb_cleanup_verified`).
 
 The CLI now announces GPT completion, each runtime-baseline partition check, backup and independent readback, then the start of teardown. Baseline verification reads 60 MiB before creating the destination; backup and readback add another 120 MiB. Several minutes without a destination was therefore not proof of a stalled session. Each transfer remains limited to 1 MiB and ten seconds, with no automatic reconnect or reset.
+
+
+### Return to normal Couch after capture six
+
+After the physical power cycle, the unit selected Couch recovery because the BCB
+still contained `boot-recovery`. USB serial access confirmed the stock recovery
+kernel. Both boot and recovery partition hashes exactly matched the private
+pre-capture baseline. Clearing only the first 512 bytes of `para` and rebooting
+restored the normal Couch kernel, network access and GUI process; a later check
+confirmed the BCB had cleared after the normal startup interval. No boot image
+was reflashed. USB teardown itself still needs validation; this manual recovery
+must not be presented as automatic installer completion.
+
+Before a controlled reboot from running Couch, allow its 90-second startup
+interval to finish and verify the BCB state. Rebooting while it remains armed
+can select recovery even when the normal image is intact.
