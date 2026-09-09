@@ -6,4 +6,4 @@ Preview from the repository root with `python3 -m http.server 8098 --directory s
 
 The palette and typography follow `docs/mockups/webos-activity/`: warm paper `#eeeae5`, ink `#25232c`, muted text `#68626f`, and purple `#c4a2ff`. The Couch wordmark uses Inter at weight 800 and letter spacing −2px. The flat HTML/CSS home-screen example follows `ui/couch-gui/ui/screens/home_hub.slint` and `components/status_bar.slint`: activity strip, room cards, area dots, scenes row. All names and counts are generic example data; no personal device configuration or screenshots are published.
 
-Inter is bundled under the SIL Open Font License; see `assets/INTER-LICENSE.txt`. No external artwork, analytics, fonts, or scripts are loaded.
+Inter is bundled under the SIL Open Font License; see `assets/INTER-LICENSE.txt`. Icons are unmodified SVGs copied from `assets/lucide/` in the repository and colored with CSS masks. Their ISC/Feather MIT notices are included in `site/assets/lucide/LICENSE`. No external artwork, analytics, fonts, or scripts are loaded.
