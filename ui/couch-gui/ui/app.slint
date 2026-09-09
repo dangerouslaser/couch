@@ -1,3 +1,4 @@
+import { Television } from "screens/tv.slint";
 import { Cinema, PlayerChoice } from "screens/cinema.slint";
 export { PlayerChoice }
 import { Theme } from "theme.slint";
@@ -111,6 +112,13 @@ export component App inherits Window {
     callback close-chooser();
 
     callback open-activity(string);
+    callback open-tv(string);
+    callback tv-action(string);
+    in-out property <bool> tv-shown: false;
+    in-out property <string> tv-title;
+    in-out property <string> tv-status;
+    in-out property <string> tv-error;
+    public function focus-tv(){television.take-focus();}
     callback player-action(string,float);
     in-out property <bool> player-shown: false;
     in-out property <bool> player-ready: false;
@@ -356,6 +364,12 @@ export component App inherits Window {
         back => {root.light-back();}
     }
 
+    television := Television {
+        visible:root.tv-shown;shown:root.tv-shown;
+        width:parent.width;height:parent.height;
+        title:root.tv-title;status:root.tv-status;error:root.tv-error;
+        action(name)=>{root.tv-action(name);}
+    }
     cinema := Cinema {
         visible:root.player-shown;
         shown:root.player-shown;

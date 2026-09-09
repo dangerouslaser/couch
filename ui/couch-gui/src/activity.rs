@@ -245,6 +245,15 @@ impl Controller {
         self.error_until = Some(Instant::now() + Duration::from_secs(4));
     }
     fn open(&mut self, app: &App, id: &str) {
+        if let Some(config) = std::fs::read(home::path("config.json")).ok().and_then(|b|serde_json::from_slice::<Config>(&b).ok()) {
+            let source = config.activities.iter().find(|a|a.id.as_str()==id).and_then(|a|a.source.as_ref());
+            if let Some((_, device)) = config.devices().find(|(_,d)|Some(&d.id)==source) {
+                if matches!(config.resolve_integration(&device.integration),Some(Integration::WebOs)) {
+                    app.invoke_open_tv(device.name.as_str().into());
+                    return;
+                }
+            }
+        }
         self.generation += 1;
         self.busy = false;
         self.snapshot = None;

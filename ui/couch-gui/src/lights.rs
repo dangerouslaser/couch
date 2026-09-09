@@ -493,6 +493,8 @@ impl Controller {
                         let cfg=std::fs::read(home::path("config.json")).ok().and_then(|b|serde_json::from_slice::<Config>(&b).ok());
                         let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
                         if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
+                        let tv=cfg.as_ref().and_then(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration))).is_some_and(|i|matches!(i,Integration::WebOs));
+                        if tv {app.invoke_open_tv(e.name.as_str().into());continue;}
                         app.set_light_detail(
                             "Controls for this device are not available yet.".into(),
                         );

@@ -443,7 +443,8 @@ impl Client {
         )
         .map(|_| ())
     }
-    pub fn button(&mut self, button: Button) -> Result<()> {
+    /// Open the navigation socket without sending a key.
+    pub fn prepare_input(&mut self) -> Result<()> {
         if self.pointer.is_none() {
             let v = self.request(
                 "ssap://com.webos.service.networkinput/getPointerInputSocket",
@@ -460,7 +461,48 @@ impl Client {
             }
             self.pointer = Some(connect_socket(raw, self.pin.clone(), self.timeout)?);
         }
+        Ok(())
+    }
+    pub fn channel(&mut self, up: bool) -> Result<()> {
+        self.request(
+            if up {
+                "ssap://tv/channelUp"
+            } else {
+                "ssap://tv/channelDown"
+            },
+            json!({}),
+        )
+        .map(|_| ())
+    }
+    pub fn button(&mut self, button: Button) -> Result<()> {
+        self.prepare_input()?;
         let pointer = self.pointer.as_mut().unwrap();
+        // Service idle pings and detect a closed pointer before sending a new key.
+        pointer.get_ref().timeout(Duration::from_millis(1))?;
+        for _ in 0..8 {
+            match pointer.read() {
+                Ok(Message::Ping(_)) => {
+                    pointer.flush().map_err(|_| Error::Transport)?;
+                }
+                Ok(Message::Close(_)) => {
+                    self.pointer = None;
+                    return Err(Error::Transport);
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break
+                }
+                Err(_) => {
+                    self.pointer = None;
+                    return Err(Error::Transport);
+                }
+            }
+        }
         pointer.get_ref().timeout(self.timeout)?;
         if pointer
             .send(Message::Text(
@@ -606,6 +648,53 @@ mod tests {
             Client::connect(&settings),
             Err(Error::PairingRequired)
         ));
+        server.join().unwrap();
+    }
+    #[test]
+    fn navigation_uses_pointer_socket_and_channels_use_ssap() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let pointer_url = format!("{}pointer", url);
+        let server = std::thread::spawn(move || {
+            let mut control = tungstenite::accept(listener.accept().unwrap().0).unwrap();
+            receive(&mut control);
+            send(
+                &mut control,
+                json!({"type":"registered","payload":{"client-key":"test-key"}}),
+            );
+            let request = receive(&mut control);
+            assert!(request["uri"]
+                .as_str()
+                .unwrap()
+                .ends_with("getPointerInputSocket"));
+            send(
+                &mut control,
+                json!({"id":request["id"],"type":"response","payload":{"socketPath":pointer_url}}),
+            );
+            let mut pointer = tungstenite::accept(listener.accept().unwrap().0).unwrap();
+            assert_eq!(
+                pointer.read().unwrap().to_text().unwrap(),
+                "type:button\nname:ENTER\n\n"
+            );
+            assert_eq!(
+                pointer.read().unwrap().to_text().unwrap(),
+                "type:button\nname:BACK\n\n"
+            );
+            for uri in ["ssap://tv/channelUp", "ssap://tv/channelDown"] {
+                let request = receive(&mut control);
+                assert_eq!(request["uri"], uri);
+                send(
+                    &mut control,
+                    json!({"id":request["id"],"type":"response","payload":{"returnValue":true}}),
+                );
+            }
+        });
+        let (mut client, _) = Client::pair(&url).unwrap();
+        client.prepare_input().unwrap();
+        client.button(Button::Enter).unwrap();
+        client.button(Button::Back).unwrap();
+        client.channel(true).unwrap();
+        client.channel(false).unwrap();
         server.join().unwrap();
     }
     #[test]

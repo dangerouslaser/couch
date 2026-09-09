@@ -23,6 +23,7 @@ mod home;
 mod lights;
 mod scenes;
 mod activity;
+mod tv;
 mod activity_art;
 mod icons;
 use home::Area;
@@ -302,6 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut room_monitor = home::RoomMonitor::new(light_controls.hue_live());
     let mut scene_controls = scenes::Controller::new(&app);
     let mut activity_controls = activity::Controller::new(&app);
+    let mut tv_controls = tv::Controller::new(&app);
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
 
@@ -847,7 +849,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (app.get_light_shown(), app.get_chooser_shown(), app.get_settings_shown(),
          app.get_keyboard_shown(), app.get_wifi_setup_shown(), app.get_pair_shown(),
          app.get_setup_mode(), app.get_recording()),
-        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(), app.get_player_shown(),
+        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(), app.get_player_shown(), app.get_tv_shown(),
     );
     let mut last_feedback_page = feedback_page(&app);
     let dismiss_feedback = |app: &App, scenes: &mut scenes::Controller, lights: &mut lights::Controller| {
@@ -888,6 +890,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if swallow {
                 continue;
+            }
+            if press.menu == Some(true) && app.get_tv_shown() && !app.get_pair_shown() {
+                app.invoke_tv_action("menu".into());
             }
             // Hold to talk. The key is not routed into the UI: it opens the
             // microphone and nothing else, so there is no screen on which it
@@ -1001,7 +1006,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // over. The state it shows - the SSID, whether SSH is up - is read here,
         // once, at open time rather than on the tick.
         if let Some(t) = menu_down_at {
-            let on_home = !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
+            let on_home = !app.get_tv_shown() && !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_settings_shown()
                 && !app.get_keyboard_shown()
                 && !app.get_chooser_shown()
                 && !app.get_pair_shown()
@@ -1064,7 +1069,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 home::apply_accent(&app,accent);
                 // Appearance updates in overlays too; defer home navigation changes
                 // until returning home so an open device control remains in place.
-                if !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
+                if !app.get_tv_shown() && !app.get_player_shown() && !app.get_light_shown() && !app.get_wifi_setup_shown() && !app.get_keyboard_shown() && !app.get_settings_shown() && !app.get_chooser_shown() {
                     loaded_home = raw; *areas.borrow_mut() = saved;
                     current.set(0); app.set_area_dots(ModelRc::new(VecModel::from(vec![true;areas.borrow().len()])));
                     put_front(&app,0);
@@ -1183,6 +1188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         activity_controls.poll(&app);
+        tv_controls.poll(&app);
         if feedback_page(&app) != last_feedback_page {
             dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
         }

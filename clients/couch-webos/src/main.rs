@@ -47,6 +47,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             })?;
             None
         }
+        "check-input" => {
+            client.prepare_input()?;
+            println!("Navigation socket connected; no key sent.");
+            None
+        }
         "inputs" => Some(client.inputs()?),
         "input" => {
             client.select_input(get(2)?)?;

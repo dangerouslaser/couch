@@ -1,0 +1,48 @@
+import { Theme } from "../theme.slint";
+component TvButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    callback activate();
+    border-radius:16px;background:root.primary ? Theme.accent : #27242d;
+    Text {text:root.label;color:root.primary ? #ffffff : #eeecf1;font-size:22px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;width:parent.width;height:parent.height;}
+    TouchArea {clicked=>{root.activate();}}
+}
+export component Television inherits Rectangle {
+    in property <bool> shown;
+    in property <string> title;
+    in property <string> status;
+    in property <string> error;
+    callback action(string);
+    public function take-focus(){keys.focus();}
+    background:#111014;
+    Text {x:24px;y:26px;width:parent.width - 48px;height:44px;text:root.title;color:#ffffff;font-size:30px;font-weight:700;overflow:elide;}
+    Text {x:24px;y:80px;width:parent.width - 48px;height:32px;text:root.status;color:#c4bfcf;font-size:22px;}
+    Text {x:24px;y:125px;width:parent.width - 48px;height:48px;text:"D-pad, OK and Back control your TV";color:#c4bfcf;font-size:20px;wrap:word-wrap;}
+    for name[i] in ["↑","←","OK","→","↓"]: TvButton {
+        x:i==0 || i==2 || i==4 ? (parent.width - 88px)/2 : i==1 ? (parent.width - 88px)/2 - 100px : (parent.width - 88px)/2 + 100px;
+        y:i==0 ? 187px : i==4 ? 383px : 285px;width:88px;height:88px;label:name;primary:i==2;
+        activate=>{root.action(i==0 ? "up" : i==1 ? "left" : i==2 ? "ok" : i==3 ? "right" : "down");}
+    }
+    for name[i] in ["TV Back","TV Home","TV Menu","Mute","Unmute","Reconnect","Play","Pause"]: TvButton {
+        x:24px+mod(i,3)*148px;y:490px+floor(i/3)*62px;width:136px;height:52px;label:name;
+        activate=>{root.action(i==0 ? "back" : i==1 ? "home" : i==2 ? "menu" : i==3 ? "mute" : i==4 ? "unmute" : i==5 ? "retry" : i==6 ? "play" : "pause");}
+    }
+    TvButton {x:24px;y:parent.height - 88px;width:parent.width - 48px;height:64px;label:"Return to Couch";activate=>{root.action("close");}}
+    if root.error!="": Rectangle {x:18px;y:172px;width:parent.width - 36px;height:135px;background:#432a42;border-radius:14px;
+        Text {x:16px;y:12px;width:parent.width - 32px;height:parent.height - 24px;text:root.error;wrap:word-wrap;color:#ffffff;font-size:20px;}
+    }
+    keys:=FocusScope {enabled:root.shown;key-pressed(e)=>{
+        if(e.text==Key.UpArrow){root.action("up");}
+        if(e.text==Key.DownArrow){root.action("down");}
+        if(e.text==Key.LeftArrow){root.action("left");}
+        if(e.text==Key.RightArrow){root.action("right");}
+        if(e.text==Key.Return){root.action("ok");}
+        if(e.text==Key.Home){root.action("close");}
+        if(e.text==Key.Escape){root.action("back");}
+        if(e.text==Key.F23){root.action("volume-up");}
+        if(e.text==Key.F24){root.action("volume-down");}
+        if(e.text==Key.F21){root.action("channel-up");}
+        if(e.text==Key.F22){root.action("channel-down");}
+        return accept;
+    }}
+}

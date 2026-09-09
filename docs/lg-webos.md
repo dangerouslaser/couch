@@ -36,17 +36,41 @@ couch-webos /private/path/tv.json watch
 
 The library also supports playback, navigation buttons, subscriptions and
 Wake-on-LAN. WOL needs a MAC address and network wake enabled on the TV.
-These functions are not yet mapped to a dedicated Slint TV control screen or
-activity steps. The current browser controls reconnect for each operation;
-the library supports persistent connections and interleaved push updates.
-Commands are never automatically retried.
+Open the TV device in a room (or an activity with the LG TV as its source)
+to enter the native Slint control screen:
+
+| Control | Action |
+| --- | --- |
+| D-pad / OK | Navigate / select on the TV |
+| Back | Back on the TV; stays in TV control mode |
+| Volume + / − | TV volume up / down |
+| Channel + / − | TV channel up / down (TV/app support required) |
+| Menu | TV menu |
+| Return to Couch (touch) / Home key | Exit TV control mode |
+
+Touch buttons also provide TV Home, explicit mute/unmute, play/pause and
+reconnect. TV navigation has no per-key acknowledgement. Volume status is
+read after volume commands and every five seconds while idle. The native
+controller owns persistent encrypted control/navigation sockets on a worker;
+it does not block rendering. Its input queue is bounded, old queued keys
+expire after 750ms, and leaving the screen invalidates queued commands and
+late UI replies. An already-sent command cannot be recalled. Failed commands
+are never automatically retried. Activity startup steps and WOL are not yet
+mapped to this screen; turn on the TV before connecting.
+
+The browser controls reconnect per operation. The library also supports
+interleaved push subscriptions.
 
 Validated against the physical TV at 192.168.1.176: encrypted pairing,
 status, inputs, apps, subscriptions, and unchanged-volume command; the ARM
 client also reads status from the remote. Browser checks cover adopting a
 saved pairing and adding the TV to a room. Unit tests cover request/event
 ordering, rejection, expired pairing, WOL packets, address validation and
-configuration round trips. Physical wake and navigation are not yet verified.
+configuration round trips. A physical-remote fixture verifies Slint input
+through Rust SSAP/pointer sockets for D-pad, OK, Back, volume, channels and
+exit. The physical GUI also raises and restores volume on the actual LG TV.
+Navigation-socket establishment is verified on that TV;
+physical wake is not yet verified.
 
 Protocol references: [Home Assistant's maintained SSAP client](https://github.com/home-assistant-libs/aiowebostv)
 and [webOS integration setup](https://www.home-assistant.io/integrations/webostv/).
