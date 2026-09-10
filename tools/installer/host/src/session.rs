@@ -64,6 +64,30 @@ pub struct SessionGuard {
     sequence: u32,
     poisoned: bool,
 }
+
+/// Create a new private application-state parent before creating a session in it.
+/// Never changes permissions of an existing directory. The caller must retain
+/// the SessionGuard while storing or executing private session inputs beneath it.
+pub fn create_private_parent(path: &Path) -> Result<()> {
+    let name = path.file_name().context("private parent needs a name")?;
+    ensure!(name != "." && name != "..", "invalid private parent name");
+    let parent = path
+        .parent()
+        .context("private parent needs an existing parent")?
+        .canonicalize()?;
+    ensure!(
+        parent.ancestors().all(|p| !p.join(".git").exists()),
+        "keep private state outside Git"
+    );
+    let target = parent.join(name);
+    private_dir(&target).context("private parent must be new")?;
+    #[cfg(windows)]
+    windows::validate_parent(&target)?;
+    #[cfg(target_os = "macos")]
+    macos::validate_parent(&target)?;
+    sync_directory(&parent)?;
+    Ok(())
+}
 impl SessionGuard {
     /// The parent must already exist. On Unix it must be owned by this user and private.
     /// Existing directories (including interrupted sessions) are always rejected.
@@ -226,6 +250,16 @@ fn publish(file: tempfile::NamedTempFile, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_parent_creation_is_exclusive_and_accepts_sessions() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("private-state");
+        super::create_private_parent(&parent).unwrap();
+        let session = super::SessionGuard::create(&parent.join("new-run")).unwrap();
+        assert_eq!(session.phase(), super::Phase::Created);
+        assert!(super::create_private_parent(&parent).is_err());
+        assert!(parent.join("new-run/event-00000.json").exists());
+    }
     use super::*;
     fn private_root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
