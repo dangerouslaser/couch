@@ -1,6 +1,8 @@
 //! TV control: one background owner, bounded input, no network on the UI thread.
 #[path = "tv_android.rs"]
 mod android;
+#[path = "tv_media.rs"]
+mod media;
 #[path = "tv_apple.rs"]
 mod apple;
 #[path = "tv_ir.rs"]
@@ -611,6 +613,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     }
 }
 pub struct Controller {
+    media: media::Controller,
     choices: Vec<(String, String, String)>,
     settings_app: Option<String>,
     connection: String,
@@ -636,6 +639,7 @@ impl Controller {
         let current = active.clone();
         std::thread::spawn(move || worker(requests, events, current));
         Self {
+            media: media::Controller::new(),
             choices: Vec::new(),
             settings_app: None,
             connection: String::new(),
@@ -679,6 +683,11 @@ impl Controller {
                 app.set_tv_apple(apple);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
+                if android {
+                    self.media.open(app, self.generation, connection);
+                } else {
+                    self.media.clear(app);
+                }
                 self.choices.clear();
                 self.settings_app = None;
                 app.set_tv_source(if app.get_tv_ir(){"Loading commands…"}else{"Connecting…"}.into());
@@ -771,6 +780,7 @@ impl Controller {
             }
             if action == "close" {
                 self.active.store(0, Ordering::SeqCst);
+                self.media.clear(app);
                 app.set_tv_shown(false);
                 app.set_tv_error("".into());
                 if app.get_light_shown() {
@@ -801,6 +811,7 @@ impl Controller {
                 }
             }
         }
+        self.media.poll(app);
         while let Ok(event) = self.rx.try_recv() {
             if event.generation != self.active.load(Ordering::SeqCst) || !app.get_tv_shown() {
                 continue;

@@ -868,7 +868,9 @@ dependencies = [
  "rsa",
  "rustls",
  "serde",
+ "serde_json",
  "sha2",
+ "url",
  "x509-parser",
 ]
 
@@ -916,6 +918,7 @@ name = "couch-gui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "couch-androidtv",
  "couch-control",
  "couch-denon",
  "couch-ha",

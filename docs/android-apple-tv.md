@@ -33,6 +33,38 @@ future additions. [Protocol implementation and schemas](https://github.com/troni
 Needed for hardware testing: **TV address/model and its displayed pairing code**.
 Default ports are configurable. The Connections finder uses Bonjour and also permits manual address entry.
 
+## Android TV now playing
+
+The TV screen also observes the standard Cast media namespace on port 8009 of
+that connection's address. This is independent of Remote v2: it attaches only to
+an already running media receiver and requests status. It never launches an app,
+loads content, or changes playback. Cast metadata does not use the Remote v2
+certificate pin; no pairing credentials are sent on this separate connection.
+
+Supported sessions supply title, subtitle, artwork, position, duration and player
+state. The screen shows a read-only timeline, freezes it while paused/buffering,
+and marks live streams without inventing an end time. Missing/expired metadata
+returns to the ordinary control screen. App/session changes discard old artwork.
+Artwork uses bounded HTTP(S) downloads and decoding on a separate worker; neither
+metadata nor images delay physical button commands. HTTPS artwork certificates
+are validated using bundled public roots.
+
+Plex, Jellyfin, YouTube, Netflix and other apps are handled through the same
+interface **when their active session exposes it**. Remote v2 alone cannot provide
+this information, and having Cast installed does not guarantee that every native
+app exposes its current playback. No ADB access, companion app or app-specific
+scraper is used. Per-app interoperability must be recorded after physical tests.
+
+The initial live check on the development TV received SmartTube’s title, duration,
+advancing position and play/pause state. Its media metadata contained no artwork
+field. A second live check of Wholphin (a Jellyfin client) reported *1917*, an
+artwork URL, duration, position and paused state. These observations verify the
+metadata path for those sessions, not every app or successful image rendering.
+
+References: [Cast MediaStatus](https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaStatus),
+[Cast MediaInformation](https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaInformation),
+[Cast Connect media sessions](https://developers.google.com/cast/docs/android_tv_receiver/core_features).
+
 ## Apple TV
 
 Use the Bonjour-advertised `_companion-link._tcp.local.` port with `Settings`;
