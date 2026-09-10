@@ -21,3 +21,6 @@ __pycache__/
 site/wasm/
 # Generated from the current production Slint WASM by the Pages workflow.
 site/usage/screenshots/
+
+# Private session notes and disposable review plans.
+/scratchpad/
