@@ -41,7 +41,8 @@ major 243. So this started on the **stock 3.18.79 vendor kernel, byte-for-byte**
 replacing only the ramdisk - and once everything else worked, rebuilt that
 kernel from MediaTek's public ALPS sources so it could be read, profiled and
 changed. The stock kernel is still what the recovery image boots, and still
-the only one with touch and IR. `docs/frankenkernel.md` is the plan and
+the independent rescue kernel. The custom kernel now supports touch and IR.
+`docs/frankenkernel.md` records the bring-up plan and
 `kernel/README.md` the working reference.
 
 The slot layout has been swapped since bring-up:

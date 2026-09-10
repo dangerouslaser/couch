@@ -127,8 +127,12 @@ def select_candidate(observed, expected):
 
 
 @contextmanager
-def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None, boot_after_capture=False):
-    """Gate an explicitly supplied backend for the read-only capture CLI.
+def connected_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None, boot_after_capture=False, device_factory=ConnectedMtkReader):
+    """Gate an explicitly supplied backend and device facade for a private session.
+
+    Startup remains read-only. The default facade exposes reads only; a private
+    trial may supply a writer factory after independently validating the target.
+    Public read_session does not accept this factory override.
 
     Factory must be side-effect-free until claim(), and expose enumerate(),
     claim(Candidate), claimed_candidate(), start_readonly(bytes, ReadPolicy),
@@ -159,7 +163,7 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
             require(backend.claimed_candidate() == candidate, "Backend claimed a different USB device")
             mtk = backend.start_readonly(data, ReadPolicy())
             verify_loaded_sources(pinned)
-            yield ConnectedMtkReader(mtk, REVIEWED_REVISION)
+            yield device_factory(mtk, REVIEWED_REVISION)
             if boot_after_capture:
                 backend.boot_after_capture()
         finally:
@@ -170,3 +174,10 @@ def read_session(checkout, loader, loader_sha256, lock_directory, expected, back
                 if original_error is None:
                     raise
                 print(f"USB cleanup also failed: {cleanup_error}", file=sys.stderr)
+
+
+def read_session(checkout, loader, loader_sha256, lock_directory, expected, backend_factory, *, candidate_provider=None, boot_after_capture=False):
+    """Read-only capture entry point; never accepts a writable device factory."""
+    return connected_session(checkout, loader, loader_sha256, lock_directory, expected,
+                             backend_factory, candidate_provider=candidate_provider,
+                             boot_after_capture=boot_after_capture)

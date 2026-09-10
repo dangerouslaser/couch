@@ -105,7 +105,7 @@ def identity_record(path):
     return {key: value[key] for key in ("device_id", "wifi_mac", "bluetooth_mac")}
 
 
-def load_release(path):
+def load_release(path, *, verify_images=True):
     path = regular(path).resolve()
     value = read_json(path)
     require(value.get("schema") == 1 and value.get("model") == MODEL, "Unsupported release/model")
@@ -118,11 +118,17 @@ def load_release(path):
         filename = image["file"]
         require(isinstance(filename, str) and Path(filename).name == filename and filename not in (".", ".."),
                 "Image filenames must be basenames inside the release directory")
+        require(isinstance(image["sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", image["sha256"]),
+                f"{name}: invalid image SHA-256 metadata")
+        # Restore binds to this exact manifest and independently verifies every
+        # original backup. Missing/corrupt installation payloads must not prevent
+        # recovery; metadata-only mode still validates all paths and allowlists.
+        if not verify_images:
+            continue
         source = regular(path.parent / filename)
         require(source.stat().st_size == value["partitions"][name]["size"],
                 f"{name}: expected a raw, full-partition image with exact declared size")
-        require(isinstance(image["sha256"], str) and re.fullmatch(r"[a-f0-9]{64}", image["sha256"])
-                and digest(source) == image["sha256"], f"{name}: image SHA-256 mismatch")
+        require(digest(source) == image["sha256"], f"{name}: image SHA-256 mismatch")
         with source.open("rb") as stream:
             header = stream.read(8)
             require(header[:4] != b"\x3a\xff\x26\xed", "Android sparse images are unsupported")
@@ -178,7 +184,7 @@ def preflight(release, device):
             "Actual partition layout differs from release; repartitioning is unsupported")
 
 
-def install_simulated(release, bundle, device, backup_dir, identity, confirm, resume=False):
+def install_transaction(release, bundle, device, backup_dir, identity, confirm, resume=False):
     """Back up every affected partition before any write; explicit resume retries interrupted writes."""
     preflight(release, device)
     require(confirm == device.description["storage_id"], "Target confirmation does not match storage identity")
@@ -251,7 +257,7 @@ def install_simulated(release, bundle, device, backup_dir, identity, confirm, re
         require(digest(source) == expected, f"Release image changed after preflight: {name}")
         journal["writes"][name] = "writing"
         save_json(journal_path, journal)
-        print(f"SIMULATION: writing and verifying {name}…", flush=True)
+        print(f"{'SIMULATION: ' if device.description.get('simulation') else ''}Writing and verifying {name}…", flush=True)
         device.write(name, source)
         require(device.hash(name) == expected, f"Write readback mismatch: {name}; keep journal and backups")
         journal["writes"][name] = "verified"
@@ -260,12 +266,17 @@ def install_simulated(release, bundle, device, backup_dir, identity, confirm, re
         require(device.hash(name) == journal["backups"][name], f"Identity changed during install: {name}")
     journal["complete"] = True
     save_json(journal_path, journal)
-    print("Simulation verified. No physical device was flashed.")
+    print("Simulation verified. No physical device was flashed." if device.description.get("simulation")
+          else "Partition writes and identity readback verified. Normal OS startup is not yet verified.")
 
 
-def restore_simulated(release, device, backup_dir, identity, confirm, resume=False):
+def install_simulated(release, bundle, device, backup_dir, identity, confirm, resume=False):
+    require(device.description.get("simulation") is True, "Simulation requires a file-backed device")
+    return install_transaction(release, bundle, device, backup_dir, identity, confirm, resume)
+
+
+def restore_transaction(release, device, backup_dir, identity, confirm, resume=False):
     """Restore originals on a file fixture; keep recovery until the last write."""
-    require(isinstance(device, FileDevice), "Restore supports file simulation only")
     preflight(release, device)
     require(confirm == device.description["storage_id"], "Target confirmation does not match storage identity")
     backup_dir = Path(backup_dir).absolute()
@@ -323,7 +334,7 @@ def restore_simulated(release, device, backup_dir, identity, confirm, resume=Fal
         require(digest(source) == expected, f"Backup changed before restore: {name}")
         restored[name] = "writing"
         save_json(journal_path, journal)
-        print(f"SIMULATION: restoring and verifying original {name}…", flush=True)
+        print(f"{'SIMULATION: ' if device.description.get('simulation') else ''}Restoring and verifying original {name}…", flush=True)
         device.write(name, source)
         require(device.hash(name) == expected, f"Restore readback mismatch: {name}; retain originals and journal")
         restored[name] = "verified"
@@ -332,7 +343,13 @@ def restore_simulated(release, device, backup_dir, identity, confirm, resume=Fal
         require(device.hash(name) == journal["backups"][name], f"Identity changed during restore: {name}")
     journal["restore_complete"] = True
     save_json(journal_path, journal)
-    print("Restore simulation verified. No physical device was flashed.")
+    print("Restore simulation verified. No physical device was flashed." if device.description.get("simulation")
+          else "Original partitions and identity readback verified. Startup still requires verification.")
+
+
+def restore_simulated(release, device, backup_dir, identity, confirm, resume=False):
+    require(isinstance(device, FileDevice), "Restore supports file simulation only")
+    return restore_transaction(release, device, backup_dir, identity, confirm, resume)
 
 
 def watch_usb(timeout):
