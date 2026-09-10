@@ -651,6 +651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         toast_until.set(None);
         app.set_toast("".into());
         app.set_volume_shown(false);
+        app.set_thermostat_feedback_shown(false);
         // Hide even a card whose exit animation is still running.
         app.set_feedback_enabled(false);
     };

@@ -5,6 +5,7 @@ export component VolumeOverlay inherits Rectangle {
     in property <string> target;
     in property <string> caption: "Volume";
     in property <int> value;
+    in property <string> value-text;
     in property <bool> shown;
     in property <bool> percentage: false;
     in property <bool> meter: true;
@@ -34,8 +35,8 @@ export component VolumeOverlay inherits Rectangle {
                     color: Theme.text-secondary;
                     vertical-alignment: center;
                 }
-                if root.meter: Text {
-                    text: root.percentage ? root.value + "%" : root.value;
+                if root.meter || root.value-text != "": Text {
+                    text: root.value-text != "" ? root.value-text : root.percentage ? root.value + "%" : root.value;
                     horizontal-stretch: 0;
                     font-size: 30px;
                     font-weight: 600;

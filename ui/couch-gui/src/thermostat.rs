@@ -81,6 +81,8 @@ pub struct Controller {
     next_read: Instant,
     error: String,
     notice: Option<String>,
+    feedback_until: Option<Instant>,
+    feedback_room: Option<String>,
 }
 impl Controller {
     pub fn new(app: &App) -> Self {
@@ -135,6 +137,8 @@ impl Controller {
             next_read: Instant::now(),
             error: String::new(),
             notice: None,
+            feedback_until: None,
+            feedback_room: None,
         }
     }
     pub fn navigation_pending(&self) -> bool {
@@ -203,17 +207,25 @@ impl Controller {
                 self.due = Instant::now() + Duration::from_millis(250);
                 self.error.clear();
                 if !app.get_thermostat_shown() {
-                    self.notice = Some(format!(
-                        "{} · Target {}",
-                        self.target.as_ref().unwrap().name,
-                        target_text(self.state.as_ref().unwrap())
-                    ));
+                    app.set_thermostat_feedback_name(
+                        self.target.as_ref().unwrap().name.as_str().into(),
+                    );
+                    app.set_thermostat_feedback_value(
+                        target_text(self.state.as_ref().unwrap()).into(),
+                    );
+                    app.set_feedback_enabled(true);
+                    app.set_brightness_shown(false);
+                    app.set_scene_feedback_shown(false);
+                    app.set_thermostat_feedback_shown(true);
+                    self.feedback_until = Some(Instant::now() + Duration::from_secs(1));
                 }
             }
             Err(e) => self.fail(app, e.to_string()),
         }
     }
     fn fail(&mut self, app: &App, error: String) {
+        app.set_thermostat_feedback_shown(false);
+        self.feedback_until = None;
         self.error = error.clone();
         self.desired = None;
         self.queued_delta = 0;
@@ -310,12 +322,40 @@ impl Controller {
         });
     }
     pub fn poll(&mut self, app: &App) -> Option<String> {
+        if self.feedback_room.as_ref().is_some_and(|room| {
+            room != app.get_light_room_id().as_str()
+                || !app.get_light_shown()
+                || app.get_thermostat_shown()
+                || app.get_tv_shown()
+                || app.get_player_shown()
+                || app.get_chooser_shown()
+        }) {
+            self.invalidate();
+            self.desired = None;
+            self.queued_delta = 0;
+            self.busy = false;
+            self.target = None;
+            self.feedback_room = None;
+            self.feedback_until = None;
+            self.notice = None;
+            app.set_thermostat_feedback_shown(false);
+        }
+        if self
+            .feedback_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.feedback_until = None;
+            app.set_thermostat_feedback_shown(false);
+        }
         loop {
             let Some(input) = self.input.borrow_mut().pop_front() else {
                 break;
             };
             match input {
                 Input::Open(id, name) => {
+                    self.feedback_room = None;
+                    self.feedback_until = None;
+                    app.set_thermostat_feedback_shown(false);
                     self.select(id, name);
                     app.set_active_activity("".into());
                     app.set_thermostat_modes_shown(false);
@@ -323,6 +363,7 @@ impl Controller {
                     app.invoke_focus_thermostat();
                 }
                 Input::RoomAdjust(id, name, delta) => {
+                    self.feedback_room = Some(app.get_light_room_id().to_string());
                     let serial = crate::config_snapshot::current().map_or(0, |s| s.serial);
                     if !self
                         .target
@@ -613,5 +654,28 @@ mod tests {
             "worker sees cancellation before next operation"
         );
         assert!(!app.get_thermostat_shown());
+        controller.target = Some(Target {
+            id: "test/climate.test".into(),
+            name: "Living room".into(),
+            serial: 0,
+        });
+        controller.state = Climate::from_state(
+            &serde_json::json!({"entity_id":"climate.test","state":"heat","attributes":{"supported_features":1,"temperature":21,"min_temp":10,"max_temp":35}}),
+            "°C",
+        );
+        app.set_light_shown(true);
+        app.set_light_room_id("living".into());
+        controller.feedback_room = Some("living".into());
+        controller.adjust(&app, 1);
+        assert!(app.get_thermostat_feedback_shown());
+        assert_eq!(app.get_thermostat_feedback_value(), "21.5°C");
+        assert!(
+            controller.notice.is_none(),
+            "target feedback uses shared card, not small error toast"
+        );
+        app.set_light_room_id("bedroom".into());
+        controller.poll(&app);
+        assert!(!app.get_thermostat_feedback_shown());
+        assert!(controller.desired.is_none());
     }
 }

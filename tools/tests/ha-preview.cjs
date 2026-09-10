@@ -13,6 +13,9 @@ const base=process.env.SITE_URL||'http://127.0.0.1:8098/';
   await page.waitForFunction(()=>!!window.couchDemo?.documentation_screen);
   const wait=async expected=>page.waitForFunction(e=>Object.entries(e).every(([k,v])=>window.couchDemo.state()[k]===v),expected);
   const key=async name=>page.evaluate(n=>window.couchDemo.remote_button(n),name);
+  await page.evaluate(()=>window.couchDemo.documentation_screen('thermostat-feedback'));
+  await page.waitForTimeout(500);
+  if(process.env.SCREENSHOTS){const fs=require('node:fs');fs.mkdirSync(process.env.SCREENSHOTS,{recursive:true});await page.screenshot({path:`${process.env.SCREENSHOTS}/thermostat-feedback.png`});}
   for(const name of ['thermostat','thermostat-modes','thermostat-range','thermostat-unavailable']){
    await page.evaluate(n=>window.couchDemo.documentation_screen(n),name);
    await wait({thermostat:true,thermostat_modes:name==='thermostat-modes',thermostat_range:name==='thermostat-range',thermostat_adjustable:name!=='thermostat-unavailable'});

@@ -619,10 +619,18 @@ pub fn documentation_screen(name: &str) {
             d.timer.stop();
             d.clear(a);
             a.set_thermostat_shown(false);
+            a.set_thermostat_feedback_shown(false);
             a.set_thermostat_modes_shown(false);
             a.set_tv_shown(false);
             a.set_player_shown(false);
             match name.as_str() {
+                "thermostat-feedback" => {
+                    d.open_room(a,0);
+                    a.set_feedback_enabled(true);
+                    a.set_thermostat_feedback_name("Living room climate".into());
+                    a.set_thermostat_feedback_value("21.5°C".into());
+                    a.set_thermostat_feedback_shown(true);
+                }
                 "thermostat" | "thermostat-modes" | "thermostat-range" | "thermostat-unavailable" => {
                     d.open_room(a, 0);
                     a.set_thermostat_title("Living room climate".into());

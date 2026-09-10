@@ -140,6 +140,9 @@ export component App inherits Window {
     callback open-thermostat(string, string);
     callback thermostat-room-adjust(string, string, int);
     callback thermostat-action(string, int);
+    in-out property <bool> thermostat-feedback-shown;
+    in-out property <string> thermostat-feedback-name;
+    in-out property <string> thermostat-feedback-value;
     in-out property <bool> thermostat-shown;
     in-out property <string> thermostat-title;
     // Runtime HA values include these glyphs. Software font embedding scans
@@ -592,6 +595,17 @@ export component App inherits Window {
         }
     }
 
+    VolumeOverlay {
+        visible: root.feedback-enabled;
+        x: Theme.overlay-inset;
+        width: parent.width - 2 * Theme.overlay-inset;
+        y: parent.height - self.height - Theme.overlay-inset;
+        target: root.thermostat-feedback-name;
+        caption: "Target";
+        value-text: root.thermostat-feedback-value;
+        meter: false;
+        shown: root.thermostat-feedback-shown && root.light-shown && !root.chooser-shown && !root.thermostat-shown && !root.player-shown && !root.tv-shown;
+    }
     VolumeOverlay {
         visible: root.feedback-enabled;
         x: Theme.overlay-inset;
