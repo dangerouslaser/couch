@@ -149,6 +149,19 @@ pub(super) fn agent(
     origin: &Url,
     pin: &str,
 ) -> super::Result<ureq::Agent> {
+    let tls = tls_config(pin)?;
+    let connector = TcpConnector::default().chain(PinnedConnector {
+        config: Arc::new(tls),
+        origin: origin.origin(),
+    });
+    Ok(ureq::Agent::with_parts(
+        config,
+        connector,
+        DefaultResolver::default(),
+    ))
+}
+
+pub(crate) fn tls_config(pin: &str) -> super::Result<ClientConfig> {
     if pin.len() != 64 || !pin.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(super::Error::Configuration);
     }
@@ -164,13 +177,5 @@ pub(super) fn agent(
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PinnedVerifier(bytes)))
             .with_no_client_auth();
-    let connector = TcpConnector::default().chain(PinnedConnector {
-        config: Arc::new(tls),
-        origin: origin.origin(),
-    });
-    Ok(ureq::Agent::with_parts(
-        config,
-        connector,
-        DefaultResolver::default(),
-    ))
+    Ok(tls)
 }

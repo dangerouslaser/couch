@@ -747,6 +747,8 @@ impl Controller {
                     }
                     if e.id.starts_with("device:") {
                         let cfg = crate::connections::config();
+                        let camera = cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).and_then(|(_,d)|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::UnifiProtect{..})));
+                        if camera {app.invoke_open_camera(e.id.as_str().into(),e.name.as_str().into());continue;}
                         let kodi = cfg.as_ref().is_some_and(|c| {
                             c.devices()
                                 .find(|(_, d)| d.id.as_str() == e.id.trim_start_matches("device:"))

@@ -21,6 +21,7 @@
 //! anybody's house.
 
 mod ha;
+mod protect;
 mod kodi;
 mod remote;
 mod hue;

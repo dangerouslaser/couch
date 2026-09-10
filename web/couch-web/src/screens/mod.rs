@@ -275,3 +275,4 @@ mod device_commands;
 
 mod sonos;
 mod coreelec;
+mod protect;

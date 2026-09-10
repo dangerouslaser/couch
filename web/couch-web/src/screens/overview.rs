@@ -63,6 +63,7 @@ pub fn connection_summary(integration: &Integration) -> String {
         Integration::Connection { connection_id, .. } => format!("Connection · {connection_id}"),
         Integration::WebOs => "LG webOS TV".into(),
         Integration::AndroidTv => "Android / Google TV".into(),
+        Integration::UnifiProtect { .. } => "UniFi Protect".into(),
         Integration::AppleTv => "Apple TV".into(),
         Integration::None => "Not configured".into(),
         Integration::Kodi { host, port } => format!("Kodi · {host}:{port}"),

@@ -2,7 +2,14 @@
 //!
 //! Discovers existing RTSPS streams; it never creates/deletes globally shared
 //! camera streams. Descriptors are not video players. See docs/unifi-protect.md.
+#[cfg(feature = "media")]
+pub mod media;
+#[cfg(feature = "media")]
+mod media_io;
 mod pinning;
+#[cfg(feature = "media")]
+pub mod player;
+pub mod settings;
 use serde::Deserialize;
 use std::{
     fmt,
