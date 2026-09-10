@@ -58,3 +58,22 @@ process lock and preserves originals/journals. Explicit recovery is separate.
 The session lock excludes another owner of that run; the USB adapter must also
 enforce device-wide exclusion across different run directories. These primitives
 do not open USB or authorize writes.
+
+The native library also contains Linux-stage transport primitives. `stage_tls`
+connects only to an explicit selected address using TLS 1.3 and the certificate
+provisioned over USB, checks the exact peer certificate before sending the
+session token, and applies absolute deadlines to socket I/O. It uses
+[Rustls's explicit provider and trust-store configuration](https://docs.rs/rustls/0.23.44/rustls/client/struct.ClientConfig.html),
+without system roots, fallback trust or automatic reconnect.
+
+`stage` bounds JSON and raw/zlib frames and validates monotonic verification
+progress. `stage_files` independently reads back saved host backups, compares the
+device's readback hash and identity pin, and rechecks each image chunk immediately
+before sending. Saving a backup returns its hash without acknowledging it: the
+orchestrator must persist a journal checkpoint before permitting the next device
+phase. These APIs have loopback/file fixtures on Linux and macOS; the host CI
+matrix also runs them on Windows.
+
+These components are not a complete installer command. Native enrollment proof
+consumption, boot assembly, backup/write transaction orchestration, the selected
+MTK adapter and its platform dependencies, and TUI wiring remain to be connected.
