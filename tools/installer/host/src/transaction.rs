@@ -242,7 +242,7 @@ pub fn run<S: Read + Write>(
     original_boot: &Path,
     original_os: OriginalOs,
     session: &mut SessionGuard,
-    mut progress: impl FnMut(&str, &str, u64, u64),
+    mut progress: impl FnMut(&str, &str, u64, u64) -> Result<()>,
 ) -> Result<()> {
     let result = (|| {
         ensure!(
@@ -422,6 +422,7 @@ mod tests {
         bad_expansion: bool,
         bad_journal: bool,
         skip_userdata: bool,
+        disconnected: bool,
     ) -> (bool, Phase, Vec<Value>) {
         let root = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -542,7 +543,13 @@ mod tests {
             &boot,
             OriginalOs::Android,
             &mut session,
-            |_, _, _, _| {},
+            |phase, target, _, _| {
+                ensure!(
+                    !(disconnected && phase == "write" && target == "userdata"),
+                    "UI disconnected"
+                );
+                Ok(())
+            },
         )
         .is_ok();
         // Access the fixture's output through a test-only channel accessor.
@@ -551,7 +558,7 @@ mod tests {
     }
     #[test]
     fn full_transaction_journals_every_ack_and_writes_boot_last() {
-        let (ok, phase, acks) = exercise(false, false, false);
+        let (ok, phase, acks) = exercise(false, false, false, false);
         assert!(ok);
         assert_eq!(phase, Phase::Complete);
         let writes = acks
@@ -563,7 +570,7 @@ mod tests {
     }
     #[test]
     fn explicit_yolo_skips_only_userdata_backup() {
-        let (ok, phase, acks) = exercise(false, false, true);
+        let (ok, phase, acks) = exercise(false, false, true, false);
         assert!(ok);
         assert_eq!(phase, Phase::Complete);
         assert!(!acks
@@ -579,8 +586,20 @@ mod tests {
             .any(|v| v["ack"] == "writing" && v["target"] == "userdata"));
     }
     #[test]
+    fn ui_disconnect_stops_before_userdata_transfer_and_final_boot() {
+        let (ok, phase, acks) = exercise(false, false, false, true);
+        assert!(!ok);
+        assert_eq!(phase, Phase::Failed);
+        assert!(!acks
+            .iter()
+            .any(|v| v["ack"] == "synced" && v["target"] == "userdata"));
+        assert!(!acks
+            .iter()
+            .any(|v| v["ack"] == "writing" && v["target"] == "boot"));
+    }
+    #[test]
     fn failed_expansion_blocks_final_boot_and_preserves_failed_session() {
-        let (ok, phase, acks) = exercise(true, false, false);
+        let (ok, phase, acks) = exercise(true, false, false, false);
         assert!(!ok);
         assert_eq!(phase, Phase::Failed);
         assert!(!acks
@@ -589,7 +608,7 @@ mod tests {
     }
     #[test]
     fn failed_journal_checkpoint_never_acknowledges_backup_or_starts_writes() {
-        let (ok, _, acks) = exercise(false, true, false);
+        let (ok, _, acks) = exercise(false, true, false, false);
         assert!(!ok);
         assert_eq!(acks.len(), 1);
         assert_eq!(acks[0]["ack"], "original_boot");

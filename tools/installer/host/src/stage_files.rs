@@ -78,7 +78,7 @@ impl VerifiedImage {
     pub fn send<S: Read + Write>(
         &mut self,
         channel: &mut Channel<S>,
-        mut progress: impl FnMut(u64, u64),
+        mut progress: impl FnMut(u64, u64) -> Result<()>,
     ) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut done = 0;
@@ -90,9 +90,10 @@ impl VerifiedImage {
                 format!("{:x}", Sha256::digest(&bytes)) == *checksum,
                 "image changed during transfer"
             );
+            progress(done, self.size)?;
             channel.send_chunk(&bytes)?;
             done += count as u64;
-            progress(done, self.size);
+            progress(done, self.size)?;
         }
         ensure!(
             done == self.size && self.file.read(&mut [0; 1])? == 0,
@@ -108,7 +109,7 @@ pub fn save_backup<S: Read + Write>(
     size: u64,
     destination: &Path,
     identity_hash: Option<&str>,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(u64, u64) -> Result<()>,
 ) -> Result<String> {
     ensure!(
         [
@@ -144,7 +145,7 @@ pub fn save_backup<S: Read + Write>(
             file.write_all(&bytes)?;
         }
         done += bytes.len() as u64;
-        progress(done, size);
+        progress(done, size)?;
     }
     file.set_len(size)?;
     file.sync_all()?;
@@ -208,7 +209,7 @@ mod tests {
                 4096,
                 &path,
                 Some(&hash),
-                |_, _| {}
+                |_, _| Ok(())
             )
             .unwrap(),
             hash
@@ -220,7 +221,7 @@ mod tests {
             4096,
             &root.path().join("bad-readback"),
             Some(&hash),
-            |_, _| {}
+            |_, _| Ok(())
         )
         .is_err());
         assert!(save_backup(
@@ -229,7 +230,7 @@ mod tests {
             4096,
             &root.path().join("bad-identity"),
             Some(&"0".repeat(64)),
-            |_, _| {}
+            |_, _| Ok(())
         )
         .is_err());
     }
@@ -244,9 +245,22 @@ mod tests {
         assert!(image
             .send(
                 &mut Channel::authenticated(Cursor::new(Vec::new())),
-                |_, _| {}
+                |_, _| Ok(())
             )
             .is_err());
+    }
+    #[test]
+    fn cancelled_progress_sends_no_image_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("image");
+        fs::write(&path, b"approved").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"approved"));
+        let mut image = VerifiedImage::open(&path, 8, &hash, std::slice::from_ref(&hash)).unwrap();
+        let mut channel = Channel::authenticated(Cursor::new(Vec::new()));
+        assert!(image
+            .send(&mut channel, |_, _| anyhow::bail!("UI disconnected"))
+            .is_err());
+        assert!(channel.into_inner().into_inner().is_empty());
     }
     #[test]
     fn malformed_inventory_and_size_are_rejected() {

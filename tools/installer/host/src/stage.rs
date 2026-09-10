@@ -132,7 +132,7 @@ impl<S: Read + Write> Channel<S> {
         target: &str,
         phase: &str,
         total: u64,
-        mut progress: impl FnMut(u64, u64),
+        mut progress: impl FnMut(u64, u64) -> Result<()>,
     ) -> Result<Value> {
         ensure!(total > 0, "invalid verification size");
         let mut previous = None;
@@ -156,7 +156,7 @@ impl<S: Read + Write> Channel<S> {
                 "invalid verification progress"
             );
             previous = Some(done);
-            progress(done, total);
+            progress(done, total)?;
         }
         anyhow::bail!("excessive verification progress")
     }
@@ -189,7 +189,10 @@ mod tests {
         ]));
         assert_eq!(
             channel
-                .verification("userdata", "write", 4096, |done, _| counts.push(done))
+                .verification("userdata", "write", 4096, |done, _| {
+                    counts.push(done);
+                    Ok(())
+                })
                 .unwrap(),
             final_event
         );
@@ -200,7 +203,7 @@ mod tests {
             vec![progress(0), final_event],
         ] {
             assert!(Channel::authenticated(json_frames(&events))
-                .verification("userdata", "write", 4096, |_, _| {})
+                .verification("userdata", "write", 4096, |_, _| Ok(()))
                 .is_err());
         }
     }
