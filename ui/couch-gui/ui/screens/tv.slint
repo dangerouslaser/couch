@@ -53,8 +53,12 @@ export component Television inherits Rectangle {
     changed panel => { if (root.panel > 0) { root.displayed-panel = root.panel; } }
     public function take-focus(){keys.focus();}
     background:Theme.bg;
-    if root.media-view && root.media-has-art: Image {x:0px;y:0px;width:parent.width;height:320px;source:root.media-art;image-fit:cover;}
-    if root.media-view: Rectangle {x:0px;y:0px;width:parent.width;height:96px;background:#15130f90;}
+    if root.media-view && root.media-has-art: Image {x:0px;y:0px;width:parent.width;height:parent.height;source:root.media-art;image-fit:cover;}
+    // Keep explicit origins: a centered overlay leaves visible uncovered bands.
+    if root.media-view && root.media-has-art: Rectangle {
+        x:0px;y:0px;width:parent.width;height:parent.height;
+        background:@linear-gradient(180deg, #00000090 0%, #00000020 20%, #000000c0 48%, #000000 78%);
+    }
     if root.media-view && !root.media-has-art: Image {x:32px;y:166px;width:64px;height:64px;source:@image-url("../../../../assets/lucide/tv.svg");colorize:Theme.text-tertiary;}
     MediaBack {x:24px;y:22px;activate=>{root.action("close");}}
     Text {x:88px;y:27px;width:parent.width - 112px;height:27px;text:root.title;font-size:20px;color:Theme.text;font-weight:600;overflow:elide;}
