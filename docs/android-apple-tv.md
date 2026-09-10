@@ -61,6 +61,13 @@ field. A second live check of Wholphin (a Jellyfin client) reported *1917*, an
 artwork URL, duration, position and paused state. These observations verify the
 metadata path for those sessions, not every app or successful image rendering.
 
+The GUI runs in the initramfs while DHCP updates Alpine’s resolver. Stage 2
+links `/etc/resolv.conf` and `/etc/hosts` to their Alpine counterparts so hostname
+artwork works and follows network changes. The exact ARM image pipeline was
+verified against a 1,039,160-byte, 2000×3000 JPEG in the GUI’s environment after
+this fix. Failed image requests retry after 15 seconds; switching media starts
+an immediate new attempt, and late results from another screen are discarded.
+
 References: [Cast MediaStatus](https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaStatus),
 [Cast MediaInformation](https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaInformation),
 [Cast Connect media sessions](https://developers.google.com/cast/docs/android_tv_receiver/core_features).

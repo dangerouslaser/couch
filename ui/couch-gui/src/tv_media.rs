@@ -229,17 +229,42 @@ fn clock(seconds: f64) -> String {
         format!("{}:{:02}", seconds / 60, seconds % 60)
     }
 }
+#[derive(Default)]
+struct ArtSchedule {
+    key: Option<ArtKey>,
+    next: Option<Instant>,
+}
+impl ArtSchedule {
+    fn due(&mut self, wanted: Option<ArtKey>, now: Instant) -> Option<ArtKey> {
+        if wanted != self.key {
+            self.key = wanted;
+            self.next = Some(now);
+        }
+        if self.next.is_some_and(|at| now >= at) {
+            self.next = None;
+            self.key.clone()
+        } else {
+            None
+        }
+    }
+    fn failed(&mut self, now: Instant) {
+        self.next = Some(now + Duration::from_secs(15));
+    }
+}
 fn artwork(target: Arc<Mutex<Option<ArtKey>>>, reply: Arc<Mutex<Option<ArtReply>>>) {
-    let mut previous = None;
+    let mut schedule = ArtSchedule::default();
     loop {
-        let key = target.lock().unwrap().clone();
-        if key != previous {
-            previous = key.clone();
-            if let Some(key) = key {
-                let pixels = fetch(&key.url);
-                if target.lock().unwrap().as_ref() == Some(&key) {
-                    *reply.lock().unwrap() = Some(ArtReply { key, pixels });
-                }
+        let wanted = target.lock().unwrap().clone();
+        if let Some(key) = schedule.due(wanted, Instant::now()) {
+            let pixels = fetch(&key.url);
+            if pixels.is_none() {
+                // A transient DNS/server failure must not suppress this image forever.
+                // Never log artwork URLs: providers may put credentials in the query.
+                eprintln!("couch-gui: Android artwork unavailable; retrying in 15 seconds");
+                schedule.failed(Instant::now());
+            }
+            if target.lock().unwrap().as_ref() == Some(&key) {
+                *reply.lock().unwrap() = Some(ArtReply { key, pixels });
             }
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -303,6 +328,39 @@ mod tests {
         );
         assert_eq!(timeline(120., Some(100.), true), ("2:00".into(), None, 0.));
         assert_eq!(clock(3661.), "1:01:01");
+    }
+    #[test]
+    fn failed_art_retries_after_backoff_and_new_sessions_do_not_wait() {
+        let now = Instant::now();
+        let key = ArtKey {
+            generation: 1,
+            session: 1,
+            url: "https://example.test/art.jpg".into(),
+        };
+        let mut schedule = ArtSchedule::default();
+        assert!(schedule.due(Some(key.clone()), now).is_some());
+        schedule.failed(now);
+        assert!(schedule
+            .due(Some(key.clone()), now + Duration::from_secs(14))
+            .is_none());
+        assert!(schedule
+            .due(Some(key.clone()), now + Duration::from_secs(15))
+            .is_some());
+        assert!(schedule
+            .due(Some(key.clone()), now + Duration::from_secs(30))
+            .is_none());
+        schedule.failed(now + Duration::from_secs(30));
+        let next = ArtKey {
+            generation: 2,
+            ..key
+        };
+        assert!(schedule
+            .due(Some(next.clone()), now + Duration::from_secs(31))
+            .is_some());
+        assert!(schedule.due(None, now + Duration::from_secs(32)).is_none());
+        assert!(schedule
+            .due(Some(next), now + Duration::from_secs(33))
+            .is_some());
     }
     #[test]
     fn invalid_artwork_falls_back_without_panicking() {

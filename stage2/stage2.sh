@@ -267,7 +267,6 @@ if [ "$WIFI" = "1" ]; then
             $BB chroot $A /sbin/udhcpc -i wlan0 -n -q -t 10 >/tmp/dhcp.log 2>&1
             IP=$($BB ifconfig wlan0 2>/dev/null | $BB sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
             if [ -n "$IP" ]; then
-                $BB cp /etc/resolv.conf $A/etc/resolv.conf 2>/dev/null
                 # Root telnet, no password, on the LAN. Fine on a bench, not
                 # something to ship - sshd with an enrolled key is the shipped
                 # remote path, so this stays behind the debug flag.
@@ -314,6 +313,13 @@ if [ -x "$A/opt/couch/couch-confd" ] && [ -f "$A/opt/couch/confd.sh" ]; then
     $BB chroot "$A" /bin/sh /opt/couch/confd.sh </dev/null >/tmp/confd-supervisor.log 2>&1 &
     echo "= configuration editor on port 8090"
 fi
+
+# The static GUI runs in the initramfs, while DHCP maintains Alpine's resolver.
+# Share paths rather than copying: network changes can replace these files.
+# Without this bridge IP-based TV controls work but hostname artwork fails.
+$BB mkdir -p /etc
+$BB ln -sf "$A/etc/resolv.conf" /etc/resolv.conf
+$BB ln -sf "$A/etc/hosts" /etc/hosts
 
 # --- the UI ------------------------------------------------------------------
 # Start it last, so anything above still reports to the screen through fbcon.
