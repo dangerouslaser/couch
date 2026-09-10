@@ -1,5 +1,6 @@
 //! Native input preparation and supervised installer orchestration.
 pub mod adapter;
+pub mod android;
 pub mod assembly;
 pub mod dependencies;
 pub mod frontend;
