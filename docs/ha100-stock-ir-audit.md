@@ -48,3 +48,82 @@ A receiver/scope or a camera verified to detect a known IR emitter is the next
 useful measurement. Do not guess GPIO/regulator changes from another board's
 source. See [IR validation](ir.md) for actual transfer results and the failed
 LG reception test.
+
+## Android application and HAL follow-up
+
+The following inspection used the original images privately stored on Ollie,
+without mounting or accessing the remote. Read-only `debugfs` extraction, JADX
+and Capstone Thumb disassembly were used; APKs, native libraries and reconstructed
+source remain outside Git. The inspected images have SHA256:
+
+- `system.img`: `39ed365ce914c6fccb2469ca03cfcb037b752bdcb87fcae1f102c882aa350ff8`
+- `vendor.img`: `de47882c6c32d2b009c65b83217aec2ff2960e21a2b1ff03744f8f437da587a9`
+
+### Factory application paths
+
+`priv-app/TestApp/TestApp.apk` (SHA256
+`66430fab48544f827138a11456113eb7a096be4202f9711d24e1b2b58897079d`)
+contains `com.aiks360.rct.ui.manual.InfraredActivity` and
+`InfraredActivity2`. Both obtain `consumer_ir`, check emitter availability and
+call `ConsumerIrManager.transmit(38000, pattern)` directly. No additional
+emitter-enable operation appears in these recovered methods.
+
+The second activity sends one frame on a fresh dpad key-down, ignoring Android
+key repeats. Its six 71-duration fixtures contain a complete NEC frame followed
+by approximately 39.7–39.8 ms silence and one NEC ditto. They decode to address
+`0x01`, inverse `0xfe`, with commands `46/16/47/15/55/40` hex for
+up/down/left/right/OK/back. These are not the LG address `0x04` candidates.
+The first activity's differently labelled send/on/off controls use the same
+array, so their labels do not establish discrete power commands. A separate
+menu-key fixture contains much shorter, cycle-count-looking durations passed
+straight to the microsecond API; it is not a trustworthy timing reference.
+
+`launcher_ha100`'s `GPIOUtils` controls `/sys/class/leds/red/brightness` and
+`button-backlight/brightness` from charging/backlight code. Its packaged native
+libraries are Bugly components. Targeted searches of the launcher, FactoryMode,
+EngineerMode and the extracted factory/custom/HID JNI libraries found no
+alternate transmitter enable path. The HID library references `/dev/uhid`,
+not an IR peripheral. Some JADX classes failed decompilation, so this is a
+bounded negative finding, not proof that every OEM path was recovered.
+
+The backed-up `SanytronRemote.apk` also uses `ConsumerIrManager`, but contains
+Kodi/WebOS/room configuration code and Kotlin 2.2 metadata. It appears to be a
+later application prototype; do not treat it as independent factory evidence.
+
+### Actual vendor HAL timing
+
+The HAL's transmit implementation begins at ELF virtual address `0xac8` and is
+**Thumb code**. Disassembling this region as ARM gives misleading instructions.
+The recovered solution-1 path establishes:
+
+| Setting or operation | Evidence | Behavior |
+|---|---|---|
+| `irtx.hal.mode` | `0xc1c–0xc46` | Defaults to 0; positive values retain input durations |
+| `irtx.hal.duty` | `0xc4e–0xc96` | Defaults to 25, but is only logged in this solution-1 path |
+| Carrier period | `0xca0–0xcbc` | Round `1,000,000 / carrier_hz` to integer microseconds |
+| Mode-0 duration conversion | `0xd16–0xd50` | Round every mark/space to a whole number of those periods |
+| Actual carrier high time | `0xece–0xee8` | Round floating period times hardcoded `0.33`; literal at `0x10e0` |
+| Carrier synthesis | `0xf28–0xf9e` | Start carrier phase again for each mark; pack sample bits into words |
+
+At a requested 38 kHz, this produces 26-microsecond periods and 9-microsecond
+high intervals: approximately 38.46 kHz and 34.6% duty, before driver inversion.
+No overrides of these properties were found in the inspected system/vendor
+property files or `etc/init/*.rc` files. The vendor IR service stanza starts
+the standard HAL as system/system without a separate enable action. Boot image
+properties were outside this follow-up's scope.
+
+### Actionable comparison and remaining limits
+
+Retain Couch's matched sample-buffer/kernel timing configuration. Its current
+three-samples-per-carrier geometry differs from this stock implementation;
+comments describing it as the stock HAL's exact geometry should be corrected.
+Changing an Android duty property would not change this solution-1 waveform,
+and Couch does not consume those Android properties.
+
+When a verified optical receiver or scope is available, compare carrier,
+polarity and mark/space timing first. A controlled stock-timing fixture must
+pair one-microsecond samples with duration registers 25; never feed that buffer
+to Couch's carrier-scaled register configuration. Separately compare an LG
+candidate frame alone with the same frame followed by an NEC ditto. Repeating
+full commands at one-second intervals does not reproduce the factory fixture.
+Neither difference currently establishes the cause of failed LG reception.
