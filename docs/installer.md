@@ -110,7 +110,7 @@ Validate the candidate loader and explicitly pinned same-device board data on a 
 
 Validate one continuous USB session on the HA100: observe the reboot window, establish the download-agent session, enumerate the layout, read identity partitions twice, and compare hashes. Compare decoded Device ID/MAC values with values recorded from that same remote. Record the upstream commit, loader hash and host USB dependencies with the results. Repeat connection and disconnect tests before adding writes.
 
-Use the repository's actual slot roles when preparing the release: `boot` is p8, `recovery` is p9, and `userdata` is p23. These are reference observations, not permission to assume matching byte offsets on another unit. Keep the rescue kernel independent from the experimental runtime kernel. Test the recovery USB shell with userdata unavailable before proceeding to an end-to-end installation. [Repository partition and recovery procedure](../README.md#recovering-a-bad-boot)
+Use the repository's actual slot roles when preparing the release: `boot` is p8, `recovery` is p9, and `userdata` is p23. These are reference observations, not permission to assume matching byte offsets on another unit. Keep the rescue kernel independent from the experimental runtime kernel. Test the recovery USB shell with userdata unavailable before proceeding to an end-to-end installation. [Repository partition and recovery procedure](device-recovery.md#recovering-a-failed-boot)
 
 ## Loader and board-data inspection
 
