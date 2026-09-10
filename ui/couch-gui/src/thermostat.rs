@@ -329,6 +329,10 @@ impl Controller {
                 || app.get_tv_shown()
                 || app.get_player_shown()
                 || app.get_chooser_shown()
+                || app.get_settings_shown()
+                || app.get_keyboard_shown()
+                || app.get_pair_shown()
+                || app.get_wifi_setup_shown()
         }) {
             self.invalidate();
             self.desired = None;
