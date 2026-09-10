@@ -13,13 +13,14 @@ The archive contains:
   session notes and unrelated experiments are excluded.
 - Complete locked Cargo dependency sources from all five application workspaces
   and the installer TUI, native host, RAM probe and storage crates. Vendor sources
-  retain upstream license, copyright and notice files. Offline Cargo metadata
+  retain upstream license, copyright and notice files. Packages omitting workspace
+  notices receive additional upstream texts at their published Git commits. Offline Cargo metadata
   resolution verifies every workspace against the generated source replacement.
 - The exact aports recipe for each origin represented in the pinned ARM APK
   closure, every local patch/script, and upstream source archives checked against
   APKBUILD SHA512 values. Original Git recipe tar files preserve safe symlink
   aliases; the review copy flattens these aliases to regular files.
-- Kernel source at its recorded Git commit, the matching configuration, public
+- Compiled normal kernel source at its recorded Git commit, the matching configuration, public
   build recipes and compiler/container receipt. A current kernel output directory
   is not accepted unless it matches the selected release pin. Dirty kernel builds
   require separate patch review; this collector refuses them.
@@ -30,7 +31,10 @@ The archive contains:
 
 No Android images, firmware, vendor library binaries, user configuration,
 calibration or signing credentials belong in this archive. The owner-local
-vendor extraction process remains separate. The project uses GPL-3.0-or-later;
+vendor extraction process remains separate. The stock recovery kernel retained
+from an owner backup is not covered by the compiled normal kernel source.
+Stock/vendor-derived boot and recovery images must be assembled locally and
+are excluded from hosted assets. The project uses GPL-3.0-or-later;
 the release selects Slint's GPL alternative. Other components retain their own
 licenses. Generated `NOTICES.md` lists declared licenses and points to retained
 upstream texts; it does not assign one license to the combined archive or grant
@@ -47,10 +51,18 @@ instead of skipping it.
 python3 tools/release/corresponding_source.py project \
   --repo . --commit FULL_RELEASE_COMMIT --output /source/release
 python3 tools/release/corresponding_source.py cargo --output /source/release
+python3 tools/release/corresponding_source.py cargo-notices \
+  --output /source/release --cache /cache/cargo-notice-repositories
 python3 tools/release/corresponding_source.py alpine \
   --closure /inputs/arm-packages --metadata /inputs/apk-source-metadata.json \
   --aports /cache/aports.git --cache /cache/distfiles --output /source/release
 ```
+
+The notice collector uses each crate’s `.cargo_vcs_info.json` commit and GitHub
+repository/homepage metadata. Missing repository metadata requires a reviewed
+`--repository-overrides` JSON mapping from `name-version` to repository URL. It
+never changes the checksummed vendor tree. Final assembly refuses uncovered
+packages or an incomplete notice collection.
 
 Create the aports cache with `git clone --filter=blob:none --bare
 https://github.com/alpinelinux/aports.git /cache/aports.git`. Recipe commits come

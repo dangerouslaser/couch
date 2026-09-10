@@ -10,6 +10,35 @@ import corresponding_source as source
 
 
 class Sources(unittest.TestCase):
+    def test_source_license_headers_allow_case_and_whitespace_without_accepting_spdx_only(self):
+        self.assertTrue(source.complete_mit_grant(b'Permission is hereby granted, free of charge\nThe Software is provided "as is"'))
+        self.assertTrue(source.complete_mit_grant(b'PERMISSION IS HEREBY GRANTED, FREE OF CHARGE\nTHE SOFTWARE IS PROVIDED'))
+        self.assertFalse(source.complete_mit_grant(b'SPDX-License-Identifier: MIT'))
+
+    def test_notice_collection_uses_published_commit_and_keeps_vendor_unchanged(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); output = root / 'out'; cache = root / 'cache'
+            repo = cache / 'fixture--crate.git'; repo.mkdir(parents=True)
+            def git(*args): return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.DEVNULL)
+            git('init'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
+            (repo / 'LICENSES').mkdir(); (repo / 'LICENSES/MIT.txt').write_text('published notice')
+            git('add', '.'); git('commit', '-m', 'published'); commit = git('rev-parse', 'HEAD').decode().strip()
+            (repo / 'LICENSES/MIT.txt').write_text('later unrelated notice')
+            vendor = output / 'cargo-vendor/fixture-1.0'; vendor.mkdir(parents=True)
+            (vendor / 'Cargo.toml').write_text('[package]\nname="fixture"\nversion="1.0"\nrepository="https://github.com/fixture/crate"\nlicense="MIT"\n')
+            (vendor / '.cargo_vcs_info.json').write_text(json.dumps({'git': {'sha1': commit}}))
+            (output / 'cargo.json').write_text(json.dumps({'packages': [{'directory': 'fixture-1.0', 'notice_files': []}]}))
+            before = source.tree_hashes(output / 'cargo-vendor')
+            result = source.cargo_notices(output, cache, offline=True)
+            self.assertTrue(result['complete'])
+            self.assertEqual((output / 'cargo-notices/fixture-1.0/LICENSES/MIT.txt').read_text(), 'published notice')
+            self.assertEqual(before, source.tree_hashes(output / 'cargo-vendor'))
+            (vendor / '.cargo_vcs_info.json').write_text(json.dumps({'git': {'sha1': '0' * 40}}))
+            with self.assertRaisesRegex(ValueError, 'remain incomplete'):
+                source.cargo_notices(output, cache, offline=True)
+            self.assertFalse(json.loads((output / 'cargo-notices.json').read_text())['complete'])
+
     def test_paths_and_binary_inputs_fail_closed(self):
         for name in ('/root/key', '../key', 'a/../key', 'a\\key', 'a//key'):
             with self.assertRaises(ValueError): source.checked_path(name)
@@ -78,14 +107,14 @@ class Sources(unittest.TestCase):
         import json
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'collection'; root.mkdir()
-            components = [('project', 'couch'), ('cargo', 'cargo-vendor'), ('alpine', 'alpine'), ('kernel', 'external/kernel'), ('busybox', 'external/busybox'), ('rust-stdlib', 'external/rust-stdlib')]
+            components = [('project', 'couch'), ('cargo', 'cargo-vendor'), ('cargo-notices', 'cargo-notices'), ('alpine', 'alpine'), ('kernel', 'external/kernel'), ('busybox', 'external/busybox'), ('rust-stdlib', 'external/rust-stdlib')]
             config = root / 'cargo-config/vendor.toml'; config.parent.mkdir(); config.write_text('fixture')
             for name, subdir in components:
                 path = root / subdir / 'source.txt'; path.parent.mkdir(parents=True); path.write_text(name)
                 value = {'complete': True, 'files': {'source.txt': source.sha(path)}}
                 if name == 'project': value.update(commit='a' * 40, source_date_epoch=100)
                 if name == 'cargo': value.update(packages=[], config_sha256=source.sha(config))
-                if name == 'alpine': value.update(packages=[])
+                if name in ('alpine', 'cargo-notices'): value.update(packages=[])
                 (root / (name + '.json')).write_text(json.dumps(value))
             (root / 'private-unlisted.key').write_text('must not publish')
             first = Path(directory) / 'one.tar.gz'; second = Path(directory) / 'two.tar.gz'

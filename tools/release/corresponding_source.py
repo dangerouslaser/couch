@@ -181,6 +181,93 @@ def cargo_sources(output, offline=False):
     return result
 
 
+def complete_mit_grant(data):
+    normalized = b" ".join(data.lower().split())
+    return b"permission is hereby granted, free of charge" in normalized and b"the software is provided" in normalized
+
+
+def cargo_notices(output, cache, offline=False, overrides=None):
+    """Retain omitted workspace-root notices at each published crate's Git commit."""
+    inventory = json.loads((output / 'cargo.json').read_text())
+    collected, errors = [], []
+    for package in inventory['packages']:
+        if package['notice_files']:
+            continue
+        directory = output / 'cargo-vendor' / package['directory']
+        try:
+            metadata = tomllib.loads((directory / 'Cargo.toml').read_text())['package']
+            vcs = json.loads((directory / '.cargo_vcs_info.json').read_text())
+            commit = vcs['git']['sha1']
+            if not re.fullmatch('[0-9a-f]{40}', commit):
+                raise ValueError('Missing published Git source identity')
+            repository = (overrides or {}).get(package['directory'], metadata.get('repository') or metadata.get('homepage', ''))
+            match = re.match(r'https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', repository)
+            if not match:
+                raise ValueError('Provide a reviewed GitHub repository override for this crate')
+            owner, name = match.groups(); name = name.removesuffix('.git')
+            url = f'https://github.com/{owner}/{name}.git'
+            repo = cache / (owner + '--' + name + '.git')
+            if not repo.exists():
+                if offline:
+                    raise ValueError('Notice repository absent from offline cache')
+                repo.mkdir(parents=True)
+                subprocess.run(['git', 'init', '--bare', str(repo)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                git(repo, 'remote', 'add', 'origin', url)
+                git(repo, 'config', 'remote.origin.promisor', 'true')
+                git(repo, 'config', 'remote.origin.partialclonefilter', 'blob:none')
+            try:
+                git(repo, 'cat-file', '-e', commit + '^{commit}')
+            except subprocess.CalledProcessError:
+                if offline:
+                    raise ValueError('Published commit absent from offline notice cache')
+                git(repo, 'fetch', '--filter=blob:none', '--depth=1', 'origin', commit)
+            notices = []
+            for entry in filter(None, git(repo, 'ls-tree', '-rz', commit).split(b'\0')):
+                header, raw_name = entry.split(b'\t', 1)
+                mode, kind, oid = header.decode().split()
+                filename = raw_name.decode()
+                notice_name = filename.lower()
+                if not any(word in notice_name for word in ('license', 'licence', 'copying', 'copyright', 'notice')) and PurePosixPath(filename).name.upper() != 'AUTHORS':
+                    continue
+                if kind != 'blob' or mode not in ('100644', '100755'):
+                    continue
+                checked_path(filename)
+                if offline:
+                    # Disable lazy fetch explicitly; offline must never reach a remote.
+                    data = subprocess.check_output(['git', '-c', 'remote.origin.promisor=false', '-C', str(repo), 'cat-file', 'blob', oid], stderr=subprocess.PIPE)
+                else:
+                    data = git(repo, 'cat-file', 'blob', oid)
+                if len(data) > 2 * 1024 * 1024 or b'\0' in data:
+                    continue
+                if PurePosixPath(filename).name.upper() == 'AUTHORS' and not complete_mit_grant(data):
+                    continue
+                relative = package['directory'] + '/' + filename
+                write(output / 'cargo-notices' / relative, data)
+                notices.append({'file': relative, 'sha256': hashlib.sha256(data).hexdigest(),
+                                'url': f'https://github.com/{owner}/{name}/blob/{commit}/{filename}'})
+            if not notices:
+                # Some upstreams put the complete permission grant in source headers.
+                for path in directory.rglob('*.rs'):
+                    data = path.read_bytes()
+                    if complete_mit_grant(data):
+                        relative = package['directory'] + '/source-header/' + path.relative_to(directory).as_posix()
+                        write(output / 'cargo-notices' / relative, data)
+                        notices.append({'file': relative, 'sha256': hashlib.sha256(data).hexdigest(), 'source': 'unchanged published crate source header'})
+                        break
+            if not notices:
+                raise ValueError('No upstream notice text found; manual review required')
+            collected.append({'package': package['directory'], 'repository': url, 'commit': commit, 'notices': notices})
+            print('Collected Cargo notices: ' + package['directory'], flush=True)
+        except (KeyError, ValueError, OSError, subprocess.SubprocessError) as error:
+            errors.append({'package': package['directory'], 'error': str(error)})
+    result = {'schema': 1, 'kind': 'couch-cargo-notices', 'complete': not errors,
+              'packages': collected, 'errors': errors, 'files': tree_hashes(output / 'cargo-notices')}
+    report(output / 'cargo-notices.json', result)
+    if errors:
+        raise ValueError(f'{len(errors)} Cargo notice sets remain incomplete')
+    return result
+
+
 def apk_info(path):
     # APKs contain concatenated gzip/tar members. Never extract their payloads.
     with gzip.open(path, 'rb') as compressed, tarfile.open(fileobj=compressed, mode='r|', ignore_zeros=True) as archive:
@@ -373,7 +460,7 @@ def external_sources(directory, receipt_file, output):
 
 def assemble(output, archive_path):
     included, components = {}, {}
-    for name, directory in [('project', 'couch'), ('cargo', 'cargo-vendor'), ('alpine', 'alpine'),
+    for name, directory in [('project', 'couch'), ('cargo', 'cargo-vendor'), ('cargo-notices', 'cargo-notices'), ('alpine', 'alpine'),
                             ('kernel', 'external/kernel'), ('busybox', 'external/busybox'), ('rust-stdlib', 'external/rust-stdlib')]:
         receipt = output / (name + '.json')
         if not receipt.is_file():
@@ -388,6 +475,9 @@ def assemble(output, archive_path):
         for path, checksum in value['files'].items():
             checked_path(path)
             included[directory + '/' + path] = checksum
+    expected_notices = {p['directory'] for p in components['cargo']['packages'] if not p['notice_files']}
+    if {p['package'] for p in components['cargo-notices']['packages']} != expected_notices:
+        raise ValueError('Cargo notice coverage differs from locked packages')
     config = output / 'cargo-config/vendor.toml'
     if sha(config) != components['cargo']['config_sha256']:
         raise ValueError('Cargo source replacement configuration changed')
@@ -398,7 +488,7 @@ def assemble(output, archive_path):
                'Declared license expressions below are metadata, not a replacement for those texts.', '', '## Rust dependencies', '']
     for p in components['cargo']['packages']:
         notices.append(f"- {p['name']} {p['version']}: {p.get('license') or 'see license-file'}; source cargo-vendor/{p['directory']}; notices: {', '.join(p['notice_files']) or 'see source headers and package metadata'}")
-    notices.extend(['', '## Alpine runtime packages', ''])
+    notices.extend(['', 'Additional notices omitted from published crate packages are retained under cargo-notices/ at the recorded publication commits; see cargo-notices.json.', '', '## Alpine runtime packages', ''])
     for p in components['alpine']['packages']:
         notices.append(f"- {p['pkgname']} {p['pkgver']}: {p['license']}; origin {p['origin']} at {p['commit']} (alpine/{p['origin']}-{p['commit']}/).")
     notices.extend(['', '## Building', '',
@@ -409,7 +499,7 @@ def assemble(output, archive_path):
     included['NOTICES.md'] = sha(output / 'NOTICES.md')
     manifest = {'schema': 1, 'kind': 'couch-corresponding-source-archive', 'complete': True,
                 'project_commit': components['project']['commit'], 'files': included,
-                'scope': 'Couch/runtime/installer, locked Cargo dependencies, Alpine closure, kernel, BusyBox, Rust standard library; excludes owner-local Android vendor inputs'}
+                'scope': 'Couch/runtime/installer, locked Cargo dependencies, Alpine closure, compiled normal kernel, BusyBox, Rust standard library; excludes owner-local Android vendor inputs and stock recovery kernel'}
     report(output / 'SOURCE-MANIFEST.json', manifest)
     names = sorted([*included, 'SOURCE-MANIFEST.json'])
     if archive_path.exists():
@@ -472,8 +562,10 @@ def main():
     p = sub.add_parser('external'); p.add_argument('--directory', type=Path, required=True); p.add_argument('--receipt', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
     p = sub.add_parser('assemble'); p.add_argument('--output', type=Path, required=True); p.add_argument('--archive', type=Path, required=True)
     p = sub.add_parser('verify-archive'); p.add_argument('--archive', type=Path, required=True)
+    p = sub.add_parser('cargo-notices'); p.add_argument('--output', type=Path, required=True); p.add_argument('--cache', type=Path, required=True); p.add_argument('--offline', action='store_true'); p.add_argument('--repository-overrides', type=Path)
     args = parser.parse_args()
     if args.command == 'project': project(args.repo, args.commit, args.output)
+    elif args.command == 'cargo-notices': cargo_notices(args.output, args.cache, args.offline, json.loads(args.repository_overrides.read_text()) if args.repository_overrides else None)
     elif args.command == 'cargo': cargo_sources(args.output, args.offline)
     elif args.command == 'external': external_sources(args.directory, args.receipt, args.output)
     elif args.command == 'verify-archive': print(json.dumps(verify_archive(args.archive)))
