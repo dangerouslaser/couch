@@ -928,6 +928,7 @@ dependencies = [
  "couch-ir",
  "couch-kodi",
  "couch-model",
+ "couch-system",
  "couch-voice",
  "couch-webos",
  "image",
@@ -982,6 +983,30 @@ name = "couch-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "couch-system"
+version = "0.1.0"
+dependencies = [
+ "couch-updates",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "couch-updates"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "flate2",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "ureq",
 ]
 
 [[package]]
