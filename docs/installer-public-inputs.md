@@ -116,3 +116,47 @@ Download/bootstrap UX, independent model recognition, fresh-device identity
 reporting, approved loader delivery, complete corresponding-source notices,
 release authentication and actual fresh-Android end-to-end testing remain
 separate work. None of these observations enable a public install gate.
+
+## Owner-side input preparation and first capture
+
+`tools/release/prepare_official_inputs.py` prepares the pinned official bootstrap
+members and the existing runtime-file allowlist into a new private directory:
+
+```sh
+python3 tools/release/prepare_official_inputs.py official-fw.zip /private/owner-inputs
+```
+
+Only preloader (for EMI, never flashing), stock boot, odmdtbo and scatter are
+selected from the archive. The existing 33-file vendor extractor runs alongside
+them. The entire ZIP and each selected member are checked before publication.
+There is no general archive extraction and no downloaded code is executed.
+The receipt explicitly marks these as distribution inputs, **not originals
+backed up from the owner's remote**. The OTA contains no original recovery;
+that must be read from the actual device. `--bootstrap-only` skips runtime
+extraction for an enrollment-only check.
+
+`tools/installer/enroll_android.py` adds a read-only first-capture entry point.
+It requires the owner to save the three Android identity values, an explicitly
+authorized ADB serial and USB bus/port, the owner-side inputs, and a reviewed
+mtkclient checkout/download-agent pin. It first binds canonical Android CID to
+the selected physical USB device. After a manual restart into preloader, the
+existing read-only adapter checks both GPT copies and fixed CID encoding.
+Enrollment then requires official boot/odmdtbo prefixes and the official static
+partition offsets before capturing calibration, boot, recovery and odmdtbo.
+Every original is independently reread, and usable baseline publication waits
+for USB cleanup. It exposes no partition writer and sends no reboot request.
+
+The resulting baseline is labeled `first-stock-android-enrollment`, with
+`prior_baseline: false` and opaque, undecoded identity preservation. It is not
+misrepresented as an earlier trusted runtime baseline. Different stock builds,
+changed partitions or inaccessible Android CID fail closed; arbitrary MT6580
+hardware is not accepted merely because the chip family matches.
+
+This is an enrollment prerequisite, not a public installation approval. The
+normal-to-preloader port binding and official EMI upload still need a physical
+fresh-device test. The public wizard must integrate this first capture before
+any write path, and the host orchestration migration to Rust remains pending.
+Windows driver/locking/deadline support, macOS filesystem dependency delivery,
+public payload allowlist/corresponding-source review and per-platform execution
+also remain release requirements. Neither a native TUI executable nor these
+read-only fixtures satisfy them.
