@@ -1,57 +1,52 @@
-# Infrared library setup
+# Infrared commands on devices
 
-Add the built-in **Infrared** connection once. In **Rooms & devices**, open a
-room and select that connection under **Add to this room**.
+In **Rooms & devices**, open a room and choose **Add IR commands** on an existing
+device. A network TV stays the same device: assigned functions use the remote’s
+built-in IR transmitter; other functions keep using its connection.
 
-1. Name the device and choose its device type.
-2. Select a **Brand**, optionally narrow the library device type, then choose a
-   **Model / codeset**. Only that brand's models are shown.
-3. Assign supported commands to the remote functions you need. Unsupported
-   protocols remain visible with the reason they cannot be used.
-4. Review the assigned commands and select
-   **Save and add to room**. Existing IR devices have a **Save IR commands** editor.
+For equipment without a network connection, choose **Manual / infrared** under
+**Add to this room**, then enter its name and device type. No separate IR
+connection or duplicate device is needed.
 
-A unique saved ID is generated automatically. **Advanced: shared codeset** lets
-you deliberately reuse an ID; it uses lowercase letters, numbers, hyphens or
-underscores. Devices
-sharing an ID share its commands. Assigning a second source command to the same
-function replaces that function's previous code and preserves other functions.
-The command text remains editable for custom functions and corrections.
+1. Choose a brand and model under **Find commands in library or import**.
+2. Assign individual commands, or use **Assign matching functions** to match
+   common names such as volume up and power toggle.
+3. Review **Assigned functions** and remove commands you do not need.
+4. Select **Save IR commands** (or **Add device to room** for a new device).
+5. Point the remote at the equipment and use **Test** beside a saved command.
 
-For a remote missing from the bundled library, expand **Import your own remote
-codes**, choose Flipper `.ir` or Couch codeset format, paste the file contents,
-and preview it before assigning functions. Import preview and saving never send
-IR. A library match is a candidate, not proof that the physical device accepts it.
-The catalog shows its source and license; inclusion is deliberately limited to
-records whose distribution terms have been checked.
+Browsing, importing, assigning and saving never transmit. Test buttons stay
+disabled while there are unsaved edits. A library match is a candidate; verify
+that the equipment responds. Unsupported protocols show an explanation.
 
-LG TVs use the same browser under **Connections → Power control → Choose power
-codes from the library**. This picker only offers `power`, `power-on` and
-`power-off`; discrete commands never fall back to a power toggle. Save the power
-settings separately. Driver presence alone does not prove successful transmission.
+**Import your own remote codes** accepts Flipper `.ir` and Couch codeset text.
+**Advanced: edit command definitions** supports corrections and custom commands.
+Every save creates an immutable codeset snapshot, so editing one device cannot
+silently change another device sharing an older codeset. Removing all IR commands
+preserves the network connection. Legacy IR devices remain editable.
 
-## Browser regression
+## Physical controls and activities
 
-Build the WASM bundle and a host daemon, then run:
+Assigned functions override their network equivalents, including physical volume
+and activity mappings. A failed IR send reports an error without sending a second
+network command. Activity editors show actual assigned IR functions alongside
+network functions. Power toggle and discrete power-on/off are distinct: a missing
+discrete command never substitutes a toggle.
+
+Selecting an IR-only device opens its controls. Hold Back to return to the room.
+IR is one-way: transmission completion does not confirm reception or infer the
+equipment’s power, volume or playback state. Existing webOS connection-level power
+settings remain supported; configure new command assignments on the room device.
+
+## Regression checks
+
+Build with `tools/build-webui.sh --host`, then run:
 
 ```sh
 NODE_PATH=build/webui-review/node_modules node tools/tests/ir-library.cjs
 ```
 
-The test uses a local server and mocked IR/TV endpoints. It checks brand/type
-filtering, unsupported commands, function aliases, raw import preservation,
-unsafe IDs, revision-protected room creation, LG power assignment and mobile
-layout. It does not transmit IR or validate compatibility with physical devices.
-
-## On the remote
-
-Selecting an IR device in a room opens its controls immediately. Physical
-navigation, volume, channel, media, color and power buttons use that device's
-assigned functions. **Commands** opens a tray containing its assigned supported
-commands. Power uses `toggle`; discrete on/off are separate commands. Missing
-assignments report an error instead of substituting another code. Hold Back to
-return to the room as with the other device screens.
-
-IR is one-way: Couch shows no inferred power, volume or playback state and does
-not poll the device. “IR command sent” reports transmitter completion only; it
-does not confirm the target received or acted on the command.
+The browser test uses a real local daemon and isolated configuration. It checks
+revision-protected attachment, editing, removal and creation, network preservation,
+immutable snapshots, legacy devices, imports, explicit testing and mobile layout.
+Catalog and transmission endpoints are mocked; no hardware commands are sent.

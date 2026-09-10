@@ -5,7 +5,8 @@ use serde_json::json;
 
 pub fn screen(app: App, config: &Config) -> AnyView {
     let choice = RwSignal::new(String::new());
-    let existing = config.connections.clone();
+    let existing: Vec<_> = config.connections.iter().filter(|c|c.provider!=Provider::Ir).cloned().collect();
+    let no_connections = existing.is_empty();
     let available: Vec<_> = [
         ("kodi", "Kodi"),
         ("home-assistant", "Home Assistant"),
@@ -14,21 +15,20 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("android-tv", "Android / Google TV · experimental"),
         ("apple-tv", "Apple TV · experimental"),
         ("denon", "Denon AVR"),
-        ("ir", "Infrared"),
     ]
     .into_iter()
-    .filter(|(kind,_)|*kind!="ir" || !existing.iter().any(|c|c.provider==Provider::Ir))
 
     .collect();
     view!{
         {ui::page_header(app,"Connections".into(),None)}
-        <p class="lead">"Connections tell Couch how to reach your servers, bridges and infrared transmitter. Add devices to rooms in Rooms & devices."</p>
+        <p class="lead">"Connections tell Couch how to reach your TVs, servers and bridges. Add devices and assign their infrared commands in Rooms & devices."</p>
+        <p class="notice">"Using infrared? Open a device in Rooms & devices and choose Add IR commands. No infrared connection is needed."</p>
         <h2 class="section">"Saved connections"</h2>
-        {config.connections.is_empty().then(||ui::empty("No connections yet. Add your first connection below."))}
+        {no_connections.then(||ui::empty("No connections yet. Add your first connection below."))}
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"ir"=>local_form(app,None,true),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared uses the built-in blaster with a separate codeset on each room device."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared is built into the remote and is configured on each device."</p>}.into_any()}}
         </section>
     }.into_any()
 }

@@ -758,8 +758,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }) {
                 let text = SharedString::from(char::from(key));
                 tv_controls.physical_input(press.repeat, || {
-                    window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-                    window.dispatch_event(WindowEvent::KeyReleased { text });
+                    activity_controls.physical_input(press.repeat, || {
+                        light_controls.physical_input(press.repeat, || {
+                            thermostat_controls.physical_input(press.repeat, || {
+                                window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+                                window.dispatch_event(WindowEvent::KeyReleased { text });
+                            });
+                        });
+                    });
                 });
             }
         }

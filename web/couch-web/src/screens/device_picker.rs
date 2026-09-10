@@ -5,27 +5,23 @@ use leptos::{prelude::*, task::spawn_local};
 use serde_json::{json, Value};
 
 pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
-    let connections = config.connections.clone();
-    let room = room.clone();
-    if connections.is_empty() {
-        return view!{<section class="creation"><h2>"Add devices"</h2><p>"Add a connection first, then choose its devices here."</p><button class="primary" on:click=move |_|app.go(Route::Connections)>"Set up a connection"</button></section>}.into_any();
+    let connections: Vec<_> = config.connections.iter().filter(|c|c.provider!=Provider::Ir).cloned().collect();
+    let room = StoredValue::new(room.clone());
+    if app.device_source.get_untracked() != "manual-ir" && !connections.iter().any(|c|c.id.as_str()==app.device_source.get_untracked()) {
+        app.device_source.set(if connections.len()==1 {connections[0].id.to_string()} else {String::new()});
     }
-    if !connections
-        .iter()
-        .any(|c| c.id.as_str() == app.device_source.get_untracked())
-    {
-        app.device_source.set(if connections.len() == 1 {
-            connections[0].id.to_string()
-        } else {
-            String::new()
-        });
-    }
-    let options = connections.clone();
-    view!{<section class="creation device-picker"><h2>"Add to this room"</h2><p class="dim">"Choose a connection, then add devices, room controls or scenes."</p>
-        <label class="field">"From connection"<select aria-label="From connection" prop:value=move ||app.device_source.get() on:change=move |e|{app.device_filter.set(String::new());app.device_source.set(event_target_value(&e));}><option value="">"Choose a connection"</option>{options.into_iter().map(|c|view!{<option value=c.id.to_string()>{super::connections::label(&c)}</option>}).collect_view()}</select></label>
-        {move ||connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.clone()),_=>manual(app,c.clone(),room.clone())})}
+    let options=connections.clone();
+    view!{<section class="creation device-picker"><h2>"Add to this room"</h2><p class="dim">"Choose a connected device, or add a device controlled by infrared. You can also add IR commands to any device already in this room."</p>
+        <label class="field">"Device source"<select aria-label="From connection" prop:value=move ||app.device_source.get() on:change=move |e|{app.device_filter.set(String::new());app.device_source.set(event_target_value(&e));}>
+            <option value="">"Choose a device source"</option>{options.into_iter().map(|c|view!{<option value=c.id.to_string()>{super::connections::label(&c)}</option>}).collect_view()}
+            <option value="manual-ir">"Manual / infrared"</option>
+        </select></label>
+        {move ||if app.device_source.get()=="manual-ir" {super::infrared::device_setup(app,room.get_value(),None)}else{
+            connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.get_value()),_=>manual(app,c.clone(),room.get_value())}).unwrap_or_else(||view!{<p class="dim">"Need a server or bridge first?" <button class="ghost" on:click=move |_|app.go(Route::Connections)>"Manage connections"</button></p>}.into_any())
+        }}
     </section>}.into_any()
 }
+
 fn assigned(app: App, connection: &Connection, resource: &str) -> Option<String> {
     app.config.get_untracked().and_then(|cfg|cfg.devices().find_map(|(r,d)|{
         let same=matches!(&d.integration,Integration::Connection{connection_id,resource_id} if connection_id==&connection.id && resource_id==resource)
@@ -161,7 +157,7 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
     </div>}.into_any()
 }
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
-    if connection.provider == Provider::Ir { return super::infrared::device_setup(app, connection.id, room, None); }
+    if connection.provider == Provider::Ir { return super::infrared::device_setup(app, room, None); }
     let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv | Provider::AppleTv);
     let receiver = matches!(connection.provider, Provider::Denon { .. });
     let existing = assigned(app, &connection, "");

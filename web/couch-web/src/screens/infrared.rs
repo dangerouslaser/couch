@@ -116,6 +116,10 @@ pub fn library(app: App, output: RwSignal<String>, power_only: bool) -> AnyView 
                 <button type="button" disabled=move ||busy.get()||import_text.get().trim().is_empty() on:click=move |_|fetch("/api/ir/import".into(),Some(json!({"name":import_name.get_untracked(),"format":import_format.get_untracked(),"text":import_text.get_untracked()})))>"Preview imported commands"</button>
             </details>
             <p role="status">{move ||message.get()}</p>
+            <Show when=move ||!commands.get().is_empty()><div class="ir-match-actions"><button type="button" class="ghost" disabled=move ||busy.get()||!commands.get().iter().any(|v|v["supported"]==true&&suggested_function(v["name"].as_str().unwrap_or(""),power_only).is_some()) on:click=move |_|{
+                let entries=commands.get_untracked();output.update(|text|{for value in &entries {if value["supported"]==true{if let (Some(function),Some(code))=(suggested_function(value["name"].as_str().unwrap_or(""),power_only),value["code"].as_str()){assign(text,&function,code);}}}});
+                message.set("Matching functions assigned. Review them before saving; no command was sent.".into());
+            }>"Assign matching functions"</button><p class="dim">"Recognizes common button names and replaces their assignments."</p></div></Show>
             <div class="ir-command-list" aria-label="Available IR commands">{move ||commands.get().into_iter().enumerate().map(|(index,v)|{
                 let name=v["name"].as_str().unwrap_or("Unnamed command").to_string();
                 let supported=v["supported"]==true && v["code"].is_string();
@@ -131,14 +135,6 @@ pub fn library(app: App, output: RwSignal<String>, power_only: bool) -> AnyView 
     }.into_any()
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.as_bytes()[0].is_ascii_alphanumeric()
-        && id
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
-}
 
 fn assign(text: &mut String, function: &str, code: &str) {
     let fields: Vec<_> = code.split_whitespace().collect();
@@ -147,7 +143,7 @@ fn assign(text: &mut String, function: &str, code: &str) {
     }
     let mut lines: Vec<String> = text
         .lines()
-        .filter(|line| line.split_whitespace().next() != Some(function))
+        .filter(|line| !line.split_whitespace().next().is_some_and(|key|key.eq_ignore_ascii_case(function)))
         .map(str::to_string)
         .collect();
     lines.push(format!("{function} {}", fields[1..].join(" ")));
@@ -158,11 +154,20 @@ fn assign(text: &mut String, function: &str, code: &str) {
 mod tests {
     use super::*;
     #[test]
-    fn identifiers_cannot_change_request_paths() {
-        assert!(valid_id("living-room_tv2"));
-        for id in ["", "../codes", "a/b", "a?b", "UPPER", "-leading"] {
-            assert!(!valid_id(id));
-        }
+    fn common_names_preserve_discrete_power_and_filter_power_only_picker() {
+        assert_eq!(suggested_function("Power",false).as_deref(),Some("toggle"));
+        assert_eq!(suggested_function("Power_off",false).as_deref(),Some("power-off"));
+        assert_eq!(suggested_function("Power",true).as_deref(),Some("power"));
+        assert_eq!(suggested_function("Vol_up",false).as_deref(),Some("volume-up"));
+        assert_eq!(suggested_function("Vol_up",true),None);
+        assert_eq!(suggested_function("Unknown key",false),None);
+    }
+    #[test]
+    fn remove_is_case_insensitive_and_preserves_other_commands() {
+        let mut text="# custom commands\nToggle nec 4 8\nvolume-up nec 4 2".to_string();
+        remove_assignment(&mut text,"toggle");
+        assert_eq!(assigned_functions(&text),vec!["volume-up"]);
+        assert!(text.contains("# custom commands"));
     }
     #[test]
     fn raw_assignment_preserves_pulses() {
@@ -180,100 +185,107 @@ mod tests {
     }
 }
 
-fn new_codeset_id() -> String {
-    let mut bytes = [0u8; 16];
-    if web_sys::window()
-        .and_then(|w| w.crypto().ok())
-        .is_some_and(|crypto| crypto.get_random_values_with_u8_array(&mut bytes).is_ok())
-    {
-        format!(
-            "ir-{}",
-            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        )
-    } else {
-        String::new()
-    }
+/// Keep the editor open across a successful revisioned configuration save.
+pub fn device_commands(app: App, config: &couch_model::Config, room: &couch_model::Id, device: &couch_model::Device) -> AnyView {
+    let configured = device.effective_ir_codeset(config).is_some();
+    let id = StoredValue::new(device.id.to_string());
+    let room = StoredValue::new(room.clone());
+    let device = StoredValue::new(device.clone());
+    view! {<section class="device-ir">
+        <div class="device-ir-heading"><div><h4>"IR commands"</h4><p class="dim">{if configured {"Commands assigned to this device"} else {"Use the remote’s built-in infrared transmitter"}}</p></div>
+        <button type="button" class="ghost" aria-expanded=move ||app.ir_device.get()==id.get_value() on:click=move |_|app.ir_device.update(|open|*open=if *open==id.get_value(){String::new()}else{id.get_value()})>{move ||if app.ir_device.get()==id.get_value(){"Close IR commands"}else if configured{"Manage IR commands"}else{"Add IR commands"}}</button></div>
+        {move ||(app.ir_device.get()==id.get_value()).then(||device_setup(app,room.get_value(),Some(device.get_value())))}
+    </section>}.into_any()
 }
 
-pub fn device_setup(
-    app: App,
-    connection: couch_model::Id,
-    room: couch_model::Id,
-    existing: Option<couch_model::Device>,
-) -> AnyView {
-    let name = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|d| d.name.clone())
-            .unwrap_or_default(),
-    );
-    let kind = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|d| d.kind.name().to_string())
-            .unwrap_or("tv".into()),
-    );
-    let codeset = RwSignal::new(
-        existing
-            .as_ref()
-            .and_then(|d| match &d.integration {
-                couch_model::Integration::Connection { resource_id, .. } => {
-                    Some(resource_id.clone())
-                }
-                couch_model::Integration::Ir { codeset } => Some(codeset.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(new_codeset_id),
-    );
-    let text = RwSignal::new(String::new());
-    let busy = RwSignal::new(false);
-    let message = RwSignal::new(String::new());
+pub fn device_setup(app: App, room: couch_model::Id, existing: Option<couch_model::Device>) -> AnyView {
+    let is_new = existing.is_none();
+    let name = RwSignal::new(String::new());
+    let kind = RwSignal::new("tv".to_string());
     let saved = StoredValue::new(existing);
-
-    if saved.get_value().is_some() && !codeset.get_untracked().is_empty() {
-        busy.set(true);
+    let room = StoredValue::new(room);
+    let text = RwSignal::new(String::new());
+    let original = RwSignal::new(String::new());
+    let codeset = RwSignal::new(String::new());
+    let loading = RwSignal::new(!is_new);
+    let testing = RwSignal::new(false);
+    let message = RwSignal::new(String::new());
+    let loaded = RwSignal::new(is_new);
+    if let Some(device) = saved.get_value() {
         spawn_local(async move {
-            let result = api::ha(
-                "GET",
-                &format!("/api/ir/codesets/{}", codeset.get_untracked()),
-                None,
-            )
-            .await;
-            if busy.try_get_untracked().is_none() {
-                return;
-            }
+            let result=api::ha("GET",&format!("/api/rooms/{}/devices/{}/ir",room.get_value(),device.id),None).await;
+            if loading.try_get_untracked().is_none(){return;}
             match result {
-                Ok(v) => text.set(v["text"].as_str().unwrap_or("").into()),
-                Err(e) => message.set(e.message),
+                Ok(v)=>{let body=v["text"].as_str().unwrap_or("").to_string();text.set(body.clone());original.set(body);codeset.set(v["codeset"].as_str().unwrap_or("").into());if let Some(error)=v["error"].as_str(){message.set(error.into());}loaded.set(true);},
+                Err(e)=>{if e.unauthorized {app.paired.set(Some(false));}message.set(e.message);}
             }
-            busy.set(false);
+            loading.set(false);
         });
     }
-    let connection = StoredValue::new(connection);
-    let room = StoredValue::new(room);
-    view!{<section class="card"><h3>{if saved.get_value().is_some(){"Infrared commands"}else{"Add an infrared device"}}</h3>
-        {super::connections::field("IR device name",name,"Living room TV")}
-        <label class="field">"Device type"<select aria-label="IR device kind" prop:value=move ||kind.get() on:change=move |e|kind.set(event_target_value(&e))><option value="tv">"TV"</option><option value="speaker">"Speaker / receiver"</option><option value="media-player">"Media player"</option><option value="other">"Other"</option></select></label>
-        {library(app,text,false)}
-        <details open=!valid_id(codeset.get_untracked().trim())><summary>"Advanced: shared codeset"</summary>
-        {super::connections::field("Saved codeset ID",codeset,"living-room-tv")}
-        <p class="dim">"An ID is generated automatically for this device. Only reuse another device’s ID if both should share command changes. IDs use lowercase letters, numbers, hyphens or underscores."</p></details>
-        <label class="field">"Assigned commands"<textarea aria-label="Assigned IR commands" rows="6" maxlength="262144" prop:value=move ||text.get() on:input=move |e|text.set(event_target_value(&e)) /></label>
-        <button type="button" class="primary" disabled=move ||busy.get()||name.get().trim().is_empty()||!valid_id(codeset.get().trim())||text.get().trim().is_empty() on:click=move |_|{
-            busy.set(true);message.set(String::new());
-            let id=codeset.get_untracked().trim().to_string();let title=name.get_untracked().trim().to_string();let next_kind=kind.get_untracked();
-            spawn_local(async move {
-                let response=api::ha("PUT",&format!("/api/ir/codesets/{id}"),Some(json!({"text":text.get_untracked()}))).await;
-                if busy.try_get_untracked().is_none(){return;}
-                match response {
-                    Ok(_)=>{let integration=json!({"via":"connection","connection_id":connection.get_value(),"resource_id":id});
-                        if let Some(device)=saved.get_value(){let mut value=serde_json::to_value(&device).unwrap();value["name"]=json!(title);value["kind"]=json!(next_kind);value["integration"]=integration;app.run(api::put(format!("/api/rooms/{}/devices/{}",room.get_value(),device.id),value));}
-                        else {app.run(api::post(format!("/api/rooms/{}/devices",room.get_value()),json!({"name":title,"kind":next_kind,"integration":integration})));}
-                    }
-                    Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}
+    view! {<div class="ir-device-editor">
+        {is_new.then(||view!{<h3>"Add a device"</h3><p class="dim">"Name the device, then assign its infrared commands. No connection setup is needed."</p>
+            {super::connections::field("Device name",name,"Living room TV")}
+            <label class="field">"Device type"<select aria-label="Manual device type" prop:value=move ||kind.get() on:change=move |e|kind.set(event_target_value(&e))><option value="tv">"TV"</option><option value="speaker">"Speaker / receiver"</option><option value="media-player">"Media player"</option><option value="other">"Other"</option></select></label>})}
+        {(!is_new).then(||view!{<p class="dim">"Assigned functions use infrared. Other controls keep using this device’s connection. You do not need a second device."</p>})}
+        {move ||loading.get().then(||view!{<p role="status">"Loading saved commands…"</p>})}
+        <Show when=move ||loaded.get()>
+            <div class="ir-assignments"><h4>"Assigned functions"</h4>
+            {move ||if assigned_functions(&text.get()).is_empty(){view!{<p class="dim">"No IR commands assigned. Choose a remote below to get started."</p>}.into_any()}else{
+                assigned_functions(&text.get()).into_iter().map(|function|{
+                    let title=function_label(&function);let remove=function.clone();let test=function.clone();
+                    view!{<div class="ir-assignment"><span>{title}</span><div class="ir-assignment-actions">
+                        <button type="button" class="ghost" aria-label=format!("Test {}",function_label(&test)) disabled=move ||testing.get()||app.busy.get()||codeset.get().is_empty()||text.get()!=original.get() on:click=move |_|{
+                            testing.set(true);message.set(String::new());let command=test.clone();
+                            spawn_local(async move {let result=api::ha("POST",&format!("/api/ir/codesets/{}/test",codeset.get_untracked()),Some(json!({"command":command}))).await;
+                                if testing.try_get_untracked().is_none(){return;}
+                                match result{Ok(_)=>message.set("IR command sent. Check that the device responded.".into()),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}testing.set(false);
+                            });
+                        }>"Test"</button>
+                        <button type="button" class="ghost" aria-label=format!("Remove {}",function_label(&remove)) disabled=move ||testing.get()||app.busy.get() on:click=move |_|text.update(|body|remove_assignment(body,&remove))>"Remove"</button>
+                    </div></div>}
+                }).collect_view().into_any()
+            }}
+            <p class="dim">"Save changes before testing. Test sends one command using the remote’s built-in blaster."</p></div>
+            <details class="ir-library-picker" open=move ||original.get().is_empty()><summary>"Find commands in the library or import a remote"</summary>{library(app,text,false)}</details>
+            <details class="ir-advanced"><summary>"Advanced: edit command definitions"</summary><label class="field">"Command definitions"<textarea aria-label="Assigned IR commands" rows="6" maxlength="262144" prop:value=move ||text.get() on:input=move |e|text.set(event_target_value(&e)) /></label></details>
+            <div class="ir-editor-actions"><button type="button" class="primary" disabled=move ||loading.get()||testing.get()||app.busy.get()||(is_new&&(text.get().trim().is_empty()||name.get().trim().is_empty())) on:click=move |_|{
+                let body=text.get_untracked();
+                if let Some(device)=saved.get_value(){let path=format!("/api/rooms/{}/devices/{}/ir",room.get_value(),device.id);if body.trim().is_empty(){app.run(api::delete(path));}else{app.run(api::put(path,json!({"text":body})));}}
+                else {
+                    let old_ids: Vec<_>=app.config.get_untracked().unwrap_or_default().devices().map(|(_,d)|d.id.clone()).collect();
+                    let payload=json!({"name":name.get_untracked().trim(),"kind":kind.get_untracked(),"text":body});
+                    app.run(async move {let next=api::post(format!("/api/rooms/{}/devices/ir",room.get_value()),payload).await?;
+                        if let Some((_,device))=next.devices().find(|(_,d)|!old_ids.contains(&d.id)){app.ir_device.set(device.id.to_string());}
+                        Ok(next)
+                    });
                 }
-                busy.set(false);
-            });
-        }>{if saved.get_value().is_some(){"Save IR commands"}else{"Save and add to room"}}</button><p role="status">{move ||message.get()}</p>
-    </section>}.into_any()
+            }>{if is_new{"Add device to room"}else{"Save IR commands"}}</button>
+            {(!is_new).then(||view!{<button type="button" class="ghost" disabled=move ||loading.get()||testing.get()||app.busy.get()||codeset.get().is_empty() on:click=move |_|{if let Some(device)=saved.get_value(){app.run(api::delete(format!("/api/rooms/{}/devices/{}/ir",room.get_value(),device.id)));}}>"Remove all IR commands"</button>})}</div>
+        </Show>
+        <p role="status">{move ||message.get()}</p>
+    </div>}.into_any()
+}
+
+fn assigned_functions(text: &str) -> Vec<String> {
+    text.lines().filter_map(|line|{let line=line.trim();if line.starts_with('#'){None}else{line.split_whitespace().next().map(str::to_string)}}).collect()
+}
+fn remove_assignment(text: &mut String, function: &str) {
+    *text=text.lines().filter(|line|!line.split_whitespace().next().is_some_and(|key|key.eq_ignore_ascii_case(function))).collect::<Vec<_>>().join("\n");
+}
+fn function_label(function: &str) -> String {
+    match function {"toggle"|"power"=>"Power toggle".into(),"power-on"=>"Power on".into(),"power-off"=>"Power off".into(),"ok"=>"OK / select".into(),_=>{let label=function.replace('-'," ");let mut chars=label.chars();match chars.next(){Some(c)=>c.to_uppercase().collect::<String>()+chars.as_str(),None=>String::new()}}}
+}
+
+fn suggested_function(name: &str, power_only: bool) -> Option<String> {
+    let key=name.to_ascii_lowercase().replace([' ', '_'], "-");
+    let function=match key.as_str(){
+        "power"|"power-toggle"|"toggle"=>if power_only{"power"}else{"toggle"},
+        "on"|"power-on"|"poweron"=>"power-on", "off"|"power-off"|"poweroff"=>"power-off",
+        "vol+"|"vol-up"|"volume-up"|"volume+"=>"volume-up", "vol-"|"vol-down"|"volume-down"|"volume-"=>"volume-down",
+        "ch+"|"ch-up"|"channel-up"=>"channel-up", "ch-"|"ch-down"|"channel-down"=>"channel-down",
+        "enter"|"select"|"ok"=>"ok", "return"|"back"=>"back", "play/pause"|"playpause"|"play-pause"=>"play-pause",
+        "up"|"down"|"left"|"right"|"home"|"menu"|"mute"|"play"|"pause"|"stop"|"next"|"previous"|"rewind"|"fast-forward"|"red"|"green"|"yellow"|"blue"=>key.as_str(),
+        _=>return None,
+    };
+    if power_only&&!matches!(function,"power"|"power-on"|"power-off"){None}else{Some(function.into())}
 }
