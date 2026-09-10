@@ -1,3 +1,4 @@
+import { Thermostat } from "screens/thermostat.slint";
 import { ActivityPages, ActivityTile } from "screens/activity_pages.slint";
 export { ActivityTile }
 import { Television, TvChoice } from "screens/tv.slint";
@@ -136,6 +137,24 @@ export component App inherits Window {
     in-out property <string> activity-progress;
     in-out property <string> activity-step;
     callback open-tv(string,string);
+    callback open-thermostat(string, string);
+    callback thermostat-room-adjust(string, string, int);
+    callback thermostat-action(string, int);
+    in-out property <bool> thermostat-shown;
+    in-out property <string> thermostat-title;
+    // Runtime HA values include these glyphs. Software font embedding scans
+    // Slint literals, so retain degree, range dash and unknown placeholders.
+    in-out property <string> thermostat-current: "—°C";
+    in-out property <string> thermostat-target: "—°C – —°C";
+    in-out property <string> thermostat-status;
+    in-out property <string> thermostat-detail;
+    in-out property <string> thermostat-mode;
+    in-out property <[string]> thermostat-modes;
+    in-out property <bool> thermostat-range;
+    in-out property <bool> thermostat-adjustable;
+    in-out property <bool> thermostat-pending;
+    in-out property <bool> thermostat-modes-shown;
+    public function focus-thermostat() { thermostat-page.take-focus(); }
     callback tv-action(string);
     in-out property <bool> tv-shown: false;
     in-out property <bool> tv-android: false;
@@ -194,6 +213,7 @@ export component App inherits Window {
     in-out property <bool> brightness-shown: false;
     in-out property <int> light-brightness-percent: 0;
     in-out property <string> brightness-target;
+    in-out property <string> brightness-label: "Brightness";
     callback light-back();
     callback room-scenes();
     callback room-scene-step(int);
@@ -446,6 +466,15 @@ export component App inherits Window {
         has-source:root.custom-activity-source; busy:root.custom-activity-busy; status:root.custom-activity-status;
         action(name,index)=>{root.custom-activity-action(name,index);}
     }
+    thermostat-page := Thermostat {
+        width:parent.width; height:parent.height;
+        visible:root.thermostat-shown; shown:root.thermostat-shown;
+        title:root.thermostat-title; current:root.thermostat-current; target:root.thermostat-target;
+        status:root.thermostat-status; detail:root.thermostat-detail; mode:root.thermostat-mode;
+        modes:root.thermostat-modes; modes-shown:root.thermostat-modes-shown;
+        range:root.thermostat-range; adjustable:root.thermostat-adjustable; pending:root.thermostat-pending;
+        action(name,index) => { root.thermostat-action(name,index); }
+    }
     if root.custom-activity-available && root.active-activity!="" && !root.custom-activity-shown && (root.player-shown || root.tv-shown): Rectangle {
         x:parent.width - 112px; y:80px; width:88px; height:44px; border-radius:22px; background:Theme.surface;
         Text { text:"Pages"; color:Theme.text; font-size:18px; horizontal-alignment:center; vertical-alignment:center; }
@@ -579,7 +608,7 @@ export component App inherits Window {
         width: parent.width - 2 * Theme.overlay-inset;
         y: parent.height - self.height - Theme.overlay-inset;
         target: root.brightness-target;
-        caption: "Brightness";
+        caption: root.brightness-label;
         value: root.light-brightness-percent;
         percentage: true;
         shown: root.brightness-shown && root.light-shown && !root.chooser-shown;

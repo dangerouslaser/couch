@@ -27,6 +27,7 @@ mod activity;
 mod activity_runtime;
 mod activity_buttons;
 mod tv;
+mod thermostat;
 mod connections;
 mod config_snapshot;
 mod input;
@@ -219,6 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene_controls = scenes::Controller::new(&app);
     let mut activity_controls = activity::Controller::new(&app);
     let mut tv_controls = tv::Controller::new(&app);
+    let mut thermostat_controls = thermostat::Controller::new(&app);
     let mut activity_runtime = activity_runtime::Controller::new(&app);
     let scene_choices = Rc::new(RefCell::new(Vec::<couch_model::Id>::new()));
     app.set_area_dots(ModelRc::new(VecModel::from(vec![true; areas.len()])));
@@ -640,7 +642,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (app.get_light_shown(), app.get_chooser_shown(), app.get_settings_shown(),
          app.get_keyboard_shown(), app.get_wifi_setup_shown(), app.get_pair_shown(),
          app.get_setup_mode(), app.get_recording()),
-        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(), app.get_player_shown(), app.get_tv_shown(),
+        app.get_settings_panel(), app.get_area_index(), app.get_light_room_id(), app.get_player_shown(), app.get_tv_shown(), app.get_thermostat_shown(),
     );
     let mut last_feedback_page = feedback_page(&app);
     let dismiss_feedback = |app: &App, scenes: &mut scenes::Controller, lights: &mut lights::Controller| {
@@ -657,6 +659,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exit_device = |app: &App| {
         if app.get_activity_busy() {
             app.invoke_cancel_activity();
+        } else if app.get_thermostat_shown() {
+            app.invoke_thermostat_action("close".into(),0);
         } else if app.get_tv_shown() {
             app.invoke_tv_action("close".into());
         } else if app.get_player_shown() {
@@ -674,8 +678,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             verify_at = Some(last_input + 1_000_000);
             println!("couch-gui: standby: wake on lift");
         }
-        let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() {
-            format!("{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_active_activity())
+        let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() || app.get_thermostat_shown() {
+            format!("{}:{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_thermostat_shown(), app.get_active_activity())
         } else { String::new() };
         back_hold.context(back_context);
         if back_hold.poll(now_monotonic_us()) { exit_device(&app); }
@@ -1028,19 +1032,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Some(error) = activity_runtime.poll(&app) { toast(error, 5); }
-        let was_activity = (app.get_player_shown(), app.get_tv_shown());
-        let activity_navigation = activity_controls.navigation_pending(&app) || tv_controls.navigation_pending();
+        let was_activity = (app.get_player_shown(), app.get_tv_shown(), app.get_thermostat_shown());
+        let activity_navigation = activity_controls.navigation_pending(&app) || tv_controls.navigation_pending() || thermostat_controls.navigation_pending();
         if activity_navigation {screen.snapshot();}
         activity_controls.poll(&app);
         tv_controls.poll(&app);
+        if let Some(message)=thermostat_controls.poll(&app){toast(message,2);}
         if let Some(error)=button_controls.poll(&app) {toast(error,3);}
         if !app.get_player_shown() && !app.get_tv_shown() {app.set_active_activity("".into());}
-        if activity_navigation && was_activity != (app.get_player_shown(), app.get_tv_shown()) {
+        if activity_navigation && was_activity != (app.get_player_shown(), app.get_tv_shown(), app.get_thermostat_shown()) {
             dismiss_feedback(&app, &mut scene_controls, &mut light_controls);
             slint::platform::update_timers_and_animations();
             if let Some(us) = screen.render_offscreen(&window) {
                 frames += 1; render_us += us; frame_max = frame_max.max(us);
-                let entering = app.get_player_shown() || app.get_tv_shown();
+                let entering = app.get_player_shown() || app.get_tv_shown() || app.get_thermostat_shown();
                 let cost = screen.slide(if entering {Arrive::FromRight} else {Arrive::FromLeft}, &[], SLIDE);
                 frames += cost.frames; render_us += cost.work_us; wait_us += cost.wait_us;
                 frame_max = frame_max.max(cost.max_us);

@@ -1,0 +1,69 @@
+import { Theme } from "../theme.slint";
+import { MediaBack } from "../widgets/media-back.slint";
+import { BottomTray } from "../components/bottom_tray.slint";
+
+export component Thermostat inherits Rectangle {
+    in property <bool> shown;
+    in property <string> title;
+    in property <string> current;
+    in property <string> target;
+    in property <string> status;
+    in property <string> detail;
+    in property <string> mode;
+    in property <[string]> modes;
+    in property <bool> range;
+    in property <bool> adjustable;
+    in property <bool> pending;
+    in property <bool> modes-shown;
+    property <int> selected: 0;
+    callback action(string, int);
+    public function take-focus() { keys.focus(); }
+    changed modes-shown => { root.selected = 0; }
+    background: Theme.bg;
+    MediaBack { x:24px; y:22px; activate => { root.action("close", 0); } }
+    Text { x:88px; y:27px; width:parent.width - 112px; height:28px; text:root.title; font-size:21px; font-weight:600; color:Theme.text; overflow:elide; }
+    Text { x:88px; y:59px; width:parent.width - 112px; height:24px; text:"Home Assistant"; font-size:16px; color:Theme.text-secondary; }
+    Rectangle { x:200px; y:120px; width:80px; height:80px; border-radius:40px; background:Theme.accent-bg;
+        Image { x:22px; y:22px; width:36px; height:36px; source:@image-url("../../../../assets/lucide/thermometer.svg"); colorize:Theme.accent; }
+    }
+    Text { x:24px; y:220px; width:parent.width - 48px; height:30px; text:root.range ? "HEAT / COOL TARGET" : "TARGET TEMPERATURE"; horizontal-alignment:center; font-size:16px; letter-spacing:2px; color:Theme.text-secondary; }
+    Text { x:24px; y:266px; width:parent.width - 48px; height:100px; text:root.target; horizontal-alignment:center; vertical-alignment:center; font-size:root.range ? 46px : 76px; font-weight:700; color:root.adjustable ? Theme.text : Theme.text-secondary; }
+    Text { x:24px; y:382px; width:parent.width - 48px; height:30px; text:root.pending ? "Updating…" : root.status; horizontal-alignment:center; font-size:23px; color:Theme.accent; }
+    Rectangle { x:24px; y:445px; width:parent.width - 48px; height:94px; border-radius:18px; background:Theme.surface; border-width:1px; border-color:Theme.border;
+        Text { x:22px; y:18px; width:190px; height:25px; text:"Inside temperature"; font-size:18px; color:Theme.text-secondary; }
+        Text { x:22px; y:49px; width:190px; height:23px; text:"Reported by thermostat"; font-size:15px; color:Theme.text-tertiary; }
+        Text { x:230px; y:22px; width:parent.width - 252px; height:50px; text:root.current; horizontal-alignment:right; font-size:32px; font-weight:600; color:Theme.text; }
+    }
+    Rectangle { x:24px; y:555px; width:parent.width - 48px; height:94px; border-radius:18px; background:Theme.surface; border-width:1px; border-color:root.modes.length > 0 ? Theme.accent : Theme.border;
+        Image { x:22px; y:31px; width:30px; height:30px; source:@image-url("../../../../assets/lucide/sliders-horizontal.svg"); colorize:Theme.accent; }
+        Text { x:70px; y:17px; width:parent.width - 126px; height:26px; text:"Mode"; font-size:18px; color:Theme.text-secondary; }
+        Text { x:70px; y:49px; width:parent.width - 126px; height:28px; text:root.mode; font-size:23px; font-weight:600; color:Theme.text; }
+        Image { x:parent.width - 42px; y:35px; width:24px; height:24px; source:@image-url("../../../../assets/lucide/chevron-right.svg"); colorize:Theme.text-secondary; }
+        TouchArea { clicked => { root.action("modes",0); } }
+    }
+    Text { x:36px; y:679px; width:parent.width - 72px; height:85px; text:root.detail; font-size:19px; color:Theme.text-secondary; wrap:word-wrap; horizontal-alignment:center; }
+    tray := BottomTray { width:parent.width; height:parent.height; open:root.modes-shown; active:root.shown; tray-height:min(620px, 102px + root.modes.length * 68px); dismiss => { root.action("dismiss",0); }
+        Rectangle { x:Theme.overlay-inset; y:tray.content-y; width:tray.content-width; height:tray.content-height; background:transparent;
+            TouchArea { }
+            Text { x:24px; y:22px; width:parent.width - 48px; height:38px; text:"Thermostat mode"; font-size:27px; font-weight:600; color:Theme.text; }
+            Rectangle { x:18px; y:80px; width:parent.width - 36px; height:parent.height - 98px; clip:true;
+                for mode[i] in root.modes: Rectangle { x:0px; y:i*68px - max(0, root.selected - 6)*68px; width:parent.width; height:60px; border-radius:12px; background:i == root.selected ? Theme.accent-bg : Theme.surface-raised; border-width:1px; border-color:i == root.selected ? Theme.accent : Theme.border;
+                    Text { x:18px; width:parent.width - 36px; height:parent.height; text:mode; font-size:22px; color:Theme.text; vertical-alignment:center; }
+                    TouchArea { clicked => { root.action("mode",i); } }
+                }
+            }
+        }
+    }
+    keys := FocusScope { enabled:root.shown;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { root.action(root.modes-shown ? "dismiss" : "close",0); }
+            if (e.text == Key.Home) { root.action("home",0); }
+            if (e.text == Key.Return) { root.action(root.modes-shown ? "mode" : "modes", root.selected); }
+            if (e.text == Key.UpArrow && root.modes-shown) { root.selected = max(0, root.selected - 1); }
+            if (e.text == Key.DownArrow && root.modes-shown) { root.selected = min(root.modes.length - 1, root.selected + 1); }
+            if (e.text == Key.F23) { root.action("adjust",1); }
+            if (e.text == Key.F24) { root.action("adjust",-1); }
+            return accept;
+        }
+    }
+}
