@@ -5,7 +5,7 @@ baseline after stock Android has run. Android can legitimately update `nvdata`;
 comparing every calibration byte to the older Couch snapshot would then reject
 the same physical device. This command preserves the prior baseline and verifies
 CID, storage capacity and the complete reviewed partition layout before reading
-fresh identity bytes. It never writes flash or requests reboot.
+fresh identity bytes. It never writes flash. DA exit is an explicit option.
 
 This is **not public enrollment of an unknown remote**. It requires a retained,
 trusted complete baseline for this unit, its explicitly confirmed CID SHA-256,
@@ -31,6 +31,12 @@ python3 tools/installer/capture_stock_identity.py \
 
 `--check-only` validates files without USB. Remove it only for the explicitly
 planned read-only DA capture, then reboot the connected remote into preloader.
+Add `--boot-after-capture` to request DA exit only after independently verified
+capture. The HA100 may otherwise fail CDC driver reattachment while still in DA
+mode. The tested exit powers the unit off; hold Power to start Android afterward.
+An acknowledged exit does not verify OS startup. Failed captures never request
+exit; failed exit or cleanup prevents publication of the new baseline.
+
 Physical bus/port selection remains exact. DA upload changes RAM but no flash
 write API is exposed. No Couch SSH or running Linux session is needed.
 

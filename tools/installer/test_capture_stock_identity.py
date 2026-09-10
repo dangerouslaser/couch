@@ -33,17 +33,19 @@ class StockCaptureTests(unittest.TestCase):
         self.args.stock_manifest_sha256 = digest(self.args.stock_manifest)
         self.sessions = 0
         self.cleanup_fails = False
+        self.exits = 0
 
-    def perform_capture(self, args):
+    def perform_capture(self, args, **capture_options):
         @contextmanager
         def session(*unused, **kwargs):
             self.sessions += 1
-            self.assertFalse(kwargs['boot_after_capture'])
             yield self.reader
+            if kwargs['boot_after_capture']:
+                self.exits += 1
             if self.cleanup_fails:
                 raise InstallError('USB cleanup failed')
         with patch('capture_readonly.source_pin', return_value={}), redirect_stdout(io.StringIO()):
-            capture(args, session=session)
+            capture(args, session=session, **capture_options)
 
     def test_mutable_identity_recaptured_old_baseline_preserved(self):
         with redirect_stdout(io.StringIO()):
@@ -54,6 +56,20 @@ class StockCaptureTests(unittest.TestCase):
         self.assertEqual(fresh['identity_sha256'], {name: self.reader.hash(name) for name in IDENTITY_PARTITIONS})
         self.assertEqual(fresh['predecessor_sha256'], hashlib.sha256(self.original).hexdigest())
         self.assertFalse(fresh['identity_decoded'])
+
+    def test_explicit_exit_only_after_successful_independent_capture(self):
+        self.args.boot_after_capture = True
+        with patch.object(self.reader, 'hash', return_value='0' * 64):
+            with self.assertRaises(InstallError):
+                recapture(self.args, capture_fn=self.perform_capture)
+        self.assertEqual(self.exits, 0)
+        self.args.backup_dir = self.fixture.root / 'successful-exit'
+        with redirect_stdout(io.StringIO()):
+            recapture(self.args, capture_fn=self.perform_capture)
+        self.assertEqual(self.exits, 1)
+        fresh = read_json(self.args.backup_dir / 'baseline.json')
+        self.assertTrue(fresh['boot_acknowledged'])
+        self.assertFalse(fresh['normal_os_verified'])
 
     def test_wrong_confirmation_and_profile_pin_fail_before_session(self):
         for field in ('confirm_cid_sha256', 'stock_manifest_sha256'):

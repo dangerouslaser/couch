@@ -65,7 +65,7 @@ def wait_preloader(enumerate_devices, bus, ports, timeout, *, clock=time.monoton
     raise InstallError("No supported preloader appeared on the selected USB port before timeout")
 
 
-def capture(args, *, enumerate_devices=None, session=read_session):
+def capture(args, *, enumerate_devices=None, session=read_session, allow_identity_refresh=False):
     ports = tuple(int(part) for part in args.ports.split("."))
     require(args.bus > 0 and ports and all(part > 0 for part in ports), "Invalid USB bus/port path")
     require(0 < args.timeout <= 600, "Timeout must be between 1 and 600 seconds")
@@ -73,9 +73,13 @@ def capture(args, *, enumerate_devices=None, session=read_session):
     require(not destination.is_symlink() and not destination.exists(), "Use a new identity backup destination")
     require(not destination.resolve().is_relative_to(REPO), "Keep identity backups outside the repository")
     baseline = baseline_record(args.baseline)
+    if allow_identity_refresh:
+        require(baseline is not None and "cid" in baseline,
+                "Identity refresh requires an explicitly trusted CID and complete layout binding")
     boot_after_capture = getattr(args, "boot_after_capture", False)
     if boot_after_capture:
-        require(baseline is not None and "cid" in baseline and "identity_sha256" in baseline,
+        require(baseline is not None and "cid" in baseline
+                and (bool(baseline.get("identity_sha256")) or allow_identity_refresh),
                 "Boot-after-capture requires a complete runtime identity baseline")
     # Complete all file checks before even importing PyUSB for discovery.
     source_pin(args.checkout)

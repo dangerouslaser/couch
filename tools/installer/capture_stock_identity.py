@@ -38,8 +38,8 @@ def recapture(args, *, capture_fn=capture):
         binding_path = Path(temporary) / 'binding.json'
         save_json(binding_path, binding)
         values = vars(args).copy()
-        values.update(baseline=binding_path, boot_after_capture=False)
-        capture_fn(SimpleNamespace(**values))
+        values.update(baseline=binding_path, boot_after_capture=getattr(args, "boot_after_capture", False))
+        capture_fn(SimpleNamespace(**values), allow_identity_refresh=True)
     if args.check_only:
         return
     report = read_json(destination / 'readback.json')
@@ -59,7 +59,9 @@ def recapture(args, *, capture_fn=capture):
     result = {**binding, 'identity_sha256': hashes, 'source': 'known-device-stock-usb-recapture',
               'predecessor_sha256': predecessor, 'stock_manifest_sha256': args.stock_manifest_sha256,
               'loader_sha256': args.loader_sha256, 'board_data_sha256': args.preloader_sha256,
-              'identity_decoded': False, 'normal_os_verified': False}
+              'identity_decoded': False, 'normal_os_verified': False,
+              'boot_requested': report.get('boot_requested', False),
+              'boot_acknowledged': report.get('boot_acknowledged', False)}
     output = destination / 'baseline.json'
     require(not output.exists() and not output.is_symlink(), 'Never replace an existing baseline')
     save_json(output, result)
@@ -75,6 +77,8 @@ def main(argv=None):
     parser.add_argument('--bus', type=int, required=True)
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--lock-dir', type=Path, default=Path.home() / '.local/state/couch-installer/locks')
+    parser.add_argument('--boot-after-capture', action='store_true',
+                        help='Explicitly request DA exit only after verified capture; manual Power may be needed')
     parser.add_argument('--check-only', action='store_true')
     try:
         recapture(parser.parse_args(argv))
