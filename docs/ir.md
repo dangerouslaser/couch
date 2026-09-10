@@ -489,3 +489,13 @@ the previous timing candidate's DTB/ramdisk, is 7,946,240 bytes, and has SHA256
 `355a004bd5491569ed435eb3d1fcaf3dccdfee4f0c9fb154a90e28c5196f34bf`.
 Build success is not physical validation; flashing and the measured send are
 separate coordinated steps.
+
+Deployed this candidate on 2026-09-10 after verifying that its boot parameters,
+DTB and ramdisk exactly match the running image. The p8 write passed readback
+verification; the device reports `3.18.79-couch-normal-g4ee1dd92f1b1`.
+USB serial and Wi-Fi SSH work, GUI heartbeats advance, and the boot-health
+check cleared the recovery BCB. The recovery partition hash is unchanged.
+Fresh full p8/p9 backups are retained on the device and Ollie under
+`irtx-output-20260910`. Telemetry remains disabled (`N`) pending the coordinated
+camera test. No transmission or optical validation has occurred on this kernel
+yet; successful boot does not establish that IR output works.
