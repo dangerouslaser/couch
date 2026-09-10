@@ -37,7 +37,11 @@ On 2026-09-09, read-only observations on the user's Android TV reported SmartTub
 with title, duration, position and play/pause state. Its metadata had no images.
 The Jellyfin client identified itself as Wholphin and reported the title *1917*,
 duration, paused position and standard artwork. This does not establish physical
-compatibility for every app/device; Plex and Netflix were not tested.
+compatibility for every app/device. A subsequent Plex observation supplied
+artwork, duration and a paused position, but explicitly empty standard `title`
+and `subtitle` fields. Its metadata had no other standard title field, so the UI
+should show the app name instead of inventing a content title. Netflix was not
+tested.
 
 ```sh
 cargo run -p couch-androidtv --example cast_status -- 192.0.2.10
