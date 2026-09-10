@@ -35,8 +35,9 @@ impl Network {
                 && hex(&self.ssid_hex),
             "invalid network name encoding",
         )?;
-        let mut data =
-            Zeroizing::new(format!("network={{\n    ssid={}\n", self.ssid_hex).into_bytes());
+        let mut data = Zeroizing::new(
+            format!("network={{\n    ssid={}\n    scan_ssid=1\n", self.ssid_hex).into_bytes(),
+        );
         if let Some(psk) = &self.psk_hex {
             ensure(psk.len() == 64 && hex(psk), "invalid network key encoding")?;
             data.extend_from_slice(b"    key_mgmt=WPA-PSK\n    proto=RSN\n    psk=");
@@ -222,7 +223,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes.as_slice(),
-            b"network={\n    ssid=61\n    key_mgmt=NONE\n}\n"
+            b"network={\n    ssid=61\n    scan_ssid=1\n    key_mgmt=NONE\n}\n"
         );
     }
 }
