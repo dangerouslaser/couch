@@ -8,6 +8,7 @@ Couch is a Linux distribution for the Sanytron Astrion HA100 remote (ARMv7, Alpi
 - `initramfs/init`, `recovery/init`, and `stage2/` implement boot, rescue, and runtime setup; `stage2/www/` contains the setup portal.
 - `kernel/` holds kernel build configuration; `tools/` contains build, deployment, and diagnostic scripts.
 - `src/` contains C framebuffer utilities; `gui/` contains the LVGL implementation. Assets live in `assets/` and UI subdirectories. Consult `docs/` for subsystem details.
+- Keep maintained architecture, usage, recovery and validation procedures in `docs/`. Put session handoffs, dated work logs, private trial records and disposable plans in the gitignored `scratchpad/` directory. Promote lasting findings into the relevant guide instead of appending a session transcript.
 
 ## Build, Test, and Development Commands
 
