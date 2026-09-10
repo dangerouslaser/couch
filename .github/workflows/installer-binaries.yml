@@ -48,7 +48,7 @@ jobs:
           mkdir -p universal
           lipo -create binaries/couch-installer-tui-macos-x64/couch-installer-tui binaries/couch-installer-tui-macos-arm64/couch-installer-tui -output universal/couch-installer-tui
           chmod +x universal/couch-installer-tui
-          lipo -verify_arch x86_64 arm64 universal/couch-installer-tui
+          lipo universal/couch-installer-tui -verify_arch x86_64 arm64
       - uses: actions/upload-artifact@v4
         with:
           name: couch-installer-tui-macos-universal
