@@ -140,7 +140,19 @@ class Adapter:
         op = command.get('op')
         if op == 'prepare':
             return self.prepare(command)
-        if op == 'enumerate':
+        if op == 'android_bind':
+            require(set(command) == {'op', 'serial'} and self.backend is not None
+                    and self.reader is None and isinstance(command['serial'], str)
+                    and 1 <= len(command['serial']) <= 128, 'Invalid Android selection')
+            with self.wire.deadline(15):
+                matches = [d for d in self.backend.usb.core.find(find_all=True, idVendor=0x0e8d,
+                    backend=self.backend.usb_backend) if d.serial_number == command['serial']]
+            require(len(matches) == 1 and matches[0].bus and matches[0].port_numbers,
+                    'Cannot bind authorized Android serial to one physical USB port')
+            self.wire.send({'event': 'android_bound', 'bus': matches[0].bus,
+                'ports': list(matches[0].port_numbers),
+                'serial_sha256': hashlib.sha256(command['serial'].encode()).hexdigest()})
+        elif op == 'enumerate':
             require(self.backend is not None and self.reader is None and set(command) == {'op'}, 'Unexpected enumeration')
             with self.wire.deadline(10):
                 found = self.backend.enumerate()
