@@ -79,7 +79,7 @@ export component Television inherits Rectangle {
     if root.android-tv && !root.media-view: Tile {x:24px;y:646px;width:210px;height:120px;title:"Stop";detail:"Stop playback";icon:@image-url("../../../../assets/lucide/square.svg");activate=>{root.action("stop");}}
     if root.android-tv && !root.media-view: Tile {x:246px;y:646px;width:210px;height:120px;title:"Apps";detail:"Your shortcuts";icon:@image-url("../../../../assets/lucide/layout-grid.svg");activate=>{root.action("apps");}}
     if root.media-view: Rectangle {x:32px;y:320px;width:parent.width - 64px;height:224px;background:transparent;
-        Text {y:0px;width:parent.width;height:76px;text:root.media-title!="" ? root.media-title : root.source-name;font-size:32px;font-weight:700;wrap:word-wrap;overflow:elide;color:Theme.text;vertical-alignment:bottom;}
+        Text {y:0px;width:parent.width;height:76px;text:root.media-title!="" ? root.media-title : root.media-app!="" ? root.media-app : root.source-name;font-size:32px;font-weight:700;wrap:word-wrap;overflow:elide;color:Theme.text;vertical-alignment:bottom;}
         Text {y:86px;width:parent.width;height:28px;text:root.media-subtitle;font-size:19px;overflow:elide;color:Theme.text-secondary;}
         Text {x:0px;y:130px;width:160px;height:28px;text:root.media-state;font-size:20px;font-weight:600;color:Theme.accent;overflow:elide;}
         Text {x:170px;y:130px;width:parent.width - 170px;height:28px;text:root.media-app;font-size:17px;color:Theme.text-secondary;horizontal-alignment:right;overflow:elide;}
