@@ -1,6 +1,8 @@
 //! Full-screen activity controls. Provider I/O stays outside Slint.
 #[path = "activity_pages.rs"]
 mod pages;
+#[path = "activity_cache.rs"]
+mod cache;
 use crate::{App, PlayerChoice};
 use couch_kodi::{
     playback::{Chapter, Playback},
@@ -231,6 +233,9 @@ pub struct Controller {
     artwork: super::activity_art::Worker,
     art_key: String,
     pages: pages::Pages,
+    cache: cache::Cache,
+    cache_key: Option<cache::Key>,
+    presentation_at: Option<Instant>,
 }
 impl Controller {
     pub fn new(app: &App) -> Self {
@@ -260,7 +265,25 @@ impl Controller {
             artwork: super::activity_art::Worker::new(),
             art_key: String::new(),
             pages: pages::Pages::new(),
+            cache: cache::Cache::default(),
+            cache_key: None,
+            presentation_at: None,
         }
+    }
+    fn remember(&mut self, app: &App) {
+        if let (Some(key),Some(at)) = (self.cache_key.clone(),self.presentation_at) {
+            if app.get_player_shown() && !app.get_custom_activity_shown() {
+                self.cache.insert(key,at,cache::Presentation::capture(app,&self.art_key),Instant::now());
+            }
+        }
+    }
+    fn forget_view(&mut self,app:&App) {
+        if let Some(key)=&self.cache_key {self.cache.remove(key);}
+        self.presentation_at=None;
+        self.art_key.clear();
+        app.set_player_fanart(slint::Image::default());
+        app.set_player_logo(slint::Image::default());
+        app.set_player_has_art(false);app.set_player_has_logo(false);
     }
     fn error(&mut self, app: &App, text: &str) {
         app.set_player_message(text.into());
@@ -268,6 +291,8 @@ impl Controller {
     }
     fn open_pages(&mut self, app: &App, config: std::sync::Arc<Config>, id: &str) {
         let Some(activity) = config.activities.iter().find(|a| a.id.as_str() == id).filter(|a| !a.setup.pages.is_empty()) else { return };
+        self.remember(app);
+        self.cache_key=None;self.presentation_at=None;
         self.generation += 1;
         self.busy = false;
         self.snapshot = None;
@@ -293,6 +318,8 @@ impl Controller {
         });
     }
     fn open(&mut self, app: &App, id: &str, custom: bool) {
+        self.remember(app);
+        self.cache_key=None;self.presentation_at=None;
         app.set_active_activity(if id.starts_with("device:") {""}else{id}.into());
         self.pages.close(app);
         app.set_custom_activity_available(false);
@@ -331,6 +358,8 @@ impl Controller {
                             .map(|c| c.id.to_string())
                             .unwrap_or_default(),
                     };
+                    self.generation+=1;self.snapshot=None;self.target=None;self.busy=false;
+                    let _=self.tx.try_send((self.generation,Request::Close));
                     app.set_player_shown(false);
                     app.invoke_open_tv(connection.as_str().into(), device.name.as_str().into());
                     return;
@@ -346,7 +375,11 @@ impl Controller {
         app.set_player_ready(false);
         app.set_player_connected(false);
         app.set_player_message("".into());
+        self.error_until=None;
         app.set_player_title("Connecting to Kodi…".into());
+        app.set_player_metadata("".into());
+        app.set_player_elapsed("".into());app.set_player_remaining("".into());
+        app.set_player_progress(0.);app.set_player_can_seek(false);
         app.set_player_fanart(slint::Image::default());
         app.set_player_logo(slint::Image::default());
         app.set_player_has_logo(false);
@@ -359,6 +392,15 @@ impl Controller {
             Ok(t) => {
                 app.set_player_activity(t.name.clone().into());
                 app.set_player_room(t.room.clone().into());
+                if let Some(config)=crate::config_snapshot::current() {
+                    let key=cache::Key {id:id.into(),serial:config.serial,connection:t.connection.clone(),host:t.host.clone(),port:t.port};
+                    if let Some((view,at))=self.cache.get(&key,Instant::now()) {
+                        view.restore(app);self.art_key=view.art_key;self.presentation_at=Some(at);
+                    }
+                    self.cache_key=Some(key);
+                }
+                // Restored properties never populate snapshot: Player.* needs
+                // the new worker's authoritative playback observation.
                 if self
                     .tx
                     .try_send((self.generation, Request::Open(t.clone())))
@@ -377,6 +419,10 @@ impl Controller {
     }
     fn send(&mut self, app: &App, method: &str, params: Value) {
         if self.busy {
+            return;
+        }
+        if method.starts_with("Player.") && self.snapshot.as_ref().and_then(|s|s.playing.as_ref()).is_none() {
+            self.error(app,"Refreshing playback. Try again in a moment.");
             return;
         }
         let item = self
@@ -494,6 +540,8 @@ impl Controller {
                         app.set_player_panel(0);
                         app.invoke_focus_player();
                     } else {
+                        self.remember(app);
+                        self.cache_key=None;self.presentation_at=None;
                         self.generation += 1;
                         self.busy = false;
                         self.snapshot = None;
@@ -509,6 +557,7 @@ impl Controller {
                     }
                 }
                 "retry" => {
+                    self.snapshot=None;self.busy=false;
                     if let Some(t) = self.target.clone() {
                         let _ = self.tx.try_send((self.generation, Request::Open(t)));
                     }
@@ -561,6 +610,19 @@ impl Controller {
             }
         }
         self.pages.poll(app);
+        let serial=crate::config_snapshot::current().map_or(0,|c|c.serial);
+        self.cache.prune(serial,Instant::now());
+        if self.cache_key.as_ref().is_some_and(|k|k.serial!=serial) {
+            self.forget_view(app);self.cache_key=None;self.snapshot=None;self.target=None;
+            self.generation+=1;self.busy=false;
+            let _=self.tx.try_send((self.generation,Request::Close));
+            app.set_player_ready(false);app.set_player_connected(false);app.set_player_panel(0);
+            app.set_player_title("Configuration changed. Reopen the activity.".into());
+        }
+        if self.snapshot.is_none() && self.presentation_at.is_some_and(|at|at.elapsed()>=Duration::from_secs(30)) {
+            self.forget_view(app);app.set_player_ready(false);app.set_player_connected(false);
+            app.set_player_title("Refreshing Kodi…".into());
+        }
         while let Ok((g, event)) = self.rx.try_recv() {
             if g != self.generation || !app.get_player_shown() {
                 continue;
@@ -574,6 +636,8 @@ impl Controller {
                 }
                 Event::State(result) => match result {
                     Ok(s) => {
+                        if let Some(key)=&self.cache_key {self.cache.remove(key);}
+                        self.presentation_at=Some(Instant::now());
                         let previous = self.snapshot.as_ref().and_then(|s| s.playing.as_ref());
                         let changed = previous.map(identity) != s.playing.as_ref().map(identity)
                             || previous.map(|p| {
@@ -623,6 +687,8 @@ impl Controller {
                                 if key != self.art_key {
                                     app.set_player_has_logo(false);
                                     app.set_player_has_art(false);
+                                    app.set_player_fanart(slint::Image::default());
+                                    app.set_player_logo(slint::Image::default());
                                     if self.artwork.request(
                                         self.generation,
                                         key.clone(),
@@ -639,9 +705,11 @@ impl Controller {
                             app.set_player_title(
                                 "Connected to Kodi.\nUse the remote to choose something on your TV.".into(),
                             );
-                            app.set_player_has_logo(false);
-                            app.set_player_has_art(false);
-                            self.art_key.clear();
+                            self.forget_view(app);
+                            // Confirmed idle is also a useful, safe presentation.
+                            self.presentation_at=Some(Instant::now());
+                            app.set_player_metadata("".into());app.set_player_can_seek(false);
+                            app.set_player_elapsed("".into());app.set_player_remaining("".into());app.set_player_progress(0.);
                         }
                         self.snapshot = Some(s);
                     }
@@ -651,6 +719,7 @@ impl Controller {
                             app.invoke_focus_player();
                         }
                         self.snapshot = None;
+                        self.forget_view(app);
                         app.set_player_ready(false);
                         app.set_player_connected(false);
                         app.set_player_title(e.into());
@@ -723,6 +792,33 @@ mod tests {
             actions.borrow_mut().clear();assert_eq!(app.get_player_panel(),0);
         }
         app.hide().unwrap();
+    }
+    #[test]
+    fn restored_presentation_does_not_authorize_player_commands() {
+        if std::env::var_os("COUCH_TEST_KODI_CACHE").is_none() {
+            let out=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","activity::tests::restored_presentation_does_not_authorize_player_commands"])
+                .env("COUCH_TEST_KODI_CACHE","1").output().unwrap();
+            assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));return;
+        }
+        crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480,800)).unwrap();
+        let app=App::new().unwrap();let mut controller=Controller::new(&app);
+        app.set_player_title("Cached film".into());app.set_player_metadata("2026".into());
+        app.set_player_ready(true);app.set_player_connected(true);app.set_player_can_seek(true);
+        app.set_player_progress(42.);app.set_player_panel(2);app.set_player_message("Old toast".into());
+        let view=cache::Presentation::capture(&app,"pending-art");
+        assert!(view.art_key.is_empty(),"unfinished artwork must be requested after reopening");
+        app.set_player_title("Connecting".into());app.set_player_panel(0);app.set_player_message("".into());
+        view.restore(&app);
+        assert_eq!(app.get_player_title(),"Cached film");assert_eq!(app.get_player_progress(),42.);
+        assert_eq!(app.get_player_panel(),0);assert!(app.get_player_message().is_empty());
+        assert!(controller.snapshot.is_none());
+        controller.send(&app,"Player.Seek",json!({"value":{"percentage":80}}));
+        assert!(!controller.busy,"cached visuals must not enqueue Player.* commands");
+        assert!(app.get_player_message().contains("Refreshing playback"));
+        controller.forget_view(&app);
+        assert!(!app.get_player_has_art());assert!(!app.get_player_has_logo());
+        assert!(controller.presentation_at.is_none());
     }
     #[test]
     fn clocks_and_source_validation() {

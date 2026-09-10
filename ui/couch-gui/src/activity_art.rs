@@ -125,28 +125,11 @@ impl Worker {
         let (tx, rx) = mpsc::sync_channel::<Job>(1);
         let (reply, receive) = mpsc::sync_channel(2);
         std::thread::spawn(move || {
-            let mut cache: std::collections::VecDeque<(String, Option<Pixels>, Option<Pixels>)> =
-                std::collections::VecDeque::new();
             while let Ok(job) = rx.recv() {
-                let cache_key = format!(
-                    "{}:{}:{}:{}",
-                    job.connection, job.host, job.fanart, job.logo
-                );
-                let (fanart, logo) = if let Some((_, fanart, logo)) =
-                    cache.iter().find(|(key, _, _)| key == &cache_key)
-                {
-                    (fanart.clone(), logo.clone())
-                } else {
-                    let art = fetch(&job.host, &job.connection, &job.fanart, false);
-                    let logo = fetch(&job.host, &job.connection, &job.logo, true);
-                    if art.is_some() || logo.is_some() {
-                        cache.push_back((cache_key, art.clone(), logo.clone()));
-                        while cache.len() > 2 {
-                            cache.pop_front();
-                        }
-                    }
-                    (art, logo)
-                };
+                // Decoded artwork is retained only by the bounded UI presentation
+                // cache. A second worker cache previously ignored TTL/config edits.
+                let fanart = fetch(&job.host, &job.connection, &job.fanart, false);
+                let logo = fetch(&job.host, &job.connection, &job.logo, true);
                 let result = Reply {
                     generation: job.generation,
                     key: job.key,
