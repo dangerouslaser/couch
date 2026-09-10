@@ -83,7 +83,7 @@ def prepare(archive, destination, selected, metadata):
             for member in members:
                 name = member.filename
                 path = PurePosixPath(name)
-                require(name not in seen and not path.is_absolute()
+                require(name == member.orig_filename and name not in seen and not path.is_absolute()
                         and '..' not in path.parts and '\\' not in name and ':' not in name
                         and name.startswith('platform-tools/'), 'Invalid or duplicate archive path')
                 require(not stat.S_ISLNK(member.external_attr >> 16), 'Archive symlink rejected')
