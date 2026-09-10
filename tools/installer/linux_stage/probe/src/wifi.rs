@@ -104,7 +104,12 @@ pub fn provision(payload: &[u8]) -> io::Result<()> {
     thread::spawn(move || {
         for socket in listener.incoming() {
             let Ok(socket) = socket else { break };
-            let _ = socket.set_read_timeout(Some(Duration::from_secs(30)));
+            let timeout = if cfg!(feature = "private-install") {
+                900
+            } else {
+                30
+            };
+            let _ = socket.set_read_timeout(Some(Duration::from_secs(timeout)));
             let _ = socket.set_write_timeout(Some(Duration::from_secs(30)));
             let Ok(connection) = ServerConnection::new(config.clone()) else {
                 break;
@@ -158,6 +163,15 @@ fn session(stream: &mut (impl Read + Write), token: &[u8]) -> io::Result<()> {
                 response(stream, data.len() as u64)?;
                 stream.write_all(&data)?;
             }
+            #[cfg(feature = "private-install")]
+            10 => {
+                let result = super::install::session(stream);
+                if let Err(error) = &result {
+                    eprintln!("Installer stopped: {error}");
+                    let _ = super::install::report_error(stream);
+                }
+                return result;
+            }
             _ => return Err(invalid("USB-only operation")),
         }
         stream.flush()?;
@@ -170,6 +184,14 @@ fn status_label(status: &str) -> &str {
         _ => "waiting",
     }
 }
+fn error_label(error: &str) -> &str {
+    match error.trim() {
+        "detect-node" | "loader-exit" | "transport-node" | "wifi-node" | "launcher-exit"
+        | "transport-timeout" | "power-on" | "interface-timeout" | "interface-up" | "dhcp-exit"
+        | "supplicant-exit" => error.trim(),
+        _ => "unknown",
+    }
+}
 pub fn status() -> Vec<u8> {
     let ip = fs::read_to_string("/tmp/couch-wifi.ip").unwrap_or_default();
     let status = fs::read_to_string("/tmp/couch-wifi.status").unwrap_or_else(|_| "waiting".into());
@@ -179,7 +201,13 @@ pub fn status() -> Vec<u8> {
         .map(|v| v.to_string())
         .unwrap_or_default();
     let status = status_label(&status);
-    serde_json::json!({"ip":ip,"status":status,"port":8443})
+    let error = fs::read_to_string("/tmp/couch-wifi.error").unwrap_or_default();
+    let error = if status == "failed" {
+        error_label(&error)
+    } else {
+        "none"
+    };
+    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active()})
         .to_string()
         .into_bytes()
 }
@@ -200,6 +228,8 @@ mod tests {
         assert_eq!(status_label("connected\n"), "connected");
         assert_eq!(status_label("failed"), "failed");
         assert_eq!(status_label("untrusted status"), "waiting");
+        assert_eq!(error_label("loader-exit\n"), "loader-exit");
+        assert_eq!(error_label("private network text"), "unknown");
     }
     #[test]
     fn credentials_are_hex_bounded_and_injection_is_rejected() {
