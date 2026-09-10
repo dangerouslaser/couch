@@ -14,6 +14,25 @@ impl<S: Read + Write> Channel<S> {
     pub fn authenticated(stream: S) -> Self {
         Self { stream }
     }
+    #[cfg(test)]
+    pub(crate) fn into_inner(self) -> S {
+        self.stream
+    }
+    pub fn begin_install(&mut self, plan: &Value) -> Result<()> {
+        ensure!(plan.is_object(), "expected install plan");
+        let bytes = zeroize::Zeroizing::new(serde_json::to_vec(plan)?);
+        ensure!(
+            !bytes.is_empty() && bytes.len() <= CHUNK,
+            "install plan exceeds frame bound"
+        );
+        self.stream.write_all(b"CBP1")?;
+        self.stream.write_all(&10u32.to_le_bytes())?;
+        self.stream.write_all(&0u64.to_le_bytes())?;
+        self.stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
+        self.stream.write_all(&bytes)?;
+        self.stream.flush()?;
+        Ok(())
+    }
     pub fn send_json(&mut self, value: &Value) -> Result<()> {
         ensure!(value.is_object(), "expected JSON object");
         let bytes = zeroize::Zeroizing::new(serde_json::to_vec(value)?);
@@ -113,7 +132,7 @@ impl<S: Read + Write> Channel<S> {
         target: &str,
         phase: &str,
         total: u64,
-        mut progress: impl FnMut(u64, u64),
+        mut progress: impl FnMut(u64, u64) -> Result<()>,
     ) -> Result<Value> {
         ensure!(total > 0, "invalid verification size");
         let mut previous = None;
@@ -137,7 +156,7 @@ impl<S: Read + Write> Channel<S> {
                 "invalid verification progress"
             );
             previous = Some(done);
-            progress(done, total);
+            progress(done, total)?;
         }
         anyhow::bail!("excessive verification progress")
     }
@@ -170,7 +189,10 @@ mod tests {
         ]));
         assert_eq!(
             channel
-                .verification("userdata", "write", 4096, |done, _| counts.push(done))
+                .verification("userdata", "write", 4096, |done, _| {
+                    counts.push(done);
+                    Ok(())
+                })
                 .unwrap(),
             final_event
         );
@@ -181,7 +203,7 @@ mod tests {
             vec![progress(0), final_event],
         ] {
             assert!(Channel::authenticated(json_frames(&events))
-                .verification("userdata", "write", 4096, |_, _| {})
+                .verification("userdata", "write", 4096, |_, _| Ok(()))
                 .is_err());
         }
     }

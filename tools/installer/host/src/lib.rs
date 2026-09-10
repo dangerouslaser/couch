@@ -3,6 +3,7 @@ pub mod session;
 pub mod stage;
 pub mod stage_files;
 pub mod stage_tls;
+pub mod transaction;
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use serde_json::json;
