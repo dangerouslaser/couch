@@ -209,7 +209,7 @@ pub fn status() -> Vec<u8> {
     } else {
         "none"
     };
-    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true})
+    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")})
         .to_string()
         .into_bytes()
 }

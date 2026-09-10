@@ -240,3 +240,22 @@ The stage uses [wpa_supplicant's control interface](https://w1.fi/wpa_supplicant
 with separate command/event sockets, a 12-second absolute scan deadline, bounded
 datagrams and BSS enumeration to avoid truncated SCAN_RESULTS tables. No new
 external CLI is packaged: the existing supplicant provides the control socket.
+
+### Optional stage-side network configuration
+
+A private installer advertises `stage_network_config: true` in USB Wi-Fi status.
+A future native host may bind `network: {"ssid_hex": "...", "psk_hex": "..."}`
+into its TLS install plan. Omit `psk_hex` for an open network. SSIDs contain
+1–32 bytes encoded as hex; derived WPA PSKs contain exactly 32 bytes encoded as
+hex. The stage rejects malformed values and full-size restore images before
+opening the installation disk. Existing hosts omit `network` and retain their
+previous image-personalization behavior.
+
+For compact userdata, the original image hash is independently read back first.
+After expansion, the stage writes `/opt/couch/networks.conf` using packaged
+`debugfs` against the guarded, unmounted partition. It checks the exact saved
+bytes and regular-file mode 0600, syncs the block device and reruns read-only
+`e2fsck`. Failure prevents the `expanded` acknowledgement and final boot write.
+Secrets use root-only temporary RAM files, never process arguments; commands
+have fixed paths and deadlines. This removes filesystem-tool dependencies from
+the eventual native host path; it does not itself provide native USB orchestration.

@@ -39,7 +39,7 @@ def alpine_files(cache, filesystem=False):
     files, links = {}, {}
     packages = ('e2fsprogs', 'e2fsprogs-extra', 'e2fsprogs-libs', 'libblkid', 'libcom_err',
                 'libeconf', 'libgcc', 'libuuid', 'musl') if filesystem else PACKAGES
-    binaries = {'sbin/e2fsck', 'usr/sbin/resize2fs'} if filesystem else {'sbin/wpa_supplicant'}
+    binaries = {'sbin/e2fsck', 'usr/sbin/resize2fs', 'usr/sbin/debugfs'} if filesystem else {'sbin/wpa_supplicant'}
     for package in packages:
         candidates = [name for name in manifest['files'] if re.fullmatch(
             'packages/' + re.escape(package) + r'-[0-9][^/]*\.apk', name)]
