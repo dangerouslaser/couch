@@ -256,6 +256,7 @@ fn no_mounts_or_holders() -> io::Result<()> {
     Ok(())
 }
 pub struct Disk {
+    network: Option<zeroize::Zeroizing<Vec<u8>>>,
     expected: Identity,
     identity_hashes: BTreeMap<String, String>,
     nodes: BTreeMap<String, u32>,
@@ -268,6 +269,7 @@ impl Disk {
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         let mut disk = Self {
+            network: None,
             expected,
             identity_hashes,
             nodes: BTreeMap::new(),
@@ -276,6 +278,14 @@ impl Disk {
         };
         disk.refresh()?;
         Ok(disk)
+    }
+    pub(super) fn configure_network(
+        &mut self,
+        network: Option<zeroize::Zeroizing<Vec<u8>>>,
+    ) -> io::Result<()> {
+        ensure(self.network.is_none(), "network configuration already set")?;
+        self.network = network;
+        Ok(())
     }
     fn refresh(&mut self) -> io::Result<()> {
         no_mounts_or_holders()?;
@@ -438,9 +448,19 @@ impl Storage for Disk {
         check_ext4(&mut guard, partition_size)?;
         drop(guard);
         fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
+        self.refresh()?;
+        if let Some(network) = self.network.take() {
+            super::network::configure(&path, &self.root, &network)?;
+            self.refresh()?;
+            let guard = self.file("userdata", false, false)?;
+            guard.sync_all()?;
+            drop(guard);
+            fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
+        }
         self.refresh()
     }
     fn abort(&mut self) {
+        self.network.take();
         self.writer.take();
     }
     fn direct_hash_progress(

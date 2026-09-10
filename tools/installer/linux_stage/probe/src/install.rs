@@ -1,6 +1,7 @@
 //! Private installer protocol, compiled only with explicit private-install feature.
 //! USB commits the plan hash; authenticated TLS carries bounded image streams.
 mod block;
+mod network;
 #[cfg(all(test, target_os = "linux"))]
 mod session_tests;
 use crate::invalid;
@@ -88,6 +89,8 @@ struct WireImage {
 #[serde(deny_unknown_fields)]
 struct WirePlan {
     schema: u32,
+    #[serde(default)]
+    network: Option<network::Network>,
     #[serde(default)]
     skip_userdata_backup: bool,
     #[serde(default)]
@@ -277,7 +280,7 @@ pub fn session(stream: &mut (impl Read + Write)) -> io::Result<()> {
         .map_err(|_| invalid("binding lock"))?
         .take()
         .ok_or_else(|| invalid("USB plan binding missing"))?;
-    let bytes = read_json_bytes(stream)?;
+    let bytes = zeroize::Zeroizing::new(read_json_bytes(stream)?);
     ensure(
         hex(&Sha256::digest(&bytes)) == binding.plan_sha256,
         "plan differs from USB commitment",
@@ -290,6 +293,12 @@ pub fn session(stream: &mut (impl Read + Write)) -> io::Result<()> {
     execute(stream, wire, block::Disk::new)
 }
 trait InstallDisk: Storage {
+    fn configure_network(
+        &mut self,
+        network: Option<zeroize::Zeroizing<Vec<u8>>>,
+    ) -> io::Result<()> {
+        ensure(network.is_none(), "stage network configuration unsupported")
+    }
     fn verify_identity(&mut self) -> io::Result<()>;
     fn hash_name(&self, name: &str) -> io::Result<Hash>;
     fn hash_name_progress(
@@ -306,6 +315,12 @@ trait InstallDisk: Storage {
     fn read_name(&self, name: &str) -> io::Result<std::fs::File>;
 }
 impl InstallDisk for block::Disk {
+    fn configure_network(
+        &mut self,
+        network: Option<zeroize::Zeroizing<Vec<u8>>>,
+    ) -> io::Result<()> {
+        block::Disk::configure_network(self, network)
+    }
     fn hash_name_progress(
         &self,
         name: &str,
@@ -379,8 +394,28 @@ fn execute<D: InstallDisk>(
             .all(|t| images.contains_key(t)),
         "incomplete OS image set",
     )?;
+    let network = wire
+        .network
+        .as_ref()
+        .map(network::Network::encode)
+        .transpose()?;
+    if network.is_some() {
+        ensure(
+            wire.images
+                .get("userdata")
+                .ok_or_else(|| invalid("missing userdata image"))?
+                .size
+                < wire
+                    .partitions
+                    .get("userdata")
+                    .ok_or_else(|| invalid("missing userdata partition"))?
+                    .size,
+            "stage network configuration requires compact userdata",
+        )?;
+    }
     let plan = Plan::new(identity.clone(), images)?;
     let mut disk = make_disk(identity.clone(), wire.identity_sha256.clone())?;
+    disk.configure_network(network)?;
     disk.verify_identity()?;
     ensure(
         hex(&disk.hash_name("boot")?) == wire.stage_sha256,

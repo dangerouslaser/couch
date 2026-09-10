@@ -19,6 +19,8 @@ struct Fixture {
     writes: Arc<Mutex<Vec<String>>>,
     bad_readback: bool,
     bad_expand: bool,
+    network: bool,
+    bad_network: bool,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -26,6 +28,13 @@ impl Drop for Fixture {
     }
 }
 impl InstallDisk for Fixture {
+    fn configure_network(
+        &mut self,
+        network: Option<zeroize::Zeroizing<Vec<u8>>>,
+    ) -> io::Result<()> {
+        self.network = network.is_some();
+        Ok(())
+    }
     fn verify_identity(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -89,6 +98,15 @@ impl Storage for Fixture {
             return Err(invalid("fixture expansion failed"));
         }
         self.writes.lock().unwrap().push("expand_userdata".into());
+        if self.network {
+            if self.bad_network {
+                return Err(invalid("fixture network readback failed"));
+            }
+            self.writes
+                .lock()
+                .unwrap()
+                .push("network_configured".into());
+        }
         Ok(())
     }
     fn abort(&mut self) {
@@ -114,6 +132,30 @@ fn exercise_options(
     compact: bool,
     bad_expand: bool,
     reuse: bool,
+) -> (bool, Vec<String>) {
+    exercise_network(
+        corrupt,
+        bad_readback,
+        drop_before_write,
+        yolo,
+        compact,
+        bad_expand,
+        reuse,
+        false,
+        false,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn exercise_network(
+    corrupt: bool,
+    bad_readback: bool,
+    drop_before_write: bool,
+    yolo: bool,
+    compact: bool,
+    bad_expand: bool,
+    reuse: bool,
+    network: bool,
+    bad_network: bool,
 ) -> (bool, Vec<String>) {
     let root = std::env::temp_dir().join(format!(
         "couch-wifi-session-{}-{}",
@@ -165,6 +207,10 @@ fn exercise_options(
         }
     }
     let wire = WirePlan {
+        network: network.then(|| network::Network {
+            ssid_hex: "61".into(),
+            psk_hex: None,
+        }),
         schema: 1,
         skip_userdata_backup: yolo,
         reused_backups: if reuse {
@@ -201,6 +247,8 @@ fn exercise_options(
                 writes: observed,
                 bad_readback,
                 bad_expand,
+                network: false,
+                bad_network,
             })
         })
         .is_ok()
@@ -365,4 +413,27 @@ fn restart_reuses_originals_but_still_verifies_compact_install() {
     let (ok, writes) = exercise_options(false, false, false, false, true, false, true);
     assert!(ok);
     assert_eq!(writes, ["recovery", "userdata", "expand_userdata", "boot"]);
+}
+
+#[test]
+fn network_readback_is_required_before_final_boot() {
+    let (ok, writes) =
+        exercise_network(false, false, false, false, true, false, false, true, false);
+    assert!(ok);
+    let configured = writes
+        .iter()
+        .position(|s| s == "network_configured")
+        .unwrap();
+    let boot = writes.iter().position(|s| s == "boot").unwrap();
+    assert!(configured < boot);
+    let (ok, writes) = exercise_network(false, false, false, false, true, false, false, true, true);
+    assert!(!ok);
+    assert!(!writes.iter().any(|s| s == "boot"));
+}
+#[test]
+fn network_customization_rejects_full_restore_images_before_writes() {
+    let (ok, writes) =
+        exercise_network(false, false, false, false, false, false, false, true, false);
+    assert!(!ok);
+    assert!(writes.is_empty());
 }
