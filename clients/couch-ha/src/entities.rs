@@ -202,12 +202,12 @@ impl Climate {
         if !self.available {
             return Err(Error::Unavailable);
         }
-        if matches!(
-            self.hvac_mode.as_deref(),
-            Some("off" | "auto" | "dry" | "fan_only") | None
-        ) {
+        if matches!(self.hvac_mode.as_deref(), Some("off") | None) {
             return Err(Error::UnsupportedOperation);
         }
+        // HA validates set_temperature by capability, not by excluding auto,
+        // dry or fan-only. Integrations may expose a writable target in those
+        // modes (e.g. Tado allows overriding its auto schedule).
         let amount = f64::from(delta) * self.temperature_step;
         let command = if self.range_mode() {
             let (low, high) = match previous {
@@ -359,6 +359,16 @@ impl HomeAssistant {
             cmd
         };
         let (service, supported, data) = match cmd {
+            CoverCommand::Open if !cover.can_open && cover.can_set_position => (
+                "set_cover_position",
+                true,
+                json!({"entity_id":id,"position":100}),
+            ),
+            CoverCommand::Close if !cover.can_close && cover.can_set_position => (
+                "set_cover_position",
+                true,
+                json!({"entity_id":id,"position":0}),
+            ),
             CoverCommand::Open => ("open_cover", cover.can_open, json!({"entity_id":id})),
             CoverCommand::Close => ("close_cover", cover.can_close, json!({"entity_id":id})),
             CoverCommand::Stop => ("stop_cover", cover.can_stop, json!({"entity_id":id})),
@@ -649,6 +659,60 @@ mod tests {
                 .adjusted_target(1, None),
             Err(Error::Unavailable)
         );
+    }
+    #[test]
+    fn active_modes_use_target_capability_instead_of_a_mode_blacklist() {
+        for mode in ["auto", "dry", "fan_only"] {
+            let writable = Climate::from_state(&climate(mode, 1), "°C").unwrap();
+            assert_eq!(
+                writable.adjusted_target(1, None),
+                Ok(ClimateCommand::Temperature(22.0))
+            );
+            let readonly = Climate::from_state(&climate(mode, 0), "°C").unwrap();
+            assert_eq!(
+                readonly.adjusted_target(1, None),
+                Err(Error::UnsupportedOperation)
+            );
+        }
+        let (url, s) = server(vec![
+            (200, climate("auto", 1)),
+            (200, config("°C")),
+            (200, json!([])),
+        ]);
+        HomeAssistant::new(&url, "test-secret")
+            .unwrap()
+            .climate_command("climate.test", ClimateCommand::Temperature(22.0))
+            .unwrap();
+        assert_eq!(
+            s.join().unwrap()[2].2,
+            json!({"entity_id":"climate.test","temperature":22.0})
+        );
+    }
+    #[test]
+    fn position_only_cover_can_toggle_without_unsupported_open_close_services() {
+        for (state, position) in [("closed", 100), ("open", 0)] {
+            let (url, s) = server(vec![(200, cover(state, 4)), (200, json!([]))]);
+            HomeAssistant::new(&url, "test-secret")
+                .unwrap()
+                .cover_command("cover.test", CoverCommand::Toggle)
+                .unwrap();
+            assert_eq!(
+                s.join().unwrap()[1],
+                (
+                    "POST".into(),
+                    "/api/services/cover/set_cover_position".into(),
+                    json!({"entity_id":"cover.test","position":position})
+                )
+            );
+        }
+        let (url, s) = server(vec![(200, cover("closed", 0))]);
+        assert_eq!(
+            HomeAssistant::new(&url, "test-secret")
+                .unwrap()
+                .cover_command("cover.test", CoverCommand::Toggle),
+            Err(Error::UnsupportedOperation)
+        );
+        assert_eq!(s.join().unwrap().len(), 1);
     }
     #[test]
     fn missing_limits_fail_closed_and_unavailable_values_do_not_look_current() {
