@@ -908,7 +908,7 @@ impl Controller {
                 app.set_tv_apple(apple);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
-                if android {
+                if android || apple {
                     self.media.open(app, self.generation, &key);
                 } else {
                     self.media.clear(app);

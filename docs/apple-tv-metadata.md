@@ -36,9 +36,34 @@ future contributes no negative elapsed time.
 Artwork URLs are metadata only. The client does not fetch URLs, decode embedded
 artwork or request artwork-only queue assets. Applications differ in the fields
 they expose; an absent title or artwork URL is not necessarily a transport error.
-The Couch configuration UI still pairs Companion only, and the device screen
-still uses Companion controls. AirPlay pairing storage and metadata rendering
-are separate UI follow-up work; this change adds the client API and probe.
+## Using it in Couch
+
+Pair Companion controls first in **Connections → Apple TV**. In **Optional now
+playing**, discover the AirPlay service for the same TV address, request its PIN,
+and enter the four-digit code yourself. The separate AirPlay port must come from
+discovery or the TV's advertised service; it is not the Companion port. Test
+connection reports a short metadata sample. Remove metadata pairing deletes only
+its private file; Companion controls are retained.
+
+`metadata::StoredConnection` saves the separately typed credentials atomically in
+`connections/<id>/appletv-metadata-connection.json` under the private Couch state
+directory (directory 0700, file 0600 on Unix). HTTP responses and exported config
+never contain these credentials. Pairing sessions expire after two minutes and
+share the daemon's eight-session limit. Metadata pairing/status require the same
+address as the saved Companion connection. PINs are neither logged nor saved.
+
+Reopen the TV screen after pairing. A separate worker services AirPlay events;
+network failures cannot block Companion keys. The GUI shows received title,
+subtitle/artist/series, playback state, elapsed time and duration. Live content has
+no fabricated duration. Missing metadata falls back to the ordinary controls.
+Changing TV, replacing/removing pairing or losing transport clears the observer;
+connection failures retry after ten seconds while that TV stays selected. Pairing
+and playback actions are never automatically retried. Artwork URLs are not fetched.
+
+Validation uses `tools/tests/apple-metadata.cjs` with mocked TV traffic and real
+browser/daemon configuration. GUI fixtures cover unknown/live metadata, discarded
+artwork URLs, stale generations, failure clearing and touch controls; the private
+store fixture checks permissions, bounded reads and Companion separation.
 
 ## Physical test probe
 

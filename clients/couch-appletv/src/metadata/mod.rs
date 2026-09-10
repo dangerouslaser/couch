@@ -6,6 +6,8 @@
 //! is loaded, played, or launched by this client. Hardware validation is pending.
 mod proto;
 mod state;
+mod store;
+pub use store::StoredConnection;
 mod transport;
 use crate::{
     crypto::{self, field, sequence, tlv, untlv},
