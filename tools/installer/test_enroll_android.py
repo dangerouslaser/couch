@@ -1,6 +1,7 @@
 from contextlib import contextmanager, redirect_stdout
 import hashlib
 import io
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
@@ -27,7 +28,9 @@ class EnrollmentTests(unittest.TestCase):
         for name in ('boot', 'odmdtbo', 'preloader'):
             self.files[name+'.img'] = self.root/(name+'.img')
             self.files[name+'.img'].write_bytes(self.data.get(name, b'EMI')[:64])
-        self.args = NS(confirm_identity_saved=True, backup_dir=self.root/'capture', bus=1, ports='2',
+        identity = self.root/'identity.json'
+        identity.write_text(json.dumps({'device_id':'FIXTURE1234', 'wifi_mac':'02:00:00:00:00:01', 'bluetooth_mac':'02:00:00:00:00:02'}))
+        self.args = NS(identity=identity, backup_dir=self.root/'capture', bus=1, ports='2',
                        timeout=10, official_inputs=self.root, checkout=self.root, loader=self.root/'loader',
                        loader_sha256='1'*64, lock_dir=self.root/'locks', serial='fixture')
         self.cleanup_failure = False
@@ -65,6 +68,9 @@ class EnrollmentTests(unittest.TestCase):
         result = self.run_capture()
         self.assertFalse(result['prior_baseline'])
         self.assertFalse(result['identity_decoded'])
+        saved = self.args.backup_dir/'android-identity.json'
+        self.assertEqual(read_json(saved), read_json(self.args.identity))
+        self.assertEqual(result['android_identity_record_sha256'], hashlib.sha256(saved.read_bytes()).hexdigest())
         self.assertEqual((self.args.backup_dir/'recovery.img').read_bytes(), self.data['recovery'])
         self.assertTrue(read_json(self.args.backup_dir/'enrollment-journal.json')['complete'])
         self.assertEqual(read_json(self.args.backup_dir/'baseline.json')['identity_sha256'],
@@ -97,11 +103,12 @@ class EnrollmentTests(unittest.TestCase):
             self.run_capture()
         self.assertFalse((self.args.backup_dir/'baseline.json').exists())
 
-    def test_existing_output_or_missing_user_identity_confirmation_rejected(self):
-        self.args.confirm_identity_saved = False
+    def test_existing_output_or_invalid_saved_identity_rejected(self):
+        saved = self.args.identity.read_bytes()
+        self.args.identity.write_text('{}')
         with self.assertRaises(InstallError):
             self.run_capture()
-        self.args.confirm_identity_saved = True
+        self.args.identity.write_bytes(saved)
         self.args.backup_dir.mkdir()
         with self.assertRaises(InstallError):
             self.run_capture()
