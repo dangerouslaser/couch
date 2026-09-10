@@ -13,7 +13,9 @@ MediaTek firmware/device setup and initial station association, starts the
 `system.sh` supervisor, applies the normal/local/recovery setup policy, and
 sources `gui-start.sh` only during normal boot. A service or GUI failure leaves
 the initramfs USB recovery shell available. These files stay on the rootfs so
-runtime changes do not require replacing the kernel or boot ramdisk.
+runtime changes do not require replacing the kernel or boot ramdisk. Versioned
+application slots continue to mount vendor firmware from the immutable base at
+`/mnt/alpine/opt/couch`, because vendor files are not application update inputs.
 
 `portal.sh` and `station.sh` are fixed hardware helpers owned by the service at
 runtime. The MT6580 exposes its AP personality as `ap0`; it must not be replaced

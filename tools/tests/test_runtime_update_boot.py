@@ -10,6 +10,26 @@ SCRIPT = Path(__file__).resolve().parents[2] / 'stage2/runtime-boot.sh'
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Boot fixture runs on Linux')
 class RuntimeBootTests(unittest.TestCase):
+    def test_updated_slot_mounts_vendor_payload_from_immutable_base(self):
+        # Execute the real selection block; the mount helper only records arguments.
+        hardware = SCRIPT.with_name('hardware-init.sh').read_text()
+        selection = hardware[hardware.index('BUNDLE='):hardware.index('echo "= vendor blobs:')]
+        with tempfile.TemporaryDirectory(prefix='couch-vendor-slot-') as temporary:
+            root = Path(temporary)
+            base = root/'base'; (base/'vendor/lib/modules').mkdir(parents=True)
+            (base/'system').mkdir()
+            slot = root/'runtime/slots/candidate'; slot.mkdir(parents=True)
+            calls = root/'calls'
+            helper = root/'mount-fixture'
+            helper.write_text('#!/bin/sh\necho "$*" >> "'+str(calls)+'"\n')
+            helper.chmod(0o755)
+            script = slot/'stage2.sh'
+            script.write_text('BB='+str(helper)+'\n'+selection.replace('/mnt/alpine/opt/couch',str(base)))
+            subprocess.run(['sh',str(script)],check=True,capture_output=True,timeout=5)
+            self.assertEqual(calls.read_text().splitlines(),[
+                f'mount -o bind {base}/vendor /vendor',
+                f'mount -o bind {base}/system /system'])
+
     def run_boot(self, previous='base', attempted=True, switched=True):
         with tempfile.TemporaryDirectory(prefix='couch-boot-test-') as temporary:
             root = Path(temporary)

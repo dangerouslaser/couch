@@ -38,7 +38,8 @@ fi
 # and takes the setup portal with it. Android's partitions are used only as a
 # fallback for a device that still has them.
 $BB mkdir -p /system /vendor /dev/__properties__ /usr/share/udhcpc
-BUNDLE="$(dirname "$0")"
+# Vendor firmware is an immutable OS input, outside signed application slots.
+BUNDLE=/mnt/alpine/opt/couch
 if [ -d "$BUNDLE/vendor/lib/modules" ]; then
     $BB mount -o bind "$BUNDLE/vendor" /vendor 2>/dev/null
     $BB mount -o bind "$BUNDLE/system" /system 2>/dev/null
