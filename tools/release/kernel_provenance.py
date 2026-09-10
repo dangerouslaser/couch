@@ -36,7 +36,7 @@ def boot_kernel(data, pin):
             'status': 'kernel matches tested candidate; remaining installer gates still apply'}
 
 
-def verify(data, manifest, pin):
+def verify_manifest(manifest, pin):
     expected = {'profile': pin['profile'], 'source_commit': pin['source_commit'],
                 'source_status': '', 'source_diff_sha256': sha(b''),
                 'compiler_sha256': pin['compiler_sha256'], 'container': pin['container']}
@@ -46,6 +46,10 @@ def verify(data, manifest, pin):
     hashes = manifest.get('sha256', {})
     if hashes.get('.config') != pin['config_sha256'] or hashes.get('arch/arm/boot/zImage') != pin['zimage_sha256']:
         raise ValueError('Kernel config or artifact manifest hash mismatch')
+
+
+def verify(data, manifest, pin):
+    verify_manifest(manifest, pin)
     return boot_kernel(data, pin)
 
 

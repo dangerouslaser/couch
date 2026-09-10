@@ -27,6 +27,29 @@ def kernel(image):
     return split_dtb(image[page:page+size])[0]
 
 
+def clean_ramdisk(root, role):
+    require(role in ("boot", "recovery"), "Unknown ramdisk role")
+    init = 'initramfs/init' if role == 'boot' else 'recovery/init'
+    with tempfile.TemporaryDirectory() as scratch:
+        tree = Path(scratch)
+        (tree / 'extra').mkdir()
+        shutil.copyfile(root / init, tree / 'init')
+        shutil.copyfile(root / 'build/busybox-armv7l', tree / 'busybox')
+        shutil.copyfile(root / 'build/fbcon', tree / 'extra/fbcon')
+        if role == 'boot':
+            shutil.copyfile(root / 'initramfs/boot-health.sh', tree / 'extra/boot-health.sh')
+        subprocess.run([sys.executable, str(root / 'tools/mkcpio.py'), str(tree), str(tree / 'ramdisk.cpio')], check=True, stdout=subprocess.DEVNULL)
+        raw = (tree / 'ramdisk.cpio').read_bytes()
+        entries = cpio_files(raw)
+        expected = {'init', 'bin/busybox', 'extra/fbcon'}
+        if role == 'boot':
+            expected.add('extra/boot-health.sh')
+        payloads = {name for name, content in entries.items() if content}
+        require(payloads == expected, 'Unexpected payload file in clean ramdisk')
+        ramdisk = gzip.compress(raw, compresslevel=9, mtime=0)
+    return ramdisk, payloads
+
+
 def prepare(normal, recovery, manifest, output, root=REPO):
     require(not output.exists(), 'Output directory must be new')
     normal_data, recovery_data = regular(normal), regular(recovery)
@@ -39,23 +62,7 @@ def prepare(normal, recovery, manifest, output, root=REPO):
     results = {}
     for role, template, init in [('boot', normal_data, 'initramfs/init'),
                                   ('recovery', recovery_data, 'recovery/init')]:
-        with tempfile.TemporaryDirectory() as scratch:
-            tree = Path(scratch)
-            (tree / 'extra').mkdir()
-            shutil.copyfile(root / init, tree / 'init')
-            shutil.copyfile(root / 'build/busybox-armv7l', tree / 'busybox')
-            shutil.copyfile(root / 'build/fbcon', tree / 'extra/fbcon')
-            if role == 'boot':
-                shutil.copyfile(root / 'initramfs/boot-health.sh', tree / 'extra/boot-health.sh')
-            subprocess.run([sys.executable, str(root / 'tools/mkcpio.py'), str(tree), str(tree / 'ramdisk.cpio')], check=True, stdout=subprocess.DEVNULL)
-            raw = (tree / 'ramdisk.cpio').read_bytes()
-            entries = cpio_files(raw)
-            expected = {'init', 'bin/busybox', 'extra/fbcon'}
-            if role == 'boot':
-                expected.add('extra/boot-health.sh')
-            payloads = {name for name, content in entries.items() if content}
-            require(payloads == expected, 'Unexpected payload file in clean ramdisk')
-            ramdisk = gzip.compress(raw, compresslevel=9, mtime=0)
+        ramdisk, payloads = clean_ramdisk(root, role)
         image, hashes = repack(template, kernel(template), ramdisk)
         require(len(image) <= 16 * 1024 * 1024, 'Boot partition overflow')
         full = image.ljust(16 * 1024 * 1024, b'\0')
