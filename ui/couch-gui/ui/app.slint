@@ -141,6 +141,18 @@ export component App inherits Window {
     in-out property <bool> tv-android: false;
     in-out property <bool> tv-apple: false;
     in-out property <bool> tv-ir: false;
+    in-out property <bool> tv-media-active: false;
+    in-out property <string> tv-media-title;
+    in-out property <string> tv-media-subtitle;
+    in-out property <string> tv-media-state;
+    in-out property <string> tv-media-app;
+    in-out property <image> tv-media-art;
+    in-out property <bool> tv-media-has-art: false;
+    in-out property <string> tv-media-position;
+    in-out property <string> tv-media-duration;
+    in-out property <float> tv-media-progress;
+    in-out property <bool> tv-media-has-duration: false;
+    in-out property <bool> tv-media-live: false;
     in-out property <string> tv-title;
     in-out property <string> tv-status;
     in-out property <string> tv-error;
@@ -405,6 +417,10 @@ export component App inherits Window {
         width:parent.width;height:parent.height;
         title:root.tv-title;status:root.tv-status;error:root.tv-error;
         source-name:root.tv-source;sound:root.tv-sound;picture:root.tv-picture;panel:root.tv-panel;choices:root.tv-choices;
+        media-active:root.tv-media-active;media-title:root.tv-media-title;media-subtitle:root.tv-media-subtitle;media-state:root.tv-media-state;media-app:root.tv-media-app;
+        media-art:root.tv-media-art;media-has-art:root.tv-media-has-art;
+        media-position:root.tv-media-position;media-duration:root.tv-media-duration;media-progress:root.tv-media-progress;
+        media-has-duration:root.tv-media-has-duration;media-live:root.tv-media-live;
         action(name)=>{root.tv-action(name);}
     }
     cinema := Cinema {

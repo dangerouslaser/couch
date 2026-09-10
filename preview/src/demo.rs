@@ -332,6 +332,9 @@ pub fn configure(app: &App) {
                 })));
                 a.set_tv_panel(if apps { 2 } else { 1 });
             }
+            "play" | "pause" if a.get_tv_android() && a.get_tv_media_active() => {
+                a.set_tv_media_state(if action == "play" { "Playing" } else { "Paused" }.into());
+            }
             "picture" => a.set_tv_panel(3),
             "sound" => a.set_tv_panel(4),
             _ => {
@@ -565,6 +568,8 @@ pub fn state_json() -> String {
     let mut result = "{}".to_string();
     with(|d, a| {
         result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{},\"tv\":{},\"tv_panel\":{},\"android_tv\":{},\"apple_tv\":{},\"infrared\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row(),a.get_tv_shown(),a.get_tv_panel(),a.get_tv_android(),a.get_tv_apple(),a.get_tv_ir());
+        result.pop();
+        result.push_str(&format!(",\"media_active\":{},\"media_live\":{},\"media_has_duration\":{},\"media_has_art\":{},\"media_paused\":{}}}", a.get_tv_media_active(), a.get_tv_media_live(), a.get_tv_media_has_duration(), a.get_tv_media_has_art(), a.get_tv_media_state() == "Paused"));
     });
     result
 }
@@ -588,7 +593,7 @@ pub fn documentation_screen(name: &str) {
                     d.open_room(a, 0);
                     d.scene(a, 2);
                 }
-                "android-tv" | "android-apps" | "webos" | "webos-inputs" | "apple-tv"
+                "android-tv" | "android-apps" | "android-live" | "android-no-duration" | "android-no-art" | "android-paused" | "android-idle" | "webos" | "webos-inputs" | "apple-tv"
                 | "apple-apps" | "infrared" | "infrared-commands" => {
                     d.open_room(a, 0);
                     let infrared = name.starts_with("infrared");
@@ -597,6 +602,19 @@ pub fn documentation_screen(name: &str) {
                     let apple = name.starts_with("apple");
                     a.set_tv_android(android);
                     a.set_tv_apple(apple);
+                    a.set_tv_panel(0);
+                    a.set_tv_media_active(android && name != "android-idle");
+                    a.set_tv_media_title("Tears of Steel".into());
+                    a.set_tv_media_subtitle("2012 · Science fiction · Blender Foundation".into());
+                    a.set_tv_media_state(if name == "android-paused" { "Paused" } else { "Playing" }.into());
+                    a.set_tv_media_app("YouTube".into());
+                    a.set_tv_media_art(png(include_bytes!("../../docs/mockups/kodi-activity/assets/fanart.jpg")));
+                    a.set_tv_media_has_art(android && name != "android-no-art");
+                    a.set_tv_media_position("4:12".into());
+                    a.set_tv_media_duration("12:14".into());
+                    a.set_tv_media_progress(252.0 / 734.0);
+                    a.set_tv_media_has_duration(android && name != "android-no-duration");
+                    a.set_tv_media_live(name == "android-live");
                     a.set_tv_title(
                         if infrared {"Living room IR TV"} else if android {
                             "Living room Android TV"
@@ -620,6 +638,8 @@ pub fn documentation_screen(name: &str) {
                     a.set_tv_status(
                         if infrared {"Infrared · No device feedback"} else if apple {
                             "Connected · Companion"
+                        } else if android {
+                            "Connected"
                         } else {
                             "TV on · Volume 12"
                         }
