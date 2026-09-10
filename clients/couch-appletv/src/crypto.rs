@@ -255,6 +255,19 @@ impl Verify {
         server: &[u8],
         encrypted: &[u8],
     ) -> Result<(Vec<u8>, [u8; 32], [u8; 32])> {
+        let (response, shared) = self.reply_shared(creds, server, encrypted)?;
+        Ok((
+            response,
+            derive(&shared, "", "ClientEncrypt-main")?,
+            derive(&shared, "", "ServerEncrypt-main")?,
+        ))
+    }
+    pub fn reply_shared(
+        self,
+        creds: &Credentials,
+        server: &[u8],
+        encrypted: &[u8],
+    ) -> Result<(Vec<u8>, [u8; 32])> {
         let server: [u8; 32] = server.try_into().map_err(|_| Error::Authentication)?;
         let shared = self.secret.diffie_hellman(&PublicKey::from(server));
         if !shared.was_contributory() {
@@ -288,11 +301,7 @@ impl Verify {
             &tlv(&[(1, &creds.client_id), (10, &signature)]),
             &[],
         )?;
-        Ok((
-            response,
-            derive(shared.as_bytes(), "", "ClientEncrypt-main")?,
-            derive(shared.as_bytes(), "", "ServerEncrypt-main")?,
-        ))
+        Ok((response, *shared.as_bytes()))
     }
 }
 #[cfg(test)]

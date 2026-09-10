@@ -88,9 +88,11 @@ OPACK depth/object counts, queued events, and operation waits are bounded.
 Credentials are redacted in Debug output and must be stored privately per TV.
 
 Modern tvOS playback metadata is **not** supplied by a plain standalone MRP
-socket: tvOS 15 moved that path into AirPlay 2. This implementation starts with
-Companion controls and does not claim artwork, timeline, media streaming or
-full now-playing support. Those need a separate AirPlay/MRP implementation.
+socket: tvOS 15 moved that path into AirPlay 2. The separate native
+`couch_appletv::metadata` API now implements AirPlay pairing and MRP metadata
+observation; see [Apple TV metadata](apple-tv-metadata.md) for its probe and
+validation limits. The Couch screen still uses Companion controls; AirPlay
+pairing/rendering is not wired into that UI yet.
 [pyatv protocol documentation](https://pyatv.dev/documentation/protocols/),
 [Companion implementation](https://github.com/postlund/pyatv/tree/master/pyatv/protocols/companion)
 
@@ -195,8 +197,9 @@ Apple TV and does not add playback metadata. The dedicated screen is described b
    Its routing and Slint controls are implemented and headless-tested.
 3. Exercise Android keepalive and network-loss recovery over longer sessions;
    its basic pairing, saved reconnection and visible navigation have passed.
-4. Extend Android text input/current-app tracking and Apple AirPlay/MRP
-   now-playing separately. Neither is implemented by the existing basic controls.
+4. Extend Android text input/current-app tracking. Physically validate the new
+   Apple AirPlay/MRP metadata client, then integrate its separate pairing and
+   metadata API into the Couch screen.
 
 Already implemented: both Rust protocol clients, discovery and private pairing
 flows, multi-connection storage, room test controls, activity commands, Android's
