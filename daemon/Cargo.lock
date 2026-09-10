@@ -210,7 +210,9 @@ dependencies = [
  "rsa",
  "rustls",
  "serde",
+ "serde_json",
  "sha2",
+ "url",
  "x509-parser",
 ]
 

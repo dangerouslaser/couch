@@ -142,7 +142,10 @@ impl Demo {
     }
     fn back(&mut self, app: &App) {
         self.clear(app);
-        if app.get_chooser_shown() {
+        if app.get_thermostat_shown() {
+            if app.get_thermostat_modes_shown() { app.set_thermostat_modes_shown(false); }
+            else { app.set_thermostat_shown(false); app.invoke_focus_light(); }
+        } else if app.get_chooser_shown() {
             app.set_chooser_shown(false);
         } else if app.get_tv_shown() {
             app.set_tv_panel(0);
@@ -294,6 +297,38 @@ pub fn configure(app: &App) {
                 }
             })
         });
+    app.on_thermostat_action(|action, index| {
+        let action = action.to_string();
+        later(move |d, a| match action.as_str() {
+            "close" => d.back(a),
+            "home" => { a.set_thermostat_modes_shown(false); a.set_thermostat_shown(false); d.room = None; a.set_light_shown(false); a.invoke_focus_home(); }
+            "dismiss" => a.set_thermostat_modes_shown(false),
+            "modes" if a.get_thermostat_modes().row_count() > 0 => a.set_thermostat_modes_shown(true),
+            "mode" => {
+                if let Some(mode) = ["Off", "Heat", "Cool", "Heat / cool"].get(index as usize) {
+                    a.set_thermostat_mode((*mode).into());
+                    a.set_thermostat_status(if index == 0 { "Off" } else { "Idle" }.into());
+                    a.set_thermostat_adjustable(index != 0);
+                    a.set_thermostat_range(index == 3);
+                    a.set_thermostat_target(if index == 3 { "20°C – 24°C" } else { "21°C" }.into());
+                }
+                a.set_thermostat_modes_shown(false);
+            }
+            "adjust" if a.get_thermostat_adjustable() => {
+                if a.get_thermostat_range() {
+                    // This fixture keeps a fixed four-degree deadband like the
+                    // production controller, without contacting a thermostat.
+                    let value = a.get_thermostat_target().split('°').next().unwrap_or("20").parse::<f64>().unwrap_or(20.0);
+                    let low = (value + index.signum() as f64 * 0.5).clamp(16.0, 26.0);
+                    a.set_thermostat_target(format!("{low}°C – {}°C", low + 4.0).into());
+                } else {
+                    let value = a.get_thermostat_target().trim_end_matches("°C").parse::<f64>().unwrap_or(21.0);
+                    a.set_thermostat_target(format!("{}°C", (value + index.signum() as f64 * 0.5).clamp(16.0, 30.0)).into());
+                }
+            }
+            _ => {}
+        });
+    });
     app.on_tv_action(|action| {
         let action = action.to_string();
         later(move |d, a| match action.as_str() {
@@ -491,7 +526,7 @@ fn dispatch_button(name: &str) {
                 s.borrow()
                     .as_ref()
                     .and_then(|d| d.borrow().app.upgrade())
-                    .is_some_and(|a| a.get_player_shown() || a.get_tv_shown())
+                    .is_some_and(|a| a.get_player_shown() || a.get_tv_shown() || a.get_thermostat_shown())
             });
             if !in_player {
                 later(|d, a| {
@@ -569,6 +604,7 @@ pub fn state_json() -> String {
     with(|d, a| {
         result=format!("{{\"room\":{},\"player\":{},\"panel\":{},\"paused\":{},\"chooser\":{},\"brightness\":{},\"level\":{},\"focus\":{},\"tv\":{},\"tv_panel\":{},\"android_tv\":{},\"apple_tv\":{},\"infrared\":{}}}",d.room.map(|r|r.to_string()).unwrap_or("null".into()),a.get_player_shown(),a.get_player_panel(),a.get_player_paused(),a.get_chooser_shown(),a.get_brightness_shown(),d.room.map(|r|d.levels[r][0]).unwrap_or(0),a.get_focus_row(),a.get_tv_shown(),a.get_tv_panel(),a.get_tv_android(),a.get_tv_apple(),a.get_tv_ir());
         result.pop();
+        result.push_str(&format!(",\"thermostat\":{},\"thermostat_modes\":{},\"thermostat_target\":\"{}\",\"thermostat_mode\":\"{}\",\"thermostat_adjustable\":{},\"thermostat_range\":{}", a.get_thermostat_shown(), a.get_thermostat_modes_shown(), a.get_thermostat_target(), a.get_thermostat_mode(), a.get_thermostat_adjustable(), a.get_thermostat_range()));
         result.push_str(&format!(",\"media_active\":{},\"media_live\":{},\"media_has_duration\":{},\"media_has_art\":{},\"media_paused\":{}}}", a.get_tv_media_active(), a.get_tv_media_live(), a.get_tv_media_has_duration(), a.get_tv_media_has_art(), a.get_tv_media_state() == "Paused"));
     });
     result
@@ -582,7 +618,32 @@ pub fn documentation_screen(name: &str) {
         with(|d, a| {
             d.timer.stop();
             d.clear(a);
+            a.set_thermostat_shown(false);
+            a.set_thermostat_modes_shown(false);
+            a.set_tv_shown(false);
+            a.set_player_shown(false);
             match name.as_str() {
+                "thermostat" | "thermostat-modes" | "thermostat-range" | "thermostat-unavailable" => {
+                    d.open_room(a, 0);
+                    a.set_thermostat_title("Living room climate".into());
+                    a.set_thermostat_current("20.5°C".into());
+                    a.set_thermostat_target(if name == "thermostat-range" { "20°C – 24°C" } else { "21°C" }.into());
+                    a.set_thermostat_status("Heating".into());
+                    a.set_thermostat_detail(if name == "thermostat-range" { "Volume adjusts both setpoints.\nOK chooses the thermostat mode." } else { "Volume adjusts the target.\nOK chooses the thermostat mode." }.into());
+                    a.set_thermostat_mode(if name == "thermostat-range" { "Heat / cool" } else { "Heat" }.into());
+                    a.set_thermostat_modes(ModelRc::new(VecModel::from(["Off", "Heat", "Cool", "Heat / cool"].map(Into::into).to_vec())));
+                    a.set_thermostat_range(name == "thermostat-range");
+                    a.set_thermostat_adjustable(name != "thermostat-unavailable");
+                    a.set_thermostat_pending(false);
+                    if name == "thermostat-unavailable" {
+                        a.set_thermostat_current("—".into()); a.set_thermostat_target("—".into());
+                        a.set_thermostat_status("Unavailable".into()); a.set_thermostat_modes(ModelRc::default());
+                        a.set_thermostat_detail("Home Assistant reports this thermostat is unavailable.".into());
+                    }
+                    a.set_thermostat_shown(true);
+                    a.set_thermostat_modes_shown(name == "thermostat-modes");
+                    a.invoke_focus_thermostat();
+                }
                 "home" => {}
                 "room" => d.open_room(a, 0),
                 "brightness" => {
