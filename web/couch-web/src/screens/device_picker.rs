@@ -17,7 +17,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
             <option value="manual-ir">"Manual / infrared"</option>
         </select></label>
         {move ||if app.device_source.get()=="manual-ir" {super::infrared::device_setup(app,room.get_value(),None)}else{
-            connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.get_value()),_=>manual(app,c.clone(),room.get_value())}).unwrap_or_else(||view!{<p class="dim">"Need a server or bridge first?" <button class="ghost" on:click=move |_|app.go(Route::Connections)>"Manage connections"</button></p>}.into_any())
+            connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::UnifiProtect|Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.get_value()),_=>manual(app,c.clone(),room.get_value())}).unwrap_or_else(||view!{<p class="dim">"Need a server or bridge first?" <button class="ghost" on:click=move |_|app.go(Route::Connections)>"Manage connections"</button></p>}.into_any())
         }}
     </section>}.into_any()
 }
@@ -33,7 +33,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     let list = RwSignal::new(Vec::<Value>::new());
     let busy = RwSignal::new(false);
     let message = RwSignal::new(String::new());
-    let prefix = if connection.provider == Provider::Hue {
+    let prefix = if connection.provider == Provider::UnifiProtect { "protect" } else if connection.provider == Provider::Hue {
         "hue"
     } else {
         "ha"
@@ -42,7 +42,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     let category = if prefix == "hue" {
         app.hue_category
     } else {
-        RwSignal::new("lights".to_string())
+        RwSignal::new(if prefix == "protect" { "cameras" } else { "lights" }.to_string())
     };
     let fetch = move || {
         if busy.get_untracked() {
@@ -72,7 +72,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         });
     };
     fetch();
-    view!{<p class="dim">{if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Add lights, blinds or thermostats. Their controls adapt to the features Home Assistant exposes."}}</p>
+    view!{<p class="dim">{if prefix=="protect" {"Add cameras to this room to view them on your remote."} else if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Add lights, blinds or thermostats. Their controls adapt to the features Home Assistant exposes."}}</p>
         {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());app.hue_room_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option><option value="scenes">"Hue scenes"</option></select></label>})}
         {(prefix=="ha").then(||view!{<label class="field">"Device type"<select aria-label="Home Assistant device type" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="covers">"Blinds"</option><option value="climates">"Thermostats"</option></select></label>})}
         <button class="ghost" disabled=move ||busy.get() on:click=move |_|fetch()>"Refresh devices"</button>
@@ -87,10 +87,10 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     }.into_any()
 }
 fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) -> AnyView {
-    let id = value["entity_id"].as_str().unwrap_or("").to_string();
+    let id = value[if connection.provider==Provider::UnifiProtect {"id"}else{"entity_id"}].as_str().unwrap_or("").to_string();
     let name = value["name"].as_str().unwrap_or(&id).to_string();
     let scene = value["resource_kind"] == "scene";
-    let kind = if connection.provider == Provider::HomeAssistant {
+    let kind = if connection.provider == Provider::UnifiProtect { "camera" } else if connection.provider == Provider::HomeAssistant {
         if id.starts_with("cover.") { "blind" } else if id.starts_with("climate.") { "thermostat" } else { "light" }
     } else { "light" };
     let saved = if scene {
@@ -127,7 +127,9 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
         existing
             .map(|r| format!("Already in {r}"))
             .unwrap_or_else(|| {
-                if value["resource_kind"] == "room" {
+                if kind == "camera" {
+                    format!("Camera · {}", value["state"].as_str().unwrap_or("Unknown"))
+                } else if value["resource_kind"] == "room" {
                     "Hue room · Control all its lights together".into()
                 } else if kind == "blind" {
                     if value["state"].is_null() { "Blind · Unavailable".into() } else { "Blind · Open, close and supported position controls".into() }

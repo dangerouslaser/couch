@@ -21,6 +21,7 @@ pub enum Provider {
     WebOs,
     AndroidTv,
     AppleTv,
+    UnifiProtect,
     Ir,
 }
 impl Provider {
@@ -35,6 +36,7 @@ impl Provider {
             Self::WebOs => "web-os",
             Self::AndroidTv => "android-tv",
             Self::AppleTv => "apple-tv",
+            Self::UnifiProtect => "unifi-protect",
             Self::Ir => "ir",
         }
     }
@@ -49,6 +51,7 @@ impl Provider {
             Self::WebOs => "LG webOS",
             Self::AndroidTv => "Android / Google TV",
             Self::AppleTv => "Apple TV",
+            Self::UnifiProtect => "UniFi Protect",
             Self::Ir => "Infrared",
         }
     }
@@ -91,6 +94,7 @@ impl Config {
             Provider::WebOs => Integration::WebOs,
             Provider::AndroidTv => Integration::AndroidTv,
             Provider::AppleTv => Integration::AppleTv,
+            Provider::UnifiProtect => Integration::UnifiProtect { camera_id: alloc::format!("{connection_id}/{resource_id}") },
             Provider::Ir => Integration::Ir {
                 codeset: resource_id.clone(),
             },
@@ -294,5 +298,23 @@ mod tests {
         );
         assert!(!crate::commands::Function::Mute.supports(&Integration::AppleTv));
         assert!(crate::commands::Function::Mute.supports(&Integration::AndroidTv));
+    }
+}
+
+#[cfg(test)]
+mod protect_tests {
+    use super::*;
+    use crate::{Device,DeviceKind,Room};
+    use alloc::vec;
+    #[test]
+    fn protect_camera_resources_validate_and_resolve_without_credentials(){
+        let mut config=Config::default();
+        config.connections.push(Connection{id:"protect".into(),name:"Cameras".into(),provider:Provider::UnifiProtect});
+        config.rooms.push(Room{id:"entry".into(),name:"Entry".into(),icon:None,devices:vec![Device::new("front".into(),"Front door",DeviceKind::Camera).with_integration(Integration::Connection{connection_id:"protect".into(),resource_id:"camera-123".into()})]});
+        assert!(config.validate().is_ok());
+        assert_eq!(config.resolve_integration(&config.rooms[0].devices[0].integration),Some(Integration::UnifiProtect{camera_id:"protect/camera-123".into()}));
+        config.rooms[0].devices[0].kind=DeviceKind::Light;assert!(config.validate().is_err());
+        config.rooms[0].devices[0].kind=DeviceKind::Camera;
+        config.rooms[0].devices[0].integration=Integration::Connection{connection_id:"protect".into(),resource_id:"../other".into()};assert!(config.validate().is_err());
     }
 }

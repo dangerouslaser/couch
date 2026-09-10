@@ -28,6 +28,7 @@ mod activity_runtime;
 mod activity_buttons;
 mod tv;
 mod thermostat;
+mod camera;
 mod connections;
 mod config_snapshot;
 mod input;
@@ -453,6 +454,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.show().map_err(|e| format!("show: {e:?}"))?;
 
+    let mut cameras = camera::Cameras::new(&app);
     let mut pad = Keypad::open();
     println!("couch-gui: {} keypad device(s)", pad.device_count());
 
@@ -662,6 +664,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exit_device = |app: &App| {
         if app.get_activity_busy() {
             app.invoke_cancel_activity();
+        } else if app.get_camera_shown() {
+            app.invoke_close_camera();
         } else if app.get_thermostat_shown() {
             app.invoke_thermostat_action("close".into(),0);
         } else if app.get_tv_shown() {
@@ -682,8 +686,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             manual_sleep = false;
             println!("couch-gui: standby: wake on lift");
         }
-        let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() || app.get_thermostat_shown() {
-            format!("{}:{}:{}:{}", app.get_tv_shown(), app.get_player_shown(), app.get_thermostat_shown(), app.get_active_activity())
+        let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_camera_shown() || app.get_tv_shown() || app.get_player_shown() || app.get_thermostat_shown() {
+            format!("{}:{}:{}:{}:{}", app.get_camera_shown(), app.get_tv_shown(), app.get_player_shown(), app.get_thermostat_shown(), app.get_active_activity())
         } else { String::new() };
         back_hold.context(back_context);
         if back_hold.poll(now_monotonic_us()) { exit_device(&app); }
@@ -1076,6 +1080,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if activity_navigation {screen.snapshot();}
         activity_controls.poll(&app);
         tv_controls.poll(&app);
+        cameras.poll(&app, standby != Standby::Off);
         if let Some(message)=thermostat_controls.poll(&app){toast(message,2);}
         if let Some(error)=button_controls.poll(&app) {toast(error,3);}
         if !app.get_player_shown() && !app.get_tv_shown() {app.set_active_activity("".into());}

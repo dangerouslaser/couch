@@ -98,12 +98,13 @@ impl Api {
                 None => Reply::error(404, "Denon connection not found"),
             };
         }
-        if let [id, kind @ ("hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv"), rest @ ..] =
+        if let [id, kind @ ("protect" | "hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv"), rest @ ..] =
             path
         {
             let file = self.with(|s| {
                 let c = s.config().connection(&Id::new(*id))?;
                 let expected = match c.provider {
+                    Provider::UnifiProtect => "protect",
                     Provider::Hue => "hue",
                     Provider::HomeAssistant => "ha",
                     Provider::WebOs => "webos",
@@ -140,6 +141,7 @@ impl Api {
                 return super::kodi::route(method, rest, body, file, &host);
             }
             return match *kind {
+                "protect" => super::protect::route_at(method, rest, body, file),
                 "hue" => super::hue::route_at(method, rest, body, file),
                 "ha" => super::ha::route_at(method, rest, body, file),
                 "androidtv" | "appletv" => {
