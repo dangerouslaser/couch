@@ -16,7 +16,7 @@ impl<S: Read + Write> Channel<S> {
     }
     pub fn send_json(&mut self, value: &Value) -> Result<()> {
         ensure!(value.is_object(), "expected JSON object");
-        let bytes = serde_json::to_vec(value)?;
+        let bytes = zeroize::Zeroizing::new(serde_json::to_vec(value)?);
         ensure!(
             !bytes.is_empty() && bytes.len() <= CHUNK,
             "JSON frame exceeds bound"
