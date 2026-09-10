@@ -64,10 +64,17 @@ def report(path, value):
     # Reports are replaceable; source bytes are immutable within a collection.
     data = (json.dumps(value, indent=2, sort_keys=True) + '\n').encode()
     path = Path(path)
+    if path.is_symlink():
+        raise ValueError('Symlink report output refused')
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.report-new')
-    temporary.write_bytes(data)
-    temporary.replace(path)
+    stream = temporary.open('xb')
+    try:
+        with stream:
+            stream.write(data)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def git(repo, *args):
@@ -346,6 +353,8 @@ def checksums(recipe):
 
 
 def download(url, target, expected, offline=False):
+    if target.is_symlink():
+        raise ValueError('Symlink source cache refused')
     if target.exists():
         if sha(target, 'sha512') != expected:
             raise ValueError('Cached source checksum differs')
@@ -357,8 +366,9 @@ def download(url, target, expected, offline=False):
         raise ValueError('Source downloads require public HTTPS URLs')
     temporary = target.with_name(target.name + '.download')
     target.parent.mkdir(parents=True, exist_ok=True)
+    stream = temporary.open('xb')
     try:
-        with urlopen(Request(url, headers={'User-Agent': 'Couch-corresponding-source/1'}), timeout=45) as response, temporary.open('xb') as stream:
+        with stream, urlopen(Request(url, headers={'User-Agent': 'Couch-corresponding-source/1'}), timeout=45) as response:
             if urlsplit(response.url).scheme != 'https':
                 raise ValueError('Source redirected away from HTTPS')
             count = 0
@@ -552,8 +562,9 @@ def assemble(output, archive_path):
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = archive_path.with_name(archive_path.name + '.partial')
     epoch = components['project']['source_date_epoch']
+    stream = temporary.open('xb')
     try:
-        with temporary.open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', filename='', mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w|') as archive:
+        with stream, gzip.GzipFile(fileobj=stream, mode='wb', filename='', mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w|') as archive:
             for name in names:
                 path = output / name
                 entry = tarfile.TarInfo('couch-source/' + name)

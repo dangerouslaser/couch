@@ -61,6 +61,30 @@ class Sources(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'package identity'):
                 source.license_supplement(root / 'out', vendor, path)
 
+    def test_temporary_collisions_preserve_existing_files_and_reports(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / 'source.tar.gz'; collision = root / 'source.tar.gz.download'
+            collision.write_bytes(b'belongs to another run')
+            with patch.object(source, 'urlopen') as network:
+                with self.assertRaises(FileExistsError):
+                    source.download('https://example.invalid/source', target, '0' * 128)
+                network.assert_not_called()
+            self.assertEqual(collision.read_bytes(), b'belongs to another run')
+            report = root / 'report.json'; report.write_bytes(b'previous report')
+            pending = root / 'report.json.report-new'; pending.write_bytes(b'other report run')
+            with self.assertRaises(FileExistsError): source.report(report, {'new': True})
+            self.assertEqual(report.read_bytes(), b'previous report')
+            self.assertEqual(pending.read_bytes(), b'other report run')
+            pending.unlink(); protected = root / 'protected'; protected.write_bytes(b'protected')
+            pending.symlink_to(protected)
+            with self.assertRaises(FileExistsError): source.report(report, {'new': True})
+            self.assertEqual(protected.read_bytes(), b'protected')
+            pending.unlink(); report.unlink(); report.symlink_to(protected)
+            with self.assertRaisesRegex(ValueError, 'Symlink report'): source.report(report, {'new': True})
+            self.assertEqual(protected.read_bytes(), b'protected')
+
     def test_paths_and_binary_inputs_fail_closed(self):
         for name in ('/root/key', '../key', 'a/../key', 'a\\key', 'a//key'):
             with self.assertRaises(ValueError): source.checked_path(name)
@@ -140,6 +164,10 @@ class Sources(unittest.TestCase):
                 (root / (name + '.json')).write_text(json.dumps(value))
             (root / 'private-unlisted.key').write_text('must not publish')
             first = Path(directory) / 'one.tar.gz'; second = Path(directory) / 'two.tar.gz'
+            collision = first.with_name(first.name + '.partial'); collision.write_bytes(b'other archive run')
+            with self.assertRaises(FileExistsError): source.assemble(root, first)
+            self.assertEqual(collision.read_bytes(), b'other archive run')
+            self.assertFalse(first.exists()); collision.unlink()
             self.assertTrue(source.assemble(root, first)['complete'])
             source.assemble(root, second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
