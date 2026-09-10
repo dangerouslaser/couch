@@ -27,6 +27,8 @@ mod hue;
 mod webos;
 mod streaming_tv;
 mod updates;
+mod coreelec;
+mod sonos;
 mod connections;
 mod denon;
 mod ir;
@@ -576,7 +578,7 @@ impl Api {
                 "schema_version": SCHEMA_VERSION,
                 "icons": ALL_ICONS.iter().map(|i| i.name()).collect::<Vec<_>>(),
                 "device_kinds": ALL_DEVICE_KINDS.iter().map(|k| k.name()).collect::<Vec<_>>(),
-                "integrations": ["none", "kodi", "home-assistant", "hue", "web-os", "denon", "ir"],
+                "integrations": ["none", "kodi", "home-assistant", "hue", "web-os", "denon", "sonos", "ir"],
                 "activity_kinds": ["audio", "video"],
             }),
         )

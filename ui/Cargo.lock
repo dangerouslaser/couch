@@ -928,6 +928,7 @@ dependencies = [
  "couch-ir",
  "couch-kodi",
  "couch-model",
+ "couch-sonos",
  "couch-system",
  "couch-voice",
  "couch-webos",
@@ -983,6 +984,16 @@ name = "couch-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "couch-sonos"
+version = "0.1.0"
+dependencies = [
+ "roxmltree 0.20.0",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
@@ -1601,7 +1612,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parlance",
  "read-fonts 0.39.2",
- "roxmltree",
+ "roxmltree 0.21.1",
  "smallvec",
  "windows",
  "windows-core",
@@ -4348,6 +4359,12 @@ dependencies = [
 
 [[package]]
 name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
+name = "roxmltree"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
@@ -5495,7 +5512,7 @@ dependencies = [
  "kurbo",
  "log",
  "pico-args",
- "roxmltree",
+ "roxmltree 0.21.1",
  "rustybuzz",
  "simplecss",
  "siphasher",

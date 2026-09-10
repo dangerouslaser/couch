@@ -939,6 +939,7 @@ fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String
         return Some(format!("ir:{device_id}"));
     }
     let provider = match integration? {
+        Integration::Sonos {..} => return Some(format!("sonos:{device_id}")),
         Integration::WebOs => couch_model::Provider::WebOs,
         Integration::AndroidTv => couch_model::Provider::AndroidTv,
         Integration::AppleTv => couch_model::Provider::AppleTv,

@@ -248,12 +248,14 @@ dependencies = [
  "couch-androidtv",
  "couch-appletv",
  "couch-control",
+ "couch-coreelec",
  "couch-denon",
  "couch-ha",
  "couch-hue",
  "couch-ir",
  "couch-kodi",
  "couch-model",
+ "couch-sonos",
  "couch-system",
  "couch-webos",
  "flate2",
@@ -273,6 +275,15 @@ dependencies = [
  "couch-kodi",
  "couch-webos",
  "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "couch-coreelec"
+version = "0.1.0"
+dependencies = [
+ "couch-kodi",
  "serde",
  "serde_json",
 ]
@@ -327,6 +338,16 @@ name = "couch-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "couch-sonos"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
@@ -1305,6 +1326,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rsa"

@@ -12,6 +12,8 @@ pub struct Connection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Provider {
+    CoreElec { host: String, port: u16 },
+    Sonos { host: String },
     Kodi { host: String, port: u16 },
     Denon { host: String, port: u16 },
     HomeAssistant,
@@ -25,6 +27,8 @@ impl Provider {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Kodi { .. } => "kodi",
+            Self::CoreElec { .. } => "core-elec",
+            Self::Sonos { .. } => "sonos",
             Self::Denon { .. } => "denon",
             Self::HomeAssistant => "home-assistant",
             Self::Hue => "hue",
@@ -37,6 +41,8 @@ impl Provider {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Kodi { .. } => "Kodi",
+            Self::CoreElec { .. } => "CoreELEC",
+            Self::Sonos { .. } => "Sonos",
             Self::Denon { .. } => "Denon AVR",
             Self::HomeAssistant => "Home Assistant",
             Self::Hue => "Philips Hue",
@@ -70,7 +76,8 @@ impl Config {
             return Some(integration.clone());
         };
         Some(match &self.connection(connection_id)?.provider {
-            Provider::Kodi { host, port } => Integration::Kodi {
+            Provider::Sonos { host } => Integration::Sonos { host: host.clone() },
+            Provider::Kodi { host, port } | Provider::CoreElec { host, port } => Integration::Kodi {
                 host: host.clone(),
                 port: *port,
             },
@@ -208,6 +215,50 @@ mod tests {
             Device::new("amp".into(),"Amplifier",DeviceKind::Speaker).with_integration(Integration::Connection{connection_id:"ir".into(),resource_id:"denon".into()})]});
         assert!(c.validate().is_ok());
         c.connections.push(Connection{id:"another-ir".into(),name:"Duplicate blaster".into(),provider:Provider::Ir});assert!(c.validate().is_err());
+    }
+    #[test]
+    fn coreelec_reuses_kodi_and_sonos_capabilities_are_bounded() {
+        let mut c = Config::default();
+        c.connections.push(Connection {
+            id: "ce".into(),
+            name: "CoreELEC".into(),
+            provider: Provider::CoreElec {
+                host: "192.0.2.1".into(),
+                port: 9090,
+            },
+        });
+        c.connections.push(Connection {
+            id: "speaker".into(),
+            name: "Sonos".into(),
+            provider: Provider::Sonos {
+                host: "192.0.2.2".into(),
+            },
+        });
+        let ce = c
+            .resolve_integration(&Integration::Connection {
+                connection_id: "ce".into(),
+                resource_id: String::new(),
+            })
+            .unwrap();
+        assert!(matches!(ce, Integration::Kodi { port: 9090, .. }));
+        assert!(crate::commands::Function::Ok.supports(&ce));
+        let sonos = c
+            .resolve_integration(&Integration::Connection {
+                connection_id: "speaker".into(),
+                resource_id: String::new(),
+            })
+            .unwrap();
+        assert!(crate::commands::Function::Play.supports(&sonos));
+        assert!(crate::commands::Function::VolumeUp.supports(&sonos));
+        assert!(!crate::commands::Function::PowerOff.supports(&sonos));
+        assert!(!crate::commands::Function::Ok.supports(&sonos));
+        assert!(c.validate().is_ok());
+        let bytes = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<Config>(&bytes).unwrap(), c);
+        c.connections[1].provider = Provider::Sonos {
+            host: "speaker.local".into(),
+        };
+        assert!(c.validate().is_err());
     }
     #[test]
     fn old_config_remains_readable_without_connections() {

@@ -7,11 +7,12 @@ It does not provision speakers or implement the official cloud Control API.
 
 ## Usage
 
-Build on the host with `cd clients && cargo build --release -p couch-sonos --locked`.
-For the remote, run `cargo build --release -p couch-sonos --locked --target
-armv7-unknown-linux-musleabihf` from `clients/` so its linker configuration applies.
-This branch adds the library and CLI; runtime image packaging, web setup, model
-configuration and remote GUI controls follow in a separate integration change.
+Build for the remote with `tools/build-sonos.sh`; use `--host` for a desktop binary.
+The runtime inventory requires the static ARM executable at
+`clients/target/armv7-unknown-linux-musleabihf/release/couch-sonos` and packages it
+as `/opt/couch/couch-sonos`, mode 0755, with a pinned SHA-256. Build it before
+running `tools/release/runtime_inventory.py`. The inventory also records the
+clients workspace dependency licenses and lockfile. Packaging includes the CLI alongside the GUI and configuration server integrations.
 
 ```sh
 couch-sonos discover
@@ -32,6 +33,31 @@ Library entry points are `discover`, `Client::connect(Ipv4Addr)`, `player`,
 `coordinator`, `status`, `playback(Playback)`, `volume`, `muted`, `set_volume`, and
 `set_muted`. Errors distinguish transport, malformed responses, unsupported
 services, HTTP status, UPnP fault codes, invalid volume, and non-coordinator playback.
+
+## Web and remote controls
+
+In the web UI, open **Connections → Sonos**, enter the speaker’s IPv4 address,
+and save. **Test connection / refresh** displays playback state, volume, mute,
+and whether the selected player coordinates its group. Playback buttons remain
+disabled for a member; create/select the coordinator’s connection explicitly.
+Volume and mute still address the selected player. Use **Rooms & devices** to add
+that connection as a speaker. An activity may use Sonos as its main screen or map
+individual playback/volume/mute buttons to it.
+
+The remote’s speaker card opens Sonos playback, volume, mute and refresh controls.
+Playback failures on group members explain that the coordinator must be selected;
+there is no automatic forwarding. Status refreshes on open, after commands, and
+when the displayed observation ages out. Stale queued physical commands are
+cancelled before writes, including after preparatory network reads; leaving the
+screen or changing configuration invalidates the queued target.
+
+Authenticated daemon routes are `GET /api/connections/ID/sonos/status` and
+`POST /api/connections/ID/sonos/command`. Command bodies use a closed `command`
+vocabulary (`play`, `pause`, `play-pause`, `stop`, `next`, `previous`,
+`volume-up`, `volume-down`, `mute` for toggle, `mute-on`, `mute-off`), or
+`{"command":"volume","value":25}`. The saved connection supplies the address;
+command requests cannot override it. Mutations return acknowledgement separately
+from refresh failures so a failed observation does not invite replaying a write.
 
 ## Group behavior and compatibility
 
