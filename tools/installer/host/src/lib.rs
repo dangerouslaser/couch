@@ -1,10 +1,12 @@
 //! Native host input preparation. No commands, device access or filesystem mounts.
+pub mod assembly;
 pub mod frontend;
 pub mod session;
 pub mod stage;
 pub mod stage_files;
 pub mod stage_tls;
 pub mod transaction;
+pub mod vendor_transfer;
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use serde_json::json;

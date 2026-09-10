@@ -4,6 +4,7 @@ mod block;
 mod network;
 #[cfg(all(test, target_os = "linux"))]
 mod session_tests;
+mod vendor;
 use crate::invalid;
 use couch_installer_storage::{
     Hash, Identity, Image, Journal, Phase, Plan, Region, Storage, Target, Transaction, CHUNK,
@@ -89,6 +90,8 @@ struct WireImage {
 #[serde(deny_unknown_fields)]
 struct WirePlan {
     schema: u32,
+    #[serde(default)]
+    vendor_source_sha256: Option<String>,
     #[serde(default)]
     network: Option<network::Network>,
     #[serde(default)]
@@ -293,6 +296,9 @@ pub fn session(stream: &mut (impl Read + Write)) -> io::Result<()> {
     execute(stream, wire, block::Disk::new)
 }
 trait InstallDisk: Storage {
+    fn receive_vendor(&mut self, _stream: &mut (impl Read + Write)) -> io::Result<()> {
+        Err(invalid("owner vendor overlay unsupported"))
+    }
     fn configure_network(
         &mut self,
         network: Option<zeroize::Zeroizing<Vec<u8>>>,
@@ -315,6 +321,9 @@ trait InstallDisk: Storage {
     fn read_name(&self, name: &str) -> io::Result<std::fs::File>;
 }
 impl InstallDisk for block::Disk {
+    fn receive_vendor(&mut self, stream: &mut (impl Read + Write)) -> io::Result<()> {
+        self.receive_vendor(stream)
+    }
     fn configure_network(
         &mut self,
         network: Option<zeroize::Zeroizing<Vec<u8>>>,
@@ -399,7 +408,8 @@ fn execute<D: InstallDisk>(
         .as_ref()
         .map(network::Network::encode)
         .transpose()?;
-    if network.is_some() {
+    vendor::validate(wire.vendor_source_sha256.as_deref())?;
+    if network.is_some() || wire.vendor_source_sha256.is_some() {
         ensure(
             wire.images
                 .get("userdata")
@@ -510,6 +520,10 @@ fn execute<D: InstallDisk>(
     disk.verify_identity()?;
     send(stream, serde_json::json!({"event":"backups_complete"}))?;
     acknowledge(stream, "backups_complete", "none", "")?;
+    if wire.vendor_source_sha256.is_some() {
+        disk.receive_vendor(stream)?;
+        disk.verify_identity()?;
+    }
     let shared = Rc::new(RefCell::new(&mut *stream));
     let mut journal = HostJournal {
         stream: shared.clone(),
