@@ -43,7 +43,10 @@ fn regular(path: &Path) -> Result<File> {
     Ok(File::open(path)?)
 }
 fn hash_file(path: &Path) -> Result<String> {
-    let mut input = regular(path)?;
+    hash_open_file(&mut regular(path)?)
+}
+fn hash_open_file(input: &mut File) -> Result<String> {
+    input.seek(SeekFrom::Start(0))?;
     let mut hash = Sha256::new();
     let mut data = [0; 65536];
     loop {
@@ -53,6 +56,7 @@ fn hash_file(path: &Path) -> Result<String> {
         }
         hash.update(&data[..n]);
     }
+    input.seek(SeekFrom::Start(0))?;
     Ok(format!("{:x}", hash.finalize()))
 }
 fn create(path: &Path) -> Result<File> {
@@ -220,9 +224,9 @@ pub fn prepare(ota: &Path, destination: &Path) -> Result<()> {
         "output already exists"
     );
     let pin: Pin = serde_json::from_str(PIN)?;
-    let input = regular(ota)?;
+    let mut input = regular(ota)?;
     ensure!(
-        input.metadata()?.len() == pin.size && hash_file(ota)? == pin.sha256,
+        input.metadata()?.len() == pin.size && hash_open_file(&mut input)? == pin.sha256,
         "official archive pin mismatch"
     );
     let parent = destination.parent().context("output needs a parent")?;
