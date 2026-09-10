@@ -1,22 +1,19 @@
 //! Turning a [`Frame`] into the bytes `mt_irtx` wants on `write()`.
 //!
-//! This is the MediaTek-specific half, and it is a deliberate, faithful port of
-//! the vendor Android HAL's `signals_generate` (consumerir.c, cited in
-//! `docs/ir.md`). The point of copying it rather than inventing something
-//! cleaner is fidelity: the `mt_irtx` driver just DMAs whatever we write into
-//! the PWM block's memory-mode FIFO and clocks it out. So the only buffer known
-//! to work is the one the stock firmware produced, and this produces the same
-//! one, bit for bit.
+//! Couch's waveform ABI is paired with its custom `couch_irtx` kernel driver.
+//! Its carrier-scaled geometry derives from a later public MediaTek HAL, not
+//! the original HA100 ROM. The stock HA100 HAL uses one-microsecond samples;
+//! this implementation uses three samples per carrier period. It therefore
+//! does not reproduce the stock firmware's buffers bit for bit. See
+//! `docs/ha100-stock-ir-audit.md` for the measured and recovered evidence.
 //!
 //! # What the driver does with the buffer
 //!
-//! The write buffer is an array of little-endian `u32` words played out as a
-//! bit-stream, LSB of word 0 first. The PWM is configured (in the driver, not
-//! by us) so that **each bit is one "tick"** of `HDURATION`+`LDURATION` = ~1 us
-//! at 26 MHz - but the useful unit is the *carrier period*, which the HAL sizes
-//! to a whole number of ticks (three, for every carrier here). The last word of
-//! the buffer is not waveform: it is a duration marker the driver's length
-//! arithmetic needs, reproduced exactly (see the trailer note below).
+//! Little-endian `u32` waveform words play LSB first. Each sample lasts
+//! `round(26 MHz / (3 * carrier_hz))` clocks: 228 clocks, about 8.77 us, at
+//! 38 kHz. HDURATION and LDURATION each encode sample clocks minus one.
+//! The final word is a duration trailer; Couch's driver excludes it from DMA.
+//! This ABI is not compatible with an arbitrary stock MediaTek driver.
 //!
 //! # Two solutions, and which one this device uses
 //!
@@ -31,7 +28,7 @@
 //!   three-tick period (a ~33% duty 38 kHz-scaled square wave); during a space,
 //!   nothing.
 //!
-//! The HA100's driver is `mt_irtx_pwm.c`, which returns 1 and never writes the
+//! Couch's HA100 driver returns 1 and never writes the
 //! hardware IR registers - so [`Solution::PwmOnly`] is the real path, and
 //! [`tx`](crate::tx) asks the driver at run time rather than assuming. Both are
 //! implemented and tested because the query is one ioctl and getting the wrong
@@ -74,10 +71,10 @@ fn round(x: f64) -> i64 {
 ///
 /// The last word is the trailer the driver expects (the total transmit time in
 /// microseconds); every earlier word is waveform. This is exactly the layout
-/// `dev_char_write` DMAs, so [`to_bytes`] of the result is what goes on the
+/// Couch's `ir_write` accepts, so [`to_bytes`] of the result is what goes on the
 /// wire.
 pub fn to_wave(frame: &Frame, solution: Solution) -> Vec<u32> {
-    // Per-carrier geometry, computed the HAL's way. h_l_period is clocks per
+    // Couch carrier-scaled geometry. h_l_period is reference clocks per
     // tick; a tick is frac microseconds; a carrier period is whole_cycle ticks.
     let carrier = frame.carrier_hz.max(1) as f64;
     let h_l_period = round(26_000_000.0 / (carrier * 3.0)).max(1);
@@ -86,7 +83,7 @@ pub fn to_wave(frame: &Frame, solution: Solution) -> Vec<u32> {
     let duty_cycle = round(whole_cycle as f64 * DUTY); // ticks on, per period
 
     // Round each duration to a whole number of carrier periods, in ticks. This
-    // is the HAL's mode-0 ("golden pattern") measurement.
+    // follows the public HAL's period-rounding approach with Couch sample units.
     let period_us = frac * whole_cycle as f64;
     let mut temp = Vec::with_capacity(frame.pattern_us.len());
     let mut total_tick: i64 = 0;
@@ -149,7 +146,7 @@ pub fn to_wave(frame: &Frame, solution: Solution) -> Vec<u32> {
     }
 
     // The trailer: the HAL stores max(total_time, input_total_time) here. The
-    // driver's played length is (word count - 1), so this word is never clocked
+    // Couch driver excludes this word before programming DMA, so it is never clocked
     // out as waveform - its presence is what makes that length come out right,
     // and its value is the transmit duration in microseconds. We reproduce both.
     let last = wave.len() - 1;
