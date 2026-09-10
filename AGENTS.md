@@ -34,4 +34,4 @@ History favors descriptive, imperative subjects, sometimes prefixed by a subsyst
 
 ## Device & Configuration Safety
 
-Keep credentials, partition backups, and per-device calibration outside Git. Never write `preloader_*` or `lk`. Read the current partition layout and recovery procedure in `README.md` before flashing.
+Keep credentials, partition backups, and per-device calibration outside Git. Never write `preloader_*` or `lk`. Read the current partition layout and recovery procedure in `docs/device-recovery.md` before flashing.
