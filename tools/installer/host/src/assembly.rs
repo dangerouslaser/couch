@@ -404,3 +404,127 @@ mod tests {
         assert!(repack(&template, None, b"test").is_err());
     }
 }
+
+/// Replace only the boot frame in an independently verified original logo backup.
+/// Header extensions and every charging/other image stream are preserved byte-for-byte.
+/// The caller binds the result hash into the install plan before any write.
+pub fn logo_image(original: &[u8], bgra: &[u8]) -> Result<Vec<u8>> {
+    const FRAME: usize = 480 * 800 * 4;
+    ensure!(bgra.len() == FRAME, "expected 480x800 BGRA logo frame");
+    ensure!(
+        original.len() >= 4096
+            && original.len() <= PARTITION
+            && original.len().is_multiple_of(4096),
+        "invalid logo partition size"
+    );
+    ensure!(
+        le(original, 0)? == 0x58881688 && original.get(8..13) == Some(b"logo\0"),
+        "invalid MTK logo header"
+    );
+    let block = le(original, 4)? as usize;
+    ensure!(
+        block >= 12 && block <= original.len() - 512 && le(original, 516)? as usize == block,
+        "logo payload bounds mismatch"
+    );
+    let count = le(original, 512)? as usize;
+    ensure!((1..=1024).contains(&count), "invalid logo frame count");
+    let table = 8 + 4 * count;
+    ensure!(table < block, "truncated logo offset table");
+    let mut offsets = Vec::new();
+    for index in 0..count {
+        offsets.push(le(original, 520 + index * 4)? as usize);
+    }
+    ensure!(
+        offsets[0] == table
+            && offsets.windows(2).all(|p| p[0] < p[1])
+            && offsets[count - 1] < block,
+        "invalid logo frame offsets"
+    );
+    offsets.push(block);
+    let first = &original[512 + offsets[0]..512 + offsets[1]];
+    let mut decoder = flate2::bufread::ZlibDecoder::new(first);
+    let mut raw = Vec::new();
+    (&mut decoder)
+        .take(FRAME as u64 + 1)
+        .read_to_end(&mut raw)?;
+    ensure!(
+        raw.len() == FRAME && decoder.get_ref().is_empty(),
+        "original boot logo frame is corrupt or wrong size"
+    );
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(bgra)?;
+    let replacement = encoder.finish()?;
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(count as u32).to_le_bytes());
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    let mut next = table;
+    for index in 0..count {
+        payload.extend_from_slice(&(next as u32).to_le_bytes());
+        next += if index == 0 {
+            replacement.len()
+        } else {
+            offsets[index + 1] - offsets[index]
+        };
+    }
+    ensure!(
+        512 + next <= original.len(),
+        "replacement logo exceeds partition"
+    );
+    payload[4..8].copy_from_slice(&(next as u32).to_le_bytes());
+    payload.extend_from_slice(&replacement);
+    payload.extend_from_slice(&original[512 + offsets[1]..512 + block]);
+    let mut output = original[..512].to_vec();
+    output[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    output.extend_from_slice(&payload);
+    output.resize(original.len(), 0);
+    Ok(output)
+}
+
+#[cfg(test)]
+mod logo_tests {
+    use super::*;
+    fn fixture() -> Vec<u8> {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&vec![0; 480 * 800 * 4]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut bytes = vec![0; 512];
+        bytes[..4].copy_from_slice(&0x58881688u32.to_le_bytes());
+        bytes[8..13].copy_from_slice(b"logo\0");
+        bytes[100..104].copy_from_slice(b"KEEP");
+        let block = 16 + compressed.len() + 8;
+        bytes[4..8].copy_from_slice(&(block as u32).to_le_bytes());
+        for word in [2, block as u32, 16, 16 + compressed.len() as u32] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend_from_slice(&compressed);
+        bytes.extend_from_slice(b"charging");
+        bytes.resize(32768, 0);
+        bytes
+    }
+    #[test]
+    fn only_boot_frame_changes_and_invalid_offsets_or_streams_are_refused() {
+        let original = fixture();
+        let bgra = vec![255; 480 * 800 * 4];
+        let result = logo_image(&original, &bgra).unwrap();
+        assert_eq!(result.len(), original.len());
+        assert_eq!(&result[8..512], &original[8..512]);
+        let offset = le(&result, 524).unwrap() as usize;
+        assert_eq!(
+            &result[512 + offset..512 + le(&result, 4).unwrap() as usize],
+            b"charging"
+        );
+        let first = le(&result, 520).unwrap() as usize;
+        let mut actual = Vec::new();
+        flate2::read::ZlibDecoder::new(&result[512 + first..512 + offset])
+            .read_to_end(&mut actual)
+            .unwrap();
+        assert_eq!(actual, bgra);
+        let mut bad = original.clone();
+        bad[520..524].copy_from_slice(&0u32.to_le_bytes());
+        assert!(logo_image(&bad, &bgra).is_err());
+        let mut bad = original.clone();
+        bad[530] ^= 1;
+        assert!(logo_image(&bad, &bgra).is_err());
+        assert!(logo_image(&original, &bgra[..10]).is_err());
+    }
+}

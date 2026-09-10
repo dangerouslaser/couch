@@ -12,6 +12,8 @@ Release builders produce these neutral artifacts without contacting a device:
 - `tools/release/prepare_public_ramdisk.py`: Alpine tools, source-built BusyBox,
   installer probe/display, WMT property bridge and scripts. No proprietary files,
   device identifiers, or Wi-Fi credentials.
+- `tools/release/prepare_public_logo.py`: the canonical Couch480x800 BGRA
+  frame (`logo.bgra`), without a logo partition header or charging images.
 - `tools/release/prepare_public_userdata.py`: clean packaged Couch/Alpine staging,
   checked and compacted with the pinned offline e2fsprogs closure. It rejects the
   proprietary inventory's paths and content hashes. Filesystem growth occurs on
@@ -38,6 +40,13 @@ kernel; `None` retains the stock kernel for the small recovery ramdisk. No owner
 boot image is published. The OTA stock boot kernel used for this recovery image
 needs physical recovery validation; previous private trials used a separately
 saved stock recovery template.
+
+`assembly::logo_image` replaces only frame zero in the independently verified
+original logo backup. It validates MTK offsets, bounded zlib output and checksum,
+preserves header extensions and every other compressed frame, and pads to the
+original partition size. The host captures this original before binding the
+composed logo image hash into the install plan. Public tar contains `logo.bgra`,
+never an owner-derived `logo.img`.
 
 ## Authenticated stage overlay protocol
 
