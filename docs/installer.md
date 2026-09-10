@@ -252,3 +252,31 @@ After manual Power, the normal Couch kernel, network and GUI returned. The
 local GUI health gate cleared the BCB, and boot/recovery partition hashes
 matched the private pre-capture baseline. This was manual startup, not an
 automatic return or an installation test.
+
+## September 10: read throughput and stock-first validation
+
+The private installation trial was interrupted during the userdata backup,
+before any flash writes. Its incomplete backup is retained as evidence and
+must not be treated as a restorable original or resumed as a complete backup.
+
+A subsequent read-only benchmark compared the existing reader with a streaming
+reader that amortizes transaction setup across 64 MiB windows. After validating
+the device baseline and a smaller checksum probe, both readers independently
+matched the baseline hash of the 32 MiB `nvdata` partition:
+
+| Reader | Time | Throughput |
+|---|---:|---:|
+| Existing bounded reader | 13.914 s | 2.30 MiB/s |
+| Experimental streaming reader | 14.020 s | 2.28 MiB/s |
+
+Streaming header setup took only 0.004 seconds. This single-device result does
+not justify replacing the installer reader for performance. USB enumerated at
+480 Mbit/s; the measured transfer rate is not a configured serial baud rate.
+The benchmark issued no flash writes and the DA exit powered the remote off.
+
+The final end-to-end acceptance test must begin with stock Android, including
+stock recovery, and require neither Couch SSH access nor existing Couch files.
+Preserve a complete, verified Couch backup before restoring Android. Capture a
+fresh identity baseline after stock boot: Android may legitimately update its
+configuration partitions. Public installation remains gated pending this test
+and release packaging; the private TUI is not a production release.
