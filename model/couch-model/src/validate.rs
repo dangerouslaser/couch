@@ -120,6 +120,14 @@ impl Config {
             if c.id.as_str().len()>128 || !c.id.as_str().bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-' || b==b'_') { problems.push(Problem{at:alloc::format!("connections[{i}]"),message:"Connection IDs must be safe alphanumeric identifiers".into()}); }
         }
         for (room,device) in self.devices() {
+            if let crate::Integration::Sonos { host } = &device.integration {
+                if host.parse::<core::net::Ipv4Addr>().is_err() {
+                    problems.push(Problem {
+                        at: alloc::format!("rooms.{}.devices.{}", room.id, device.id),
+                        message: "Sonos needs an IPv4 address".into(),
+                    });
+                }
+            }
             if let crate::Integration::Connection{connection_id,resource_id}=&device.integration {
                 let at=alloc::format!("rooms.{}.devices.{}",room.id,device.id);
                 match self.connection(connection_id) {
@@ -290,6 +298,23 @@ mod tests {
 
     fn room(id: &str, name: &str) -> Room {
         Room { id: Id::new(id), name: name.to_string(), icon: None, devices: vec![] }
+    }
+
+    #[test]
+    fn direct_sonos_integrations_require_literal_ipv4_addresses() {
+        for (host, valid) in [("192.0.2.1", true), ("speaker.local", false), ("::1", false), ("", false), ("256.1.1.1", false)] {
+            let mut room = room("living", "Living room");
+            let mut device = Device::new(Id::new("speaker"), "Sonos", DeviceKind::Speaker);
+            device.integration = crate::Integration::Sonos { host: host.into() };
+            room.devices.push(device);
+            let cfg = Config { rooms: vec![room], ..Config::default() };
+            if valid {
+                assert!(cfg.validate().is_ok(), "{host}");
+            } else {
+                let error = cfg.validate().unwrap_err();
+                assert!(error.problems.iter().any(|p| p.at == "rooms.living.devices.speaker" && p.message == "Sonos needs an IPv4 address"));
+            }
+        }
     }
 
     #[test]
