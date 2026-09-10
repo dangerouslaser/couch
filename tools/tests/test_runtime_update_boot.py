@@ -69,6 +69,7 @@ class RuntimeBootTests(unittest.TestCase):
             (runtime / 'current').symlink_to('slots/' + candidate)
             (runtime / 'pending').write_text(f'base {candidate}\n')
             (root / 'proc' / '123').mkdir(parents=True)
+            (root / 'proc' / '124').mkdir()
             (root / 'proc' / 'uptime').write_text('100.0 0.0\n')
             helper = root / 'helper'
             helper.write_text(f"""#!/bin/sh
@@ -78,8 +79,13 @@ timeout) shift 2; exec timeout 0.01 "$@";;
 reboot) touch '{root}/rebooted'; exit 0;;
 sleep)
  n=$(cat '{root}/ticks' 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > '{root}/ticks'
- if [ '{pattern}' = healthy ] || [ '{pattern}' = hung ] || {{ [ '{pattern}' = intermittent ] && [ $((n%3)) -ne 0 ]; }}; then
+ now=$((100+n)); echo "$now.0 0.0" > '{root}/proc/uptime'
+ if [ '{pattern}' = frozen ]; then
   echo '123 100' > '{root}/health'
+ elif [ '{pattern}' = changing ]; then
+  echo "$((123+n%2)) $now" > '{root}/health'
+ elif [ '{pattern}' = healthy ] || [ '{pattern}' = hung ] || {{ [ '{pattern}' = intermittent ] && [ $((n%3)) -ne 0 ]; }}; then
+  echo "123 $now" > '{root}/health'
  else
   rm -f '{root}/health'
  fi
@@ -110,6 +116,12 @@ exec "$@"
 
     def test_healthy_candidate_is_committed_after_consecutive_checks(self):
         self.assertEqual(self.boot_health('healthy'), ('candidate', True, False, 'base'))
+
+    def test_frozen_gui_with_live_pid_cannot_commit_recent_heartbeat(self):
+        self.assertEqual(self.boot_health('frozen'), ('candidate', False, True, None))
+
+    def test_restarting_gui_cannot_accumulate_heartbeats_from_different_processes(self):
+        self.assertEqual(self.boot_health('changing'), ('candidate', False, True, None))
 
     def test_hung_system_health_rolls_back_and_requests_reboot(self):
         self.assertEqual(self.boot_health('hung'), ('candidate', False, True, None))

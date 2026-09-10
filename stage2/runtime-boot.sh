@@ -37,7 +37,7 @@ if [ -f "$RUNTIME/pending" ]; then
             echo "$CANDIDATE" > "$RUNTIME/attempted"
             $BB sync
             (
-                n=0; healthy=0
+                n=0; healthy=0; healthy_pid=0; healthy_stamp=0
                 START=$($BB cut -d. -f1 /proc/uptime)
                 while [ $n -lt 90 ]; do
                     $BB sleep 1; n=$((n+1))
@@ -47,7 +47,15 @@ if [ -f "$RUNTIME/pending" ]; then
                     [ -z "$EXTRA_HEALTH" ] || { healthy=0; continue; }
                     case "$PID:$STAMP:$NOW" in *[!0-9:]*|::*|:*|*:) healthy=0; continue;; esac
                     if [ -d "/proc/$PID" ] && [ "$STAMP" -le "$NOW" ] && [ $((NOW-STAMP)) -le 10 ] && $BB timeout 2 "$RUNTIME/slots/$CANDIDATE/couch-system" health >/dev/null 2>&1; then
-                        healthy=$((healthy+1))
+                        # A live PID and a recently written marker do not prove
+                        # the GUI is still running. Require advancing heartbeats
+                        # from one process before accepting the candidate.
+                        if [ "$PID" = "$healthy_pid" ] && [ "$STAMP" -gt "$healthy_stamp" ]; then
+                            healthy=$((healthy+1))
+                        else
+                            healthy=1
+                        fi
+                        healthy_pid=$PID; healthy_stamp=$STAMP
                         if [ $healthy -ge 5 ]; then
                             echo "$PREVIOUS" > "$RUNTIME/previous"
                             $BB sync

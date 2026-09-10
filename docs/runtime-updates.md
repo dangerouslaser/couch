@@ -78,3 +78,5 @@ Physical acceptance still requires installing a signed candidate through the
 paired web UI, observing GUI/system health acceptance, and intentionally failing
 a candidate health check to verify reboot into the previous runtime. Repeat with
 an interrupted candidate boot and confirm recovery still selects the base runtime.
+
+Update acceptance requires advancing GUI heartbeats from the same process; a recently frozen GUI or repeated process restarts cannot satisfy the boot-health gate.
