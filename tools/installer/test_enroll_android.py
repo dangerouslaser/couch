@@ -85,6 +85,14 @@ class EnrollmentTests(unittest.TestCase):
         with self.assertRaises(InstallError):
             self.run_capture()
 
+    def test_shortened_calibration_partition_rejected_before_backup(self):
+        parts = {name: dict(value) for name, value in self.parts.items()}
+        parts['nvram']['size'] -= 512
+        self.reader.description = {**self.reader.description, 'partitions': parts}
+        with self.assertRaisesRegex(InstallError, 'sizes differ from official'):
+            self.run_capture()
+        self.assertFalse(self.args.backup_dir.exists())
+
     def test_failed_readback_or_cleanup_never_publishes_baseline(self):
         self.corrupt_readback = True
         with self.assertRaisesRegex(InstallError, 'readback mismatch'):
