@@ -30,6 +30,23 @@ def _stamp(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
+def _open_image(path):
+    # Native sessions provide a private parent. Check the opened object as well
+    # as the name: Windows has no O_NOFOLLOW and binary mode is not the default.
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and not
+            (getattr(before, "st_file_attributes", 0) & 0x400), "Image is a link or reparse point")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    try:
+        require(_stamp(os.fstat(fd)) == _stamp(before), "Image changed while opening")
+        os.set_inheritable(fd, False)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _sha(value):
     return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
 
@@ -79,7 +96,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
                         and filename not in ("", ".", "..") and _sha(image.get("sha256")),
                         "Invalid verified image entry")
                 path = self._bundle / filename
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                fd = _open_image(path)
                 self._sources[name] = {"path": path, "fd": fd, "sha256": image["sha256"]}
                 info = os.fstat(fd)
                 require(stat.S_ISREG(info.st_mode) and info.st_size == self.description["partitions"][name]["size"],

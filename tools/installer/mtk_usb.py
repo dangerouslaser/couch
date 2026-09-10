@@ -4,6 +4,7 @@ Instantiating imports dependencies; enumerate/claim/start are explicit operation
 The read-only capture CLI uses this backend; physical installation stays disabled.
 """
 from contextlib import contextmanager
+from contextvars import ContextVar
 import importlib
 import errno
 import importlib.abc
@@ -26,8 +27,31 @@ class _Deadline(BaseException):
     pass
 
 
+_SUPERVISOR = ContextVar("couch_mtk_deadline_supervisor", default=None)
+
+
+@contextmanager
+def supervised_operations(supervisor):
+    """RPC adapter only: Rust owns process deadlines and kills an expired worker.
+
+    The callback exchanges an arm/ack message before any bounded operation.
+    Ordinary Python callers retain the existing Unix signal deadline policy.
+    """
+    require(callable(supervisor), "Missing native deadline supervisor")
+    token = _SUPERVISOR.set(supervisor)
+    try:
+        yield
+    finally:
+        _SUPERVISOR.reset(token)
+
+
 @contextmanager
 def bounded_operation(seconds):
+    supervisor = _SUPERVISOR.get()
+    if supervisor is not None:
+        with supervisor(seconds):
+            yield
+        return
     require(threading.current_thread() is threading.main_thread() and hasattr(signal, "setitimer"),
             "Physical MTK operations require the Linux/macOS main thread")
     require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "Another operation owns the deadline timer")
@@ -165,7 +189,7 @@ def strict_handshake(cdc, *, sleep=time.sleep):
 
 
 class ExactUsbBackend:
-    def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None):
+    def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None, libusb_path=None):
         self.checkout = checkout
         require((preloader is None) == (preloader_sha256 is None), "Provide both board preloader path and SHA-256")
         # Read-only board-data input. It is never passed to a partition writer
@@ -176,6 +200,15 @@ class ExactUsbBackend:
             import usb.util
             usb = sys.modules["usb"]
         self.usb = usb
+        self.usb_backend = None
+        if libusb_path is not None:
+            # The native host verifies this exact library against its runtime
+            # receipt before launching the adapter. Never fall back to a system library.
+            libusb = importlib.import_module("usb.backend.libusb1")
+            library = Path(libusb_path)
+            require(library.is_file() and not library.is_symlink(), "Expected verified libusb library")
+            self.usb_backend = libusb.get_backend(find_library=lambda _: str(library.resolve()))
+            require(self.usb_backend is not None, "Verified libusb library could not be loaded")
         self.bindings = bindings  # Unit tests supply constructors; production uses pinned imports.
         self.device = None
         self.interfaces = []
@@ -186,7 +219,7 @@ class ExactUsbBackend:
         self.started = False
 
     def enumerate(self):
-        return [descriptor(dev) for dev in self.usb.core.find(find_all=True, idVendor=0x0e8d)]
+        return [descriptor(dev) for dev in self.usb.core.find(find_all=True, idVendor=0x0e8d, **({"backend": self.usb_backend} if self.usb_backend is not None else {}))]
 
     def claim(self, expected):
         with bounded_operation(10):
@@ -194,7 +227,7 @@ class ExactUsbBackend:
 
     def _claim(self, expected):
         require(self.device is None, "USB backend already claimed a device")
-        devices = list(self.usb.core.find(find_all=True, idVendor=0x0e8d))
+        devices = list(self.usb.core.find(find_all=True, idVendor=0x0e8d, **({"backend": self.usb_backend} if self.usb_backend is not None else {})))
         select_candidate([descriptor(dev) for dev in devices], expected)
         dev = next(dev for dev in devices if descriptor(dev) == expected)
         self.device = dev  # Retain this exact descriptor; never rediscover on an error.
