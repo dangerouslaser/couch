@@ -29,6 +29,7 @@ mod streaming_tv;
 mod connections;
 mod denon;
 mod ir;
+mod device_ir;
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,8 @@ struct NewDevice {
     icon: Option<Icon>,
     #[serde(default)]
     integration: Option<Integration>,
+    #[serde(default)]
+    ir: Option<couch_model::DeviceIr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,6 +387,8 @@ impl Api {
                     None => Reply::error(404, "no such room"),
                 })
             }
+            (method @ ("GET" | "PUT" | "DELETE"), ["rooms", room, "devices", device, "ir"]) => self.device_ir(method,room,device,&body,if_match),
+            ("POST", ["rooms", id, "devices", "ir"]) => self.create_ir_device(id,&body,if_match),
             ("POST", ["rooms", id, "devices"]) => self.create_device(&body, if_match, id),
             ("PUT", ["rooms", id, "devices", dev]) => {
                 self.replace_device(&body, if_match, id, dev)
@@ -680,6 +685,7 @@ impl Api {
                 kind: new.kind,
                 icon: new.icon,
                 integration: new.integration.unwrap_or_default(),
+                ir: new.ir,
             });
             Some(())
         });

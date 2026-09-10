@@ -70,7 +70,7 @@ mod id;
 mod seed;
 mod validate;
 
-pub use device::{Action, Device, DeviceKind, Integration, ALL_DEVICE_KINDS};
+pub use device::{Action, Device, DeviceIr, DeviceKind, Integration, ALL_DEVICE_KINDS};
 pub use icon::{Icon, ALL_ICONS};
 pub use id::Id;
 pub use validate::{Problem, ValidationError};

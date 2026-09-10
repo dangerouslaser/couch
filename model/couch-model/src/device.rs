@@ -26,6 +26,9 @@ pub struct Device {
     pub icon: Option<Icon>,
     #[serde(default)]
     pub integration: Integration,
+    /// Exact per-function IR overrides; unassigned functions use the integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ir: Option<DeviceIr>,
 }
 
 impl Device {
@@ -36,6 +39,7 @@ impl Device {
             kind,
             icon: None,
             integration: Integration::None,
+            ir: None,
         }
     }
 
@@ -44,8 +48,29 @@ impl Device {
         self
     }
 
+    /// Supplemental IR takes precedence; legacy IR devices remain readable.
+    pub fn effective_ir_codeset<'a>(&'a self, config: &'a crate::Config) -> Option<&'a str> {
+        if let Some(ir) = &self.ir { return Some(&ir.codeset); }
+        match &self.integration {
+            Integration::Ir { codeset } => Some(codeset),
+            Integration::Connection { connection_id, resource_id }
+                if config.connection(connection_id).is_some_and(|c| c.provider == crate::Provider::Ir) => Some(resource_id),
+            _ => None,
+        }
+    }
+
     pub fn effective_icon(&self) -> Icon {
         self.icon.unwrap_or_else(|| self.kind.default_icon())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIr {
+    pub codeset: String,
+}
+impl DeviceIr {
+    pub fn valid_codeset(id: &str) -> bool {
+        !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
     }
 }
 
@@ -230,5 +255,38 @@ impl Action {
             _ => {}
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod ir_tests {
+    use super::*;
+    #[test]
+    fn old_json_and_legacy_ir_work_without_a_supplemental_field() {
+        let old:Device=serde_json::from_str(r#"{"id":"tv","name":"TV","integration":{"via":"ir","codeset":"lg-tv"}}"#).unwrap();
+        let config=crate::Config::default();
+        assert!(old.ir.is_none());assert_eq!(old.effective_ir_codeset(&config),Some("lg-tv"));
+        assert!(serde_json::to_value(&old).unwrap().get("ir").is_none());
+        let mut override_device=old;override_device.ir=Some(DeviceIr{codeset:"device-tv".into()});
+        assert_eq!(override_device.effective_ir_codeset(&config),Some("device-tv"));
+    }
+    #[test]
+    fn per_device_ir_exposes_mapping_capabilities_without_inventing_network_apps() {
+        let config=crate::Config::default();
+        let mut device=Device::new("receiver".into(),"Receiver",DeviceKind::Speaker);
+        assert!(!crate::commands::Function::VolumeUp.supports_device(&device,&config));
+        device.ir=Some(DeviceIr{codeset:"receiver".into()});
+        assert!(crate::commands::Function::VolumeUp.supports_device(&device,&config));
+        assert!(crate::commands::Function::PowerOn.supports_device(&device,&config));
+        assert!(!crate::commands::Function::App("netflix".into()).supports_device(&device,&config));
+    }
+    #[test]
+    fn supplemental_ir_keeps_network_and_rejects_unsafe_ids() {
+        let mut config=crate::Config::seed();
+        let device=&mut config.rooms[0].devices[0];let integration=device.integration.clone();
+        device.ir=Some(DeviceIr{codeset:"device-tv".into()});assert_eq!(device.integration,integration);assert!(config.validate().is_ok());
+        for id in ["","../secret","with space","UPPER"] {
+            config.rooms[0].devices[0].ir=Some(DeviceIr{codeset:id.into()});assert!(config.validate().is_err());
+        }
     }
 }

@@ -85,6 +85,9 @@ impl Config {
         for (ri, room) in self.rooms.iter().enumerate() {
             for (di, d) in room.devices.iter().enumerate() {
                 let at = alloc::format!("rooms[{ri}].devices[{di}]");
+                if d.ir.as_ref().is_some_and(|ir| !crate::DeviceIr::valid_codeset(&ir.codeset)) {
+                    problems.push(Problem { at: alloc::format!("{at}.ir"), message: "Choose a lowercase IR codeset ID with letters, numbers, hyphens or underscores (maximum 64 characters)".into() });
+                }
                 if d.id.is_empty() {
                     problems.push(Problem { at: at.clone(), message: "blank id".to_string() });
                 }
@@ -218,8 +221,7 @@ impl Config {
                 let valid = !act.buttons[..j].iter().any(|b| b.button == binding.button && b.gesture == binding.gesture)
                     && (binding.gesture == crate::buttons::Gesture::Short || binding.button.supports_long())
                     && binding.action.as_ref().map_or(true, |action| self.devices().find(|(_, d)| d.id == action.device)
-                        .and_then(|(_, d)| self.resolve_integration(&d.integration))
-                        .is_some_and(|integration| crate::commands::Function::parse(&action.command).is_some_and(|f|f.supports(&integration))));
+                        .is_some_and(|(_, d)| crate::commands::Function::parse(&action.command).is_some_and(|f|f.supports_device(d,self))));
                 if !valid { problems.push(Problem {at:alloc::format!("activities[{i}].buttons[{j}]"),message:"Choose one mapping per button and a supported device function".into()}); }
             }
             for (j, step) in act.steps.iter().enumerate() {

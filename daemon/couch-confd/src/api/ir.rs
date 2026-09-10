@@ -251,7 +251,7 @@ fn catalog() -> &'static Value {
         value
     })
 }
-fn installed(directory: &Path, id: &str) -> Result<Value, String> {
+pub(super) fn installed(directory: &Path, id: &str) -> Result<Value, String> {
     let set = codeset::load(directory, id).map_err(|e| e.to_string())?;
     let mut value = parsed(
         &set.entries
@@ -263,7 +263,7 @@ fn installed(directory: &Path, id: &str) -> Result<Value, String> {
     value["id"] = json!(id);
     Ok(value)
 }
-fn save(directory: &Path, id: &str, text: &str) -> Result<Value, String> {
+pub(super) fn save(directory: &Path, id: &str, text: &str) -> Result<Value, String> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if !codeset::valid_id(id) {

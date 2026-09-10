@@ -146,6 +146,12 @@ impl Function {
                 .any(|f| f.0 == self.id()),
         }
     }
+    /// Configuration capability only; the executor must resolve the exact IR
+    /// assignment before transmitting, and otherwise use network support.
+    pub fn supports_device(&self, device: &crate::Device, config: &crate::Config) -> bool {
+        config.resolve_integration(&device.integration).is_some_and(|i|self.supports(&i))
+            || device.effective_ir_codeset(config).is_some_and(|codeset|self.supports(&Integration::Ir{codeset:codeset.into()}))
+    }
     pub fn repeatable(&self) -> bool {
         matches!(
             self,
