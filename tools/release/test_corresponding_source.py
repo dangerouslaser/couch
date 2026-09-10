@@ -39,6 +39,28 @@ class Sources(unittest.TestCase):
                 source.cargo_notices(output, cache, offline=True)
             self.assertFalse(json.loads((output / 'cargo-notices.json').read_text())['complete'])
 
+    def test_reviewed_supplements_pin_identity_and_never_change_vendor_attribution(self):
+        import json
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); vendor = root / 'vendor/example-1.0'; vendor.mkdir(parents=True)
+            (vendor / 'Cargo.toml').write_text('[package]\nname="example"\nversion="1.0"\nlicense="MIT"\n')
+            (vendor / '.cargo_vcs_info.json').write_text(json.dumps({'git': {'sha1': 'a' * 40}}))
+            text = root / 'MIT.txt'; text.write_text('Permission is hereby granted, free of charge. THE SOFTWARE IS PROVIDED AS IS.')
+            review = {'cargo_toml_sha256': source.sha(vendor / 'Cargo.toml'), 'published_git_commit': 'a' * 40, 'declared_license': 'MIT', 'reason': 'Fixture explicit review', 'files': ['MIT.txt']}
+            manifest = {'schema': 1, 'kind': 'couch-reviewed-license-supplements', 'packages': {'example-1.0': review}, 'files': {'MIT.txt': {'sha256': source.sha(text), 'url': 'https://example.invalid/pinned/MIT.txt'}}}
+            path = root / 'review.json'; path.write_text(json.dumps(manifest))
+            before = source.tree_hashes(vendor)
+            result = source.license_supplement(root / 'out', vendor, path)
+            self.assertFalse(result['upstream_notice_recovered'])
+            self.assertNotIn('copyright_holder', result)
+            self.assertEqual(before, source.tree_hashes(vendor))
+            text.write_text('different license')
+            with self.assertRaisesRegex(ValueError, 'checksum differs'):
+                source.license_supplement(root / 'out', vendor, path)
+            (vendor / 'Cargo.toml').write_text('[package]\nlicense="GPL-3.0-only"\n')
+            with self.assertRaisesRegex(ValueError, 'package identity'):
+                source.license_supplement(root / 'out', vendor, path)
+
     def test_paths_and_binary_inputs_fail_closed(self):
         for name in ('/root/key', '../key', 'a/../key', 'a\\key', 'a//key'):
             with self.assertRaises(ValueError): source.checked_path(name)

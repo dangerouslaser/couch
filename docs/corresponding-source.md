@@ -52,7 +52,8 @@ python3 tools/release/corresponding_source.py project \
   --repo . --commit FULL_RELEASE_COMMIT --output /source/release
 python3 tools/release/corresponding_source.py cargo --output /source/release
 python3 tools/release/corresponding_source.py cargo-notices \
-  --output /source/release --cache /cache/cargo-notice-repositories
+  --output /source/release --cache /cache/cargo-notice-repositories \
+  --supplements tools/release/cargo-license-supplements.json
 python3 tools/release/corresponding_source.py alpine \
   --closure /inputs/arm-packages --metadata /inputs/apk-source-metadata.json \
   --aports /cache/aports.git --cache /cache/distfiles --output /source/release
@@ -62,7 +63,17 @@ The notice collector uses each crate’s `.cargo_vcs_info.json` commit and GitHu
 repository/homepage metadata. Missing repository metadata requires a reviewed
 `--repository-overrides` JSON mapping from `name-version` to repository URL. It
 never changes the checksummed vendor tree. Final assembly refuses uncovered
-packages or an incomplete notice collection.
+packages or an incomplete notice collection. A small reviewed supplement manifest
+covers exact crate versions whose publication repository contains no full notice,
+or whose published Git commit is unavailable. Each entry pins the published
+Cargo.toml hash, Git identity and SPDX declaration, preserves that metadata, and
+adds the unmodified standard MIT template from a pinned SPDX revision. It never
+fills in copyright placeholders or presents standard terms as recovered upstream
+attribution. Changed package identities require a fresh review; these entries do
+not silently apply to dependency upgrades. `cargo-notices.json` distinguishes
+recovered notices from supplements and retains the reason and source URLs.
+See [Cargo licensing metadata](https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields)
+and the [SPDX MIT text](https://spdx.org/licenses/MIT.html).
 
 Create the aports cache with `git clone --filter=blob:none --bare
 https://github.com/alpinelinux/aports.git /cache/aports.git`. Recipe commits come

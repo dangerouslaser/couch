@@ -186,7 +186,47 @@ def complete_mit_grant(data):
     return b"permission is hereby granted, free of charge" in normalized and b"the software is provided" in normalized
 
 
-def cargo_notices(output, cache, offline=False, overrides=None):
+def license_supplement(output, directory, manifest_path):
+    """Apply an explicit, exact-package review; never infer copyright ownership."""
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get('schema') != 1 or manifest.get('kind') != 'couch-reviewed-license-supplements':
+        raise ValueError('Invalid license supplement review')
+    review = manifest['packages'].get(directory.name)
+    if review is None:
+        return None
+    metadata = tomllib.loads((directory / 'Cargo.toml').read_text())['package']
+    commit = json.loads((directory / '.cargo_vcs_info.json').read_text())['git']['sha1']
+    if (sha(directory / 'Cargo.toml') != review['cargo_toml_sha256'] or
+            commit != review['published_git_commit'] or
+            metadata.get('license') != review['declared_license']):
+        raise ValueError('License supplement differs from published package identity')
+    if review['declared_license'] not in ('MIT', 'MIT OR Apache-2.0') or not review.get('reason') or not review.get('files'):
+        raise ValueError('License supplement needs a reviewed MIT selection and explanation')
+    notices = []
+    for filename in review['files']:
+        checked_path(filename)
+        provenance = manifest['files'][filename]
+        path = manifest_path.parent / filename
+        if path.is_symlink() or not path.is_file() or sha(path) != provenance['sha256']:
+            raise ValueError('License supplement text checksum differs')
+        data = path.read_bytes()
+        if len(data) > 2 * 1024 * 1024 or b'\0' in data or not complete_mit_grant(data):
+            raise ValueError('License supplement lacks the reviewed standard MIT terms')
+        if not provenance['url'].startswith('https://'):
+            raise ValueError('License supplement requires explicit public HTTPS provenance')
+        relative = directory.name + '/reviewed-supplement/' + filename
+        write(output / 'cargo-notices' / relative, data)
+        notices.append({'file': relative, **provenance, 'source': 'standard license terms; not an upstream copyright notice'})
+    # Preserve the exact published licensing declaration alongside the explanation.
+    relative = directory.name + '/reviewed-supplement/Cargo.toml'
+    write(output / 'cargo-notices' / relative, (directory / 'Cargo.toml').read_bytes())
+    notices.append({'file': relative, 'sha256': sha(directory / 'Cargo.toml'), 'source': 'unchanged published crate metadata'})
+    return {'package': directory.name, 'commit': commit, 'notices': notices,
+            'reviewed_supplement': review, 'upstream_notice_recovered': False,
+            'attribution': 'Retained unchanged in published crate sources; no holder or year inferred.'}
+
+
+def cargo_notices(output, cache, offline=False, overrides=None, supplements=None):
     """Retain omitted workspace-root notices at each published crate's Git commit."""
     inventory = json.loads((output / 'cargo.json').read_text())
     collected, errors = [], []
@@ -195,6 +235,11 @@ def cargo_notices(output, cache, offline=False, overrides=None):
             continue
         directory = output / 'cargo-vendor' / package['directory']
         try:
+            supplement = license_supplement(output, directory, supplements) if supplements else None
+            if supplement is not None:
+                collected.append(supplement)
+                print('Collected reviewed license supplement: ' + package['directory'], flush=True)
+                continue
             metadata = tomllib.loads((directory / 'Cargo.toml').read_text())['package']
             vcs = json.loads((directory / '.cargo_vcs_info.json').read_text())
             commit = vcs['git']['sha1']
@@ -488,7 +533,7 @@ def assemble(output, archive_path):
                'Declared license expressions below are metadata, not a replacement for those texts.', '', '## Rust dependencies', '']
     for p in components['cargo']['packages']:
         notices.append(f"- {p['name']} {p['version']}: {p.get('license') or 'see license-file'}; source cargo-vendor/{p['directory']}; notices: {', '.join(p['notice_files']) or 'see source headers and package metadata'}")
-    notices.extend(['', 'Additional notices omitted from published crate packages are retained under cargo-notices/ at the recorded publication commits; see cargo-notices.json.', '', '## Alpine runtime packages', ''])
+    notices.extend(['', 'Additional upstream notices are retained under cargo-notices/ at recorded publication commits. Explicit reviewed supplements contain standard license terms and unchanged published metadata, not invented upstream attribution; see cargo-notices.json for each provenance and explanation.', '', '## Alpine runtime packages', ''])
     for p in components['alpine']['packages']:
         notices.append(f"- {p['pkgname']} {p['pkgver']}: {p['license']}; origin {p['origin']} at {p['commit']} (alpine/{p['origin']}-{p['commit']}/).")
     notices.extend(['', '## Building', '',
@@ -562,10 +607,10 @@ def main():
     p = sub.add_parser('external'); p.add_argument('--directory', type=Path, required=True); p.add_argument('--receipt', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
     p = sub.add_parser('assemble'); p.add_argument('--output', type=Path, required=True); p.add_argument('--archive', type=Path, required=True)
     p = sub.add_parser('verify-archive'); p.add_argument('--archive', type=Path, required=True)
-    p = sub.add_parser('cargo-notices'); p.add_argument('--output', type=Path, required=True); p.add_argument('--cache', type=Path, required=True); p.add_argument('--offline', action='store_true'); p.add_argument('--repository-overrides', type=Path)
+    p = sub.add_parser('cargo-notices'); p.add_argument('--output', type=Path, required=True); p.add_argument('--cache', type=Path, required=True); p.add_argument('--offline', action='store_true'); p.add_argument('--repository-overrides', type=Path); p.add_argument('--supplements', type=Path)
     args = parser.parse_args()
     if args.command == 'project': project(args.repo, args.commit, args.output)
-    elif args.command == 'cargo-notices': cargo_notices(args.output, args.cache, args.offline, json.loads(args.repository_overrides.read_text()) if args.repository_overrides else None)
+    elif args.command == 'cargo-notices': cargo_notices(args.output, args.cache, args.offline, json.loads(args.repository_overrides.read_text()) if args.repository_overrides else None, args.supplements)
     elif args.command == 'cargo': cargo_sources(args.output, args.offline)
     elif args.command == 'external': external_sources(args.directory, args.receipt, args.output)
     elif args.command == 'verify-archive': print(json.dumps(verify_archive(args.archive)))
