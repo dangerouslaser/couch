@@ -22,6 +22,7 @@ from mtk_usb import bounded_operation
 COMMAND = b"\x62"
 ACK = b"\x5a"
 CONT = b"\x69"
+PROGRESS_INTERVAL = 64 * 1024 * 1024
 EMMC_USER = b"\x01\x08"  # MTK_DA_STORAGE_EMMC, EMMC_PART_USER; never boot regions.
 
 
@@ -47,7 +48,9 @@ class ConnectedMtkWriter(ConnectedMtkReader):
     complete partition after each call and verify identity again at completion.
     After any ambiguous I/O, discard the session; even hash() is then forbidden.
     """
-    def __init__(self, mtk, revision, *, release, bundle, binding):
+    def __init__(self, mtk, revision, *, release, bundle, binding, progress=None):
+        require(progress is None or callable(progress), "Invalid progress callback")
+        self._progress = progress
         self.poisoned = False
         self._closed = False
         self._sources = {}
@@ -96,6 +99,14 @@ class ConnectedMtkWriter(ConnectedMtkReader):
             self.close()
             raise
 
+    def _report(self, phase, name, completed, total):
+        if completed not in (0, total) and completed % PROGRESS_INTERVAL:
+            return
+        if self._progress is not None:
+            self._progress(phase, name, completed, total)
+        else:
+            print(f"{phase}: {name} {completed}/{total} bytes ({completed * 100 // total}%)", flush=True)
+
     def _healthy(self):
         require(not self.poisoned and not self._closed, "Writer session is poisoned or closed; do not retry")
 
@@ -121,15 +132,20 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         source = self._sources[name]
         full = hashlib.sha256()
         chunks = []
+        total = source["stamp"][2]
+        self._report("Verify image", name, 0, total)
         for offset in range(0, source["stamp"][2], CHUNK):
             count = min(CHUNK, source["stamp"][2] - offset)
             data = os.pread(source["fd"], count, offset)
             require(len(data) == count, f"Short verified image: {name}")
             full.update(data)
             chunks.append(hashlib.sha256(data).digest())
+            if offset + count < total:
+                self._report("Verify image", name, offset + count, total)
         require(full.hexdigest() == source["sha256"], f"Verified image SHA-256 mismatch: {name}")
         self._unchanged(name)
         source["chunks"] = chunks
+        self._report("Verify image", name, total, total)
 
     def _validate_all(self):
         for name in self._sources:
@@ -143,6 +159,9 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         result = self._ep_in.read(1, timeout=1000)
         require(isinstance(result, (bytes, bytearray)) and bytes(result) == expected,
                 "Unexpected DA acknowledgement; session poisoned")
+        # The legacy write protocol has one response byte per step, never a
+        # pipelined response. Do not silently consume stale surplus as the next ACK.
+        require(not getattr(self._ep_in, "pending", b""), "Unexpected buffered DA bytes; session poisoned")
 
     def write(self, name, source):
         self._healthy()
@@ -160,6 +179,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         require(region["offset"] % 512 == 0 and region["size"] % 512 == 0
                 and region["offset"] + region["size"] <= self.capacity, "Write exceeds bound user storage")
         image = self._sources[name]
+        self._report("Write", name, 0, region["size"])
         try:
             with bounded_operation(10):
                 for field in (COMMAND, EMMC_USER[:1], EMMC_USER[1:], struct.pack(">Q", region["offset"]),
@@ -177,7 +197,10 @@ class ConnectedMtkWriter(ConnectedMtkReader):
                     self._send(data)
                     self._send(struct.pack(">H", sum(data) & 0xffff))
                     self._expect(CONT)
+                if offset + count < region["size"]:
+                    self._report("Write", name, offset + count, region["size"])
             self._unchanged(name)
+            self._report("Write", name, region["size"], region["size"])
             self._first_write = False
         except BaseException as error:
             self.poisoned = True
@@ -188,13 +211,36 @@ class ConnectedMtkWriter(ConnectedMtkReader):
     def backup(self, name, destination):
         self._healthy()
         destination = Path(destination)
+        require(name in self.description["partitions"], "Unknown backup partition")
+        total = self.description["partitions"][name]["size"]
+        completed = 0
+        self._report("Backup", name, completed, total)
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as output:
             for data in self.chunks(name):
                 require(output.write(data) == len(data), "Short backup file write")
+                completed += len(data)
+                if completed < total:
+                    self._report("Backup", name, completed, total)
             output.flush()
             os.fsync(output.fileno())
         sync_directory(destination.parent)
+        self._report("Backup", name, total, total)
+
+    def hash(self, name):
+        self._healthy()
+        require(name in self.description["partitions"], "Unknown readback partition")
+        total = self.description["partitions"][name]["size"]
+        completed = 0
+        result = hashlib.sha256()
+        self._report("Hash readback", name, completed, total)
+        for data in self.chunks(name):
+            result.update(data)
+            completed += len(data)
+            if completed < total:
+                self._report("Hash readback", name, completed, total)
+        self._report("Hash readback", name, total, total)
+        return result.hexdigest()
 
     def close(self):
         self._closed = True

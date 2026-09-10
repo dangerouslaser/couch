@@ -1,4 +1,5 @@
 """In-memory wire tests only: never discover or claim USB."""
+import array
 import copy
 import hashlib
 import struct
@@ -9,7 +10,8 @@ import unittest
 
 from couch_install import CHUNK, IDENTITY_PARTITIONS, InstallError, MODEL, install_transaction
 from mtk_readonly import ConnectedMtkReader, REVIEWED_REVISION
-from mtk_writer import ACK, COMMAND, CONT, ConnectedMtkWriter
+from mtk_writer import ACK, COMMAND, CONT, PROGRESS_INTERVAL, ConnectedMtkWriter
+from mtk_usb import PacketBufferedInput
 from test_mtk_readonly import fake_session
 
 
@@ -96,9 +98,47 @@ class MtkWriterTests(unittest.TestCase):
 
     def writer(self, **kwargs):
         writer = ConnectedMtkWriter(self.mtk, REVIEWED_REVISION, release=kwargs.get("release", self.release),
-                                     bundle=self.bundle, binding=kwargs.get("binding", self.binding))
+                                     bundle=self.bundle, binding=kwargs.get("binding", self.binding),
+                                     progress=kwargs.get("progress", lambda *args: None))
         self.addCleanup(writer.close)
         return writer
+
+    def test_actual_packet_buffer_handles_array_responses_and_rejects_surplus(self):
+        wire = self.wire
+        class RawInput:
+            wMaxPacketSize = 512
+            surplus = b""
+            def read(self, size, timeout):
+                self_size = size
+                assert self_size == 512
+                return array.array("B", wire.read(1, timeout) + self.surplus)
+        endpoint = RawInput()
+        self.mtk.port.cdc.EP_IN = PacketBufferedInput(endpoint)
+        writer = self.writer()
+        writer.write("boot", self.bundle / "boot.img")
+        self.assertEqual(writer.hash("boot"), self.release["images"]["boot"]["sha256"])
+        self.assertEqual(self.mtk.port.cdc.EP_IN.pending, b"")
+        endpoint.surplus = CONT
+        with self.assertRaisesRegex(InstallError, "buffered"):
+            writer.write("boot", self.bundle / "boot.img")
+        self.assertTrue(writer.poisoned)
+
+    def test_progress_reports_bounded_intervals_and_completed_operations(self):
+        reports = []
+        writer = self.writer(progress=lambda *args: reports.append(args))
+        self.assertTrue(all(phase == "Verify image" for phase, *_ in reports))
+        reports.clear()
+        total = 2 * PROGRESS_INTERVAL + CHUNK
+        for done in range(0, total + 1, CHUNK):
+            writer._report("Write", "userdata", done, total)
+        self.assertEqual([r[2] for r in reports], [0, PROGRESS_INTERVAL, 2 * PROGRESS_INTERVAL, total])
+        reports.clear()
+        writer.backup("boot", Path(self.temp.name) / "progress-backup.img")
+        writer.hash("boot")
+        writer.write("boot", self.bundle / "boot.img")
+        for phase in ("Backup", "Hash readback", "Write"):
+            matching = [r for r in reports if r[0] == phase]
+            self.assertEqual([r[2] for r in matching], [0, self.binding["partitions"]["boot"]["size"]])
 
     def test_exact_header_chunk_checksum_and_independent_readback(self):
         writer = self.writer()
