@@ -261,7 +261,7 @@ def cargo_notices(output, cache, offline=False, overrides=None, supplements=None
                 git(repo, 'config', 'remote.origin.promisor', 'true')
                 git(repo, 'config', 'remote.origin.partialclonefilter', 'blob:none')
             try:
-                git(repo, 'cat-file', '-e', commit + '^{commit}')
+                git(repo, '-c', 'remote.origin.promisor=false', 'cat-file', '-e', commit + '^{commit}')
             except subprocess.CalledProcessError:
                 if offline:
                     raise ValueError('Published commit absent from offline notice cache')
