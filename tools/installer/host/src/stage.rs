@@ -14,6 +14,25 @@ impl<S: Read + Write> Channel<S> {
     pub fn authenticated(stream: S) -> Self {
         Self { stream }
     }
+    #[cfg(test)]
+    pub(crate) fn into_inner(self) -> S {
+        self.stream
+    }
+    pub fn begin_install(&mut self, plan: &Value) -> Result<()> {
+        ensure!(plan.is_object(), "expected install plan");
+        let bytes = zeroize::Zeroizing::new(serde_json::to_vec(plan)?);
+        ensure!(
+            !bytes.is_empty() && bytes.len() <= CHUNK,
+            "install plan exceeds frame bound"
+        );
+        self.stream.write_all(b"CBP1")?;
+        self.stream.write_all(&10u32.to_le_bytes())?;
+        self.stream.write_all(&0u64.to_le_bytes())?;
+        self.stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
+        self.stream.write_all(&bytes)?;
+        self.stream.flush()?;
+        Ok(())
+    }
     pub fn send_json(&mut self, value: &Value) -> Result<()> {
         ensure!(value.is_object(), "expected JSON object");
         let bytes = zeroize::Zeroizing::new(serde_json::to_vec(value)?);

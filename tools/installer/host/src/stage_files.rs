@@ -34,6 +34,7 @@ pub struct VerifiedImage {
     file: File,
     size: u64,
     chunks: Vec<String>,
+    hash: String,
 }
 impl VerifiedImage {
     pub fn open(path: &Path, size: u64, expected_hash: &str, chunks: &[String]) -> Result<Self> {
@@ -62,7 +63,15 @@ impl VerifiedImage {
             file,
             size,
             chunks: chunks.to_vec(),
+            hash: expected_hash.into(),
         })
+    }
+    pub fn reverify(&mut self) -> Result<()> {
+        ensure!(
+            self.file.metadata()?.len() == self.size && digest(&mut self.file)? == self.hash,
+            "image changed before writing"
+        );
+        Ok(())
     }
     /// Call only after the writing phase is durably journaled and acknowledged.
     /// Every chunk is rechecked against the approved plan immediately before send.

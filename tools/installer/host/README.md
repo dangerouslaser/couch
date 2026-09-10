@@ -74,6 +74,17 @@ orchestrator must persist a journal checkpoint before permitting the next device
 phase. These APIs have loopback/file fixtures on Linux and macOS; the host CI
 matrix also runs them on Windows.
 
+`transaction` drives a previously admitted USB-bound plan through original boot
+copy/readback, complete selected backups, recovery/userdata/optional image writes
+and final boot. Every acknowledgement follows a durable `SessionGuard` checkpoint;
+original files live directly beside the journal so its directory synchronization
+also commits their entries. Image contents are reverified after backups and again
+per chunk. Explicit YOLO omits only userdata backup. Failed expansion or journal
+publication prevents the final boot acknowledgement. Completion leaves the restart
+decision to the caller; there is no automatic reconnect, restore or retry.
+
 These components are not a complete installer command. Native enrollment proof
-consumption, boot assembly, backup/write transaction orchestration, the selected
-MTK adapter and its platform dependencies, and TUI wiring remain to be connected.
+consumption, boot assembly, the selected MTK adapter and its platform dependencies,
+and TUI admission/wiring remain to be connected. Callers must verify the release,
+enrollment evidence, selected device and USB plan binding before the transaction
+API; it deliberately does not infer admission from a caller-supplied plan alone.
