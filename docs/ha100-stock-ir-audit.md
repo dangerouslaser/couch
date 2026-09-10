@@ -222,3 +222,86 @@ This closes the proposed “new shipping IR implementation” lead without findi
 a missing kernel operation. It supports retaining the existing measured timing
 and focusing the next test on actual optical emission and modulation. No
 transmission, pin change, reboot, restore or flash was performed in this audit.
+
+## Initialization follow-up (September 10, 2026)
+
+This follow-up examines setup outside the app/HAL transmit path. Offline
+extractions remain on Ollie under `ir-app-audit/initialization`; none of the
+Android executables were run on the remote.
+
+### Android startup
+
+- Extracted the original boot ramdisk's regular configuration files and
+  inspected its symlink targets. `default.prop` points to
+  `/system/etc/prop.default`; `ueventd` points to the Android `init` binary.
+- Reviewed 124 `.rc` files across the ramdisk, system and vendor configuration,
+  including hardware imports, project setup, normal/factory/meta boot paths,
+  service declarations and hardware writes.
+- `init.project.rc` only changes `/dev/irtx` permissions and ownership. Its
+  button-backlight entries likewise grant permissions; they do not turn on a
+  supply. The IR HAL service has no extra enable command.
+- All 60 vendor initialization `.rc` files are byte-identical between the
+  original image and the downloaded firmware. Their boot ramdisk gzip streams
+  are also identical, SHA256
+  `b31c11677944a12c87e28fa769239e658a4a4e17bc4fd57f5d67c06631474f57`.
+- Targeted static string/import inspection of Android `init`, the lights and
+  power HALs, and `spm_loader` found no IR-specific GPIO/regulator path.
+  The lights HAL references ordinary LED brightness/trigger interfaces.
+  `spm_loader` references `/dev/spm` and imports open/read/close, so its kernel
+  read-side effects require separate examination; it was not executed.
+- The shipping app's `GPIOUtils.ctrlCharge()` writes the `red/brightness`
+  endpoint with inverted boolean values. `ChargeBaseManager` selects zero at
+  100% battery and one below 100%. Its `ctrlKeyBacklight()` writes ordinary
+  boolean values to `button-backlight/brightness`. These names and values
+  establish application behavior, not the physical pin mapping; the custom
+  stock LED implementation must be decoded before treating either as a GPIO.
+
+These are bounded negative findings. A string search is not proof that a
+binary cannot compute a path or call another library. Optional imports absent
+from the backed-up filesystem, kernel initialization, bootloader setup and
+actual board wiring must not be inferred from the lack of an Android script.
+
+### Missing stock board setup: custom LED pinctrl
+
+The original kernel's `get_cust_led_dtsi()` at `0xc04f4ae8` performs board
+initialization that is absent from Couch's generic LED fallback. It finds
+`mediatek,kpd_btn_light`, resolves its platform device, acquires its pinctrl
+handle, and looks up the named states below. The stock appended DTB plus
+device overlay supplies the physical mappings; these are not inferred from
+the LED `data` fields.
+
+| Stock state pair (low/high) | Pin | Purpose indicated by DT name |
+|---|---|---|
+| `btn_light_ldo_3v3_low/high` | GPIO17 | 3.3 V enable |
+| `btn_light_gpio_low/high` | GPIO58 | Button lighting |
+| `chrg_gpio_low/high` | GPIO61 | Charging control |
+| `stdby_gpio_low/high` | GPIO14 | Standby control |
+
+Each state selects GPIO mode, its output level, and `slew-rate = 1`. The
+`default` state is empty. Stock initialization selects GPIO17 high, waits
+2 ms, selects GPIO58 high for normal boot (low for other boot modes), waits
+2 ms, selects GPIO61 high, waits 2 ms, then selects GPIO14 high. The three
+ARM delay calls load `0x26666220`, corresponding to `udelay(2000)` with the
+stock `CONFIG_HZ=300` delay multiplier.
+
+The parser replaces LED `data=4` with `mt_set_kpd_button_backlight()`
+(`0xc04f4954`) and `data=2` with `mt_set_sub_chgr_backlight()`
+(`0xc04f4998`). Those callbacks select GPIO58 and GPIO61 high for positive
+brightness, low otherwise. **The values 4 and 2 are not physical GPIOs in
+the stock implementation.** Couch's fallback incorrectly treated them that
+way; its later touchscreen guard prevents button brightness from driving
+GPIO4, but does not restore this missing initialization or callback mapping.
+
+Read-only inspection of the running Couch kernel found GPIO17, GPIO58 and
+GPIO61 in GPIO mode as outputs held low. GPIO14 was an input, with DIN high.
+Thus the named 3.3 V enable and all three other controls differ from stock
+normal startup. This is a concrete initialization defect, unlike the earlier
+negative app/IR-driver searches. GPIO8 remains the separately selected PWM_A
+signal; no evidence calls for changing the transmitter pin.
+
+The next fix should restore the validated named pinctrl states, delays and
+LED callbacks, replacing the invalid numeric-pin fallback. It must preserve
+touchscreen reset ownership and fail safely if required states are missing.
+Then repeat the optical test. The 3.3 V rail's electrical connection to the
+IR emitter is still unproven, so this audit does not establish an IR fix.
+No pin writes, builds, flashes or transmissions were performed in this audit.

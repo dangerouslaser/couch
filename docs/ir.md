@@ -478,10 +478,13 @@ can wedge the bus. The parameter only controls observations; writing it does
 not transmit. There is no runtime switch to a stock one-microsecond waveform
 ABI in this candidate.
 
-Read-only effective-DT checks also ruled out an ordinary LED PWM0 user: red
-and button backlights use GPIO mode on pins 2 and 4; LCD backlight uses
-`CUST_BLS_PWM` through `disp_bls_set_backlight`, not the generic PWM channel
-used by IR. This does not rule out every possible shared-clock/output override.
+Read-only effective-DT checks showed no ordinary LED PWM0 user: LCD backlight
+uses `CUST_BLS_PWM` through `disp_bls_set_backlight`. The initial interpretation
+of red/button LED `data=2/4` as physical pins was wrong: stock replaces those
+values with board callbacks. The subsequent
+[initialization audit](ha100-stock-ir-audit.md#missing-stock-board-setup-custom-led-pinctrl)
+identified omitted 3.3 V/standby setup and actual GPIO61/GPIO58 callbacks.
+This remains a possible shared-power issue despite no generic PWM0 conflict.
 
 Built on Ollie with the normal profile from a clean source tree. Existing IR
 completion-guard tests passed. Local `build/couch-irtx-output.img` preserves
