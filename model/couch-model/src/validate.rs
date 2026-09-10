@@ -119,7 +119,7 @@ impl Config {
                     Some(c)=>{
                         let valid=match c.provider {
                             crate::Provider::Kodi{..}|crate::Provider::Denon{..}|crate::Provider::WebOs|crate::Provider::AndroidTv|crate::Provider::AppleTv=>resource_id.is_empty(),
-                            crate::Provider::HomeAssistant=>resource_id.starts_with("light.") && resource_id.len()>6 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'.'),
+                            crate::Provider::HomeAssistant=>valid_ha_resource(resource_id, device.kind),
                             crate::Provider::Hue=>{ let id=resource_id.strip_prefix("room:").unwrap_or(resource_id); id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) },
                             crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),
                         };
@@ -265,6 +265,16 @@ fn check_entity<'a>(
     }
 }
 
+fn valid_ha_resource(id: &str, kind: crate::DeviceKind) -> bool {
+    let Some((domain, name)) = id.split_once('.') else { return false; };
+    !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        && matches!((domain, kind),
+            ("light", crate::DeviceKind::Light)
+            | ("cover", crate::DeviceKind::Blind)
+            | ("climate", crate::DeviceKind::Thermostat))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,4 +351,16 @@ mod tests {
         let cfg = Config { schema_version: SCHEMA_VERSION + 1, ..Config::default() };
         assert!(cfg.validate().is_err());
     }
+    #[test]
+    fn ha_resources_require_supported_domains_and_matching_kinds() {
+        for (entity, kind) in [("light.office", DeviceKind::Light), ("cover.office", DeviceKind::Blind), ("climate.office", DeviceKind::Thermostat)] {
+            assert!(valid_ha_resource(entity, kind));
+        }
+        for entity in ["cover.", "cover.a/b", "cover.a.b", "switch.office", "cover.Office"] {
+            assert!(!valid_ha_resource(entity, DeviceKind::Blind));
+        }
+        assert!(!valid_ha_resource("cover.office", DeviceKind::Light));
+        assert!(!valid_ha_resource("climate.office", DeviceKind::Blind));
+    }
+
 }

@@ -21,7 +21,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
         });
     }
     let options = connections.clone();
-    view!{<section class="creation device-picker"><h2>"Add to this room"</h2><p class="dim">"Choose a connection, then add lights, room controls or scenes."</p>
+    view!{<section class="creation device-picker"><h2>"Add to this room"</h2><p class="dim">"Choose a connection, then add devices, room controls or scenes."</p>
         <label class="field">"From connection"<select aria-label="From connection" prop:value=move ||app.device_source.get() on:change=move |e|{app.device_filter.set(String::new());app.device_source.set(event_target_value(&e));}><option value="">"Choose a connection"</option>{options.into_iter().map(|c|view!{<option value=c.id.to_string()>{super::connections::label(&c)}</option>}).collect_view()}</select></label>
         {move ||connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.clone()),_=>manual(app,c.clone(),room.clone())})}
     </section>}.into_any()
@@ -76,8 +76,9 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         });
     };
     fetch();
-    view!{<p class="dim">{if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Currently supports lights with on/off and brightness."}}</p>
+    view!{<p class="dim">{if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Add lights, blinds or thermostats. Their controls adapt to the features Home Assistant exposes."}}</p>
         {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());app.hue_room_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option><option value="scenes">"Hue scenes"</option></select></label>})}
+        {(prefix=="ha").then(||view!{<label class="field">"Device type"<select aria-label="Home Assistant device type" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="covers">"Blinds"</option><option value="climates">"Thermostats"</option></select></label>})}
         <button class="ghost" disabled=move ||busy.get() on:click=move |_|fetch()>"Refresh devices"</button>
         {super::connections::field("Search devices",app.device_filter,"Filter by name")}
         {(prefix=="hue").then(||view!{<label class="field">"Hue room or zone"<select aria-label="Hue room or zone" prop:value=move ||app.hue_room_filter.get() on:change=move |e|app.hue_room_filter.set(event_target_value(&e))><option value="">"All bridge rooms and zones"</option>{move ||list.get().iter().filter_map(|v|v["room_name"].as_str()).filter(|s|!s.is_empty()).map(str::to_string).collect::<std::collections::BTreeSet<_>>().into_iter().map(|name|view!{<option value=name.clone()>{name.clone()}</option>}).collect_view()}</select></label>})}
@@ -93,6 +94,9 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
     let id = value["entity_id"].as_str().unwrap_or("").to_string();
     let name = value["name"].as_str().unwrap_or(&id).to_string();
     let scene = value["resource_kind"] == "scene";
+    let kind = if connection.provider == Provider::HomeAssistant {
+        if id.starts_with("cover.") { "blind" } else if id.starts_with("climate.") { "thermostat" } else { "light" }
+    } else { "light" };
     let saved = if scene {
         app.config.get().and_then(|c| {
             c.scenes
@@ -129,6 +133,10 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
             .unwrap_or_else(|| {
                 if value["resource_kind"] == "room" {
                     "Hue room · Control all its lights together".into()
+                } else if kind == "blind" {
+                    if value["state"].is_null() { "Blind · Unavailable".into() } else { "Blind · Open, close and supported position controls".into() }
+                } else if kind == "thermostat" {
+                    if value["available"] == false { "Thermostat · Unavailable".into() } else { "Thermostat · Temperature and HVAC mode".into() }
                 } else if value["on"].is_null() {
                     "Unavailable".into()
                 } else {
@@ -148,7 +156,7 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
                 } else {
                     app.run(api::post("/api/scenes",json!({"name":name,"rooms":[room],"hue":{"connection_id":connection_id,"scene_id":id.strip_prefix("scene:").unwrap_or("")}})));
                 }
-            } else { app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":name,"kind":"light","integration":{"via":"connection","connection_id":connection_id,"resource_id":id}}))); }
+            } else { app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":name,"kind":kind,"integration":{"via":"connection","connection_id":connection_id,"resource_id":id}}))); }
         }>{if used {"Added"} else {"Add to this room"}}</button>
     </div>}.into_any()
 }
@@ -198,16 +206,17 @@ pub fn controls(app: App, device: &Device) -> AnyView {
         },
         Some(Integration::Hue { light_id }) => ("hue", light_id),
         Some(Integration::HomeAssistant { entity_id })
-            if device.kind == couch_model::DeviceKind::Light =>
+            if matches!(device.kind, couch_model::DeviceKind::Light | couch_model::DeviceKind::Blind | couch_model::DeviceKind::Thermostat) =>
         {
             ("ha", entity_id)
         }
         _ => return ().into_any(),
     };
     let (base,id)=if let Some((connection,resource))=id.split_once('/') {(format!("/api/connections/{connection}/{prefix}"),resource.to_string())}else{(format!("/api/{prefix}"),id)};
+    let category = if prefix == "ha" && id.starts_with("cover.") { "covers" } else if prefix == "ha" && id.starts_with("climate.") { "climates" } else { "lights" };
     let base=StoredValue::new(base);
     let value = RwSignal::new(None::<Value>);
     let message = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
-    view!{<button class="ghost" disabled=move ||busy.get() on:click=move |_|{let id=id.clone();busy.set(true);spawn_local(async move{match api::ha("GET",&format!("{}/lights/{id}",base.get_value()),None).await{Ok(v)=>value.set(Some(v)),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>"Show light controls"</button><p role="status">{move ||message.get()}</p>{move ||value.get().map(|v|if prefix=="hue"{super::hue::controls(app,v,base.get_value())}else{super::home_assistant::controls(app,v,base.get_value())})}}.into_any()
+    view!{<button class="ghost" disabled=move ||busy.get() on:click=move |_|{let id=id.clone();busy.set(true);spawn_local(async move{match api::ha("GET",&format!("{}/{category}/{id}",base.get_value()),None).await{Ok(v)=>value.set(Some(v)),Err(e)=>{if e.unauthorized{app.paired.set(Some(false));}message.set(e.message);}}busy.set(false);});}>"Show device controls"</button><p role="status">{move ||message.get()}</p>{move ||value.get().map(|v|if prefix=="hue"{super::hue::controls(app,v,base.get_value())}else{super::home_assistant::controls(app,v,base.get_value())})}}.into_any()
 }

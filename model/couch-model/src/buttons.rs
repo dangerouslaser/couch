@@ -220,6 +220,7 @@ pub fn functions(integration: &Integration) -> &'static [(&'static str, &'static
             ("rewind", "Rewind"),
             ("fast-forward", "Fast forward"),
         ],
+        Integration::HomeAssistant { entity_id } if !entity_id.rsplit('/').next().unwrap_or("").starts_with("light.") => &[],
         Integration::Hue { .. } | Integration::HomeAssistant { .. } => {
             &[("on", "On"), ("off", "Off"), ("toggle", "Toggle on / off")]
         }
@@ -232,6 +233,13 @@ pub fn repeatable(command:&str)->bool {crate::commands::Function::parse(command)
 mod tests {
     use super::*;
     use alloc::{vec, vec::Vec};
+    #[test]
+    fn ha_environment_entities_do_not_advertise_light_commands() {
+        for entity_id in ["cover.office", "climate.office", "ha-one/cover.office", "ha-two/climate.office"] {
+            assert!(functions(&Integration::HomeAssistant { entity_id: entity_id.into() }).is_empty());
+        }
+        assert!(!functions(&Integration::HomeAssistant { entity_id: "ha-one/light.office".into() }).is_empty());
+    }
     #[test]
     fn old_activities_keep_defaults_and_new_bindings_validate() {
         let mut config = crate::Config::seed();
