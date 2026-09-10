@@ -55,10 +55,17 @@ def download(pin, target):
     deadline, count = time.monotonic() + 180, 0
     opener = urllib.request.build_opener(GoogleRedirect())
     with opener.open(pin['url'], timeout=15) as response, target.open('xb') as output:
-        while block := response.read(1024 * 1024):
+        while True:
+            require(time.monotonic() < deadline, 'Dependency download deadline exceeded')
+            # HTTPResponse.read(n) may perform many socket reads while a peer
+            # trickles bytes. read1 does at most one underlying read, bounded by
+            # the socket timeout, so the overall deadline is checked promptly.
+            block = response.read1(64 * 1024)
+            require(time.monotonic() < deadline, 'Dependency download deadline exceeded')
+            if not block:
+                break
             count += len(block)
             require(count <= pin['size'], 'Download exceeds pinned size')
-            require(time.monotonic() < deadline, 'Dependency download deadline exceeded')
             output.write(block)
         output.flush()
         os.fsync(output.fileno())

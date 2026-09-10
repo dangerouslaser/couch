@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 import zipfile
 
-from host_dependencies import prepare, smoke
+from host_dependencies import download, prepare, smoke
 
 
 class DependenciesTest(unittest.TestCase):
@@ -84,6 +85,20 @@ class DependenciesTest(unittest.TestCase):
         self.fixture()
         with self.assertRaisesRegex(ValueError, 'different host'):
             smoke(self.output, 'fixture', self.metadata)
+
+    def test_trickled_download_rechecks_total_deadline(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read1.return_value = b'x'
+        opener = MagicMock()
+        opener.open.return_value = response
+        with patch('host_dependencies.urllib.request.build_opener', return_value=opener), \
+                patch('host_dependencies.time.monotonic', side_effect=[0, 1, 181]):
+            with self.assertRaisesRegex(ValueError, 'deadline exceeded'):
+                download({'url': 'https://dl.google.com/android/repository/fixture', 'size': 100},
+                         self.root / 'download')
+        response.read.assert_not_called()
+        response.read1.assert_called_once_with(64 * 1024)
 
 
 if __name__ == '__main__':
