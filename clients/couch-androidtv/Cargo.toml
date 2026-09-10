@@ -8,6 +8,8 @@ description = "Android TV Remote v2 pairing and persistent control for Couch"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 prost = "0.13"
+serde_json = "1"
+url = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
 rsa = "0.9"

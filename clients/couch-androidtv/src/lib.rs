@@ -1,6 +1,7 @@
 //! Android TV Remote v2: explicit PIN pairing, pinned mutual TLS, and a
 //! persistent remote session. Call `poll` regularly to answer TV keepalives.
 //! No command is retried automatically. Physical interoperability is pending.
+pub mod cast;
 mod tls;
 mod wire;
 use prost::Message;
