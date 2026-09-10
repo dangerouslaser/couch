@@ -1,5 +1,6 @@
-//! Native host input preparation. No commands, device access or filesystem mounts.
+//! Native input preparation and supervised installer orchestration.
 pub mod adapter;
+pub mod dependencies;
 pub mod frontend;
 pub mod session;
 pub mod stage;
