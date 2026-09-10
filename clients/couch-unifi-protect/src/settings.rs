@@ -112,28 +112,34 @@ impl Settings {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temporary = path.with_extension(format!("new-{}-{next}", std::process::id()));
-        let result = (|| -> std::io::Result<()> {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary)?;
-            file.write_all(&data)?;
-            file.sync_all()?;
-            fs::rename(&temporary, path)?;
-            if let Some(parent) = path.parent() {
-                fs::File::open(parent)?.sync_all()?;
-            }
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(temporary);
-        }
-        result.map_err(|_| Error::Configuration)
+        persist(&data, path, &temporary)
     }
+}
+
+fn persist(data: &[u8], path: &Path, temporary: &Path) -> Result<()> {
+    let mut created = false;
+    let result = (|| -> std::io::Result<()> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(temporary)?;
+        created = true;
+        file.write_all(data)?;
+        file.sync_all()?;
+        fs::rename(temporary, path)?;
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() && created {
+        let _ = fs::remove_file(temporary);
+    }
+    result.map_err(|_| Error::Configuration)
 }
 #[cfg(test)]
 mod tests {
@@ -167,6 +173,11 @@ mod tests {
             fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
         );
+        let collision = dir.join("preexisting");
+        fs::write(&collision, b"preserve").unwrap();
+        assert!(persist(b"new", &file, &collision).is_err());
+        assert_eq!(fs::read(collision).unwrap(), b"preserve");
+        assert!(Settings::load(&file).is_ok());
         symlink(&file, dir.join("link")).unwrap();
         assert!(Settings::load(&dir.join("link")).is_err());
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
