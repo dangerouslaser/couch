@@ -29,6 +29,9 @@ use slint::platform::Key;
 /// release matters as much as its press.
 pub const KEY_MIC: u16 = 61;
 
+/// PMIC side button; the faceplate TV power button reports F2 (60).
+pub const KEY_SIDE_POWER: u16 = 116;
+
 /// The menu button, KEY_MENU. Reported as an edge like the microphone, because
 /// the home screen opens settings on a *hold* of it and only the host can time
 /// a hold. It is not routed into the UI as a key.
@@ -317,7 +320,7 @@ fn map_key(code: u16) -> Option<Key> {
         109 | 403 => Some(Key::F22),   // PAGEDOWN / CHANNELDOWN
         115 => Some(Key::F23),         // KEY_VOLUMEUP
         114 => Some(Key::F24),         // KEY_VOLUMEDOWN
-        60 | 116 => Some(Key::F13),     // measured Power / standard KEY_POWER
+        60 => Some(Key::F13),     // measured Power / standard KEY_POWER
         113 => Some(Key::F14),          // mute
         66 | 398 => Some(Key::F15),      // red
         67 | 399 => Some(Key::F16),      // green
@@ -357,6 +360,20 @@ mod tests {
         b[10..12].copy_from_slice(&code.to_ne_bytes());
         b[12..16].copy_from_slice(&value.to_ne_bytes());
         b
+    }
+
+    #[test]
+    fn side_power_is_not_a_device_command_and_never_repeats() {
+        let mut pad = blank();
+        let press = pad.decode(&down(KEY_SIDE_POWER), 1, 1).unwrap();
+        assert_eq!(press.code, KEY_SIDE_POWER);
+        assert!(press.key.is_none());
+        assert!(pad.repeat(1_000_000).is_none());
+        assert!(pad.decode(&raw(EV_KEY, KEY_SIDE_POWER, 2, 0), 2, 2).is_none());
+        assert!(pad.decode(&up(KEY_SIDE_POWER), 3, 3).unwrap().released);
+        assert_eq!(map_key(60), Some(Key::F13));
+        assert_eq!(couch_model::buttons::Button::from_evdev(KEY_SIDE_POWER), None);
+        assert_eq!(couch_model::buttons::Button::from_evdev(60), Some(couch_model::buttons::Button::Power));
     }
 
     fn down(code: u16) -> [u8; EVENT_SIZE] {

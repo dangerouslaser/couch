@@ -623,6 +623,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut button_controls = activity_buttons::Controller::new();
     let mut standby = Standby::Active;
+    let mut manual_sleep = false;
+    let mut lift_resume_at = 0;
     let mut swallow_wake_touch = false;
     let mut last_input = now_monotonic_us();
     // When to re-assert the backlight after a wake, forced past the LED
@@ -670,13 +672,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     loop {
-        if motion.poll(wake_on_lift && standby != Standby::Active) {
+        if motion.poll(wake_on_lift && standby != Standby::Active && now_monotonic_us() >= lift_resume_at) {
             app.set_dock_clock_shown(false);
             if standby == Standby::Off { light_controls.wake(); }
             wake(&mut screen, active_level.get());
             standby = Standby::Active;
             last_input = now_monotonic_us();
             verify_at = Some(last_input + 1_000_000);
+            manual_sleep = false;
             println!("couch-gui: standby: wake on lift");
         }
         let back_context = if app.get_activity_busy() { "activity-sequence".into() } else if app.get_tv_shown() || app.get_player_shown() || app.get_thermostat_shown() {
@@ -703,6 +706,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         if let Some(press) = press {
+            // The side KEY_POWER belongs to the appliance, never the TV or
+            // activity. Consume both edges; a held button cannot wake itself.
+            if press.code == keypad::KEY_SIDE_POWER {
+                if !press.released && !press.repeat {
+                    last_input = now_monotonic_us();
+                    app.set_dock_clock_shown(false);
+                    if standby == Standby::Off {
+                        manual_sleep = false;
+                        light_controls.wake();
+                        wake(&mut screen, active_level.get());
+                        standby = Standby::Active;
+                        verify_at = Some(last_input + 1_000_000);
+                        println!("couch-gui: standby: wake on side power");
+                    } else {
+                        manual_sleep = true;
+                        // Let the motion from pressing/setting down settle.
+                        lift_resume_at = last_input + 2_000_000;
+                        verify_at = None;
+                        Panel::set_backlight(0);
+                        screen.blank(true);
+                        standby = Standby::Off;
+                        println!("couch-gui: standby: sleep on side power");
+                    }
+                }
+                continue;
+            }
             if press.released && press.mic.is_none() && press.menu.is_none() {
                 if !replayed {button_controls.handle(&app,&press);}
                 continue;
@@ -715,6 +744,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !press.repeat {swallow_dock_repeats = app.get_dock_clock_shown();}
             if press.repeat && swallow_dock_repeats {continue;}
             last_input = now_monotonic_us();
+            manual_sleep = false;
             // A key on a dark panel wakes it and does nothing else - except
             // the microphone key, whose press is the whole intent.
             let swallow = (standby == Standby::Off || app.get_dock_clock_shown()) && press.mic != Some(true);
@@ -978,7 +1008,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 last_input = now;
                 idle = 0;
             }
-            if dock && idle >= dim_after_us.get() {
+            if manual_sleep {
+                // Explicit sleep takes precedence over activity and dock holds.
+            } else if dock && idle >= dim_after_us.get() {
                 if standby == Standby::Off {wake(&mut screen, dim_level.get());}
                 if !app.get_dock_clock_shown() {Panel::set_backlight(dim_level.get());}
                 standby = Standby::Dim;

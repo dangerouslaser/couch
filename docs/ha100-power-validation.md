@@ -81,3 +81,17 @@ recording, and activities explicitly configured to stay awake retain their holds
 Validate on an undocked remote by opening a room, then a TV, leaving it untouched
 for the configured dim interval, and checking both panel brightness and the
 `standby: dim` log. Repeat after returning to the room list.
+
+## Side power button
+
+The side PMIC power button (`KEY_POWER`, 116) controls the remote’s display
+standby globally. The faceplate power button (F2, 60) retains TV/activity power
+control. A side-button press sleeps an active or dimmed remote, or wakes a sleeping
+one; release and repeat events never reach device mappings. Explicit sleep
+overrides dock-clock and activity keep-awake behavior. Lift wake is inhibited for
+two seconds while the remote is set down, then resumes normally. This uses the
+existing panel standby path, not whole-system suspend or shutdown.
+
+Device validation: press side power while viewing the TV, confirm a dark screen
+and no TV power change, then press it again to wake. Check that the keypad power
+button still controls the TV. Repeat with a keep-awake activity and while docked.

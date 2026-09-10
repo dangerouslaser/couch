@@ -65,7 +65,7 @@ impl Button {
         Some(match code {
             158 | 1 => Self::Back,
             59 | 172 => Self::Home,
-            60 | 116 => Self::Power,
+            60 => Self::Power,
             103 => Self::Up,
             108 => Self::Down,
             105 => Self::Left,
