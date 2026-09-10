@@ -51,3 +51,29 @@ Neither vendor Device ID nor MAC is decoded or inferred. Android startup and
 identity behavior are not certified by capture; those require separate physical
 checks. The public installer gate is unchanged. Use the new baseline explicitly
 for subsequent private installation, retaining both old and fresh originals.
+
+## Finalize original recovery in the same session
+
+After the operator has physically verified stock Android startup,
+`tools/installer/finalize_stock_recovery.py` combines fresh identity capture with
+restoration of the original Android recovery. It requires all capture source,
+profile and target pins plus `--allow-private-flash --stock-boot-confirmed`,
+`--recovery /private/original-recovery.img` and `--recovery-sha256 HASH`.
+Use `--check-only` first. `--boot-after-capture` remains explicit and only runs
+after every verification succeeds. No resume or retry mode exists.
+
+For the currently reviewed private original recovery, the exact full-partition
+size is 16,777,216 bytes and SHA-256 is
+`dd925ba4b671ac9d9539b4de0c23bc4e8a03bfa13c81c6278418cdcf49b4ae8d`.
+Do not use the misleadingly named `android-p9-BACKUP.img`: that is a stock boot
+image, not the original recovery.
+
+The command verifies trusted CID/layout, captures and independently rereads all
+five identity partitions, syncs the new backup directory, and checks existing
+boot/odmdtbo against the pinned stock manifest. It then writes a journal before
+constructing a writer whose only allowed image is recovery. Recovery is fully
+read back; boot, odmdtbo and fresh identity hashes must remain unchanged.
+Userdata is neither read nor written. A new `baseline.json` is published only
+after successful DA exit (when selected) and USB cleanup. The prior baseline is
+untouched. A failure retains the journal and identity snapshots for review;
+never treat a partial journal as permission to retry automatically.
