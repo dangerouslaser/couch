@@ -1,6 +1,6 @@
 # CoreELEC client
 
-`clients/couch-coreelec` combines the existing Rust Kodi JSON-RPC client with optional CoreELEC OS management. It is a library and `couch-coreelec` command-line program. This change supplies the library and CLI. Web setup, saved connection types, remote GUI controls and runtime packaging follow in a separate integration change.
+`clients/couch-coreelec` combines the existing Rust Kodi JSON-RPC client with optional CoreELEC OS management. It is a library and `couch-coreelec` command-line program. CoreELEC is selectable in the web UI’s Connections page, with Kodi playback on the remote and optional OS management in the browser.
 
 ## Supported behavior
 
@@ -18,7 +18,7 @@ The library accepts an existing `couch_kodi::Kodi` handle, including an HTTP han
 ## Usage
 
 ```sh
-(cd clients && cargo build --release -p couch-coreelec --locked)
+(cd clients && cargo build --release -p couch-coreelec)
 clients/target/release/couch-coreelec discover
 clients/target/release/couch-coreelec 192.0.2.20 status
 clients/target/release/couch-coreelec 192.0.2.20 play-pause
@@ -38,7 +38,7 @@ Optional environment settings: `COUCH_COREELEC_KODI_PORT` (9090), `COUCH_COREELE
 
 OS management calls a locally installed **OpenSSH-compatible `ssh` executable**; this is not a native Rust SSH implementation. Dropbear's client does not implement the required options. A Couch runtime package must include OpenSSH before exposing these OS controls. Kodi operations need no SSH executable. The process runs with ambient SSH configuration disabled, explicit identity, strict host-key checking, agent/password/interactive authentication disabled, and forwarding disabled. It never accepts an unknown host automatically.
 
-Each SSH operation has a 12-second wall-clock deadline, five-second connection timeout and 64 KiB limit on each output stream. Timeout kills and reaps the local process. Error output is not copied into application errors. Only fixed remote commands are available; caller-provided text never becomes a shell command. Before service queries or mutations, a fixed guard requires exactly one `ID` entry identifying CoreELEC in `/etc/os-release`. The identity reader parses data without sourcing it.
+Each SSH operation has a 12-second wall-clock deadline, five-second connection timeout and 64 KiB limit on each output stream. Timeout kills and reaps the local process. Error output is not copied into application errors. Only fixed remote commands are available; caller-provided text never becomes a shell command. Before service queries or mutations, a fixed guard checks the exact CoreELEC `ID` in `/etc/os-release`. The identity reader parses data without sourcing it.
 
 A successful disruptive action means systemd accepted an asynchronous request, not that the reboot or restart completed. A lost SSH connection can leave the outcome unknown. The client never retries a mutation automatically. Poll identity/service/Kodi status separately to establish recovery.
 
@@ -47,6 +47,19 @@ A successful disruptive action means systemd accepted an asynchronous request, n
 This implementation does not install CoreELEC updates, alter boot selection, run `ceemmc`, write partitions, adjust device-specific Dolby Vision/CEC sysfs nodes, or claim wake capability. Those features depend on CoreELEC version, hardware and explicit policy. CoreELEC firmware updating is separate from Couch's own update channels.
 
 Fixture tests cover CoreELEC release parsing, foreign/ambiguous identities, opt-in OS access, guarded commands, SSDP candidate parsing, bounded output, subprocess timeouts and error mapping. No physical CoreELEC device has been contacted. Physical validation should check enrollment failure, successful identity/service reads, Kodi controls, a requested Kodi restart and reconnection before enabling GUI actions.
+
+## Couch UI flow
+
+1. Open **Connections → CoreELEC**, name the connection, enter its address and Kodi TCP port, and save. Configure optional Kodi HTTP credentials for authenticated control/artwork in the same card.
+2. Open **Rooms & devices**, select the room and CoreELEC connection, then **Add to this room**. The remote uses the existing Kodi player/navigation/metadata flow; CoreELEC can also be an activity source and mapped button target.
+3. For optional OS control, expand **Enroll SSH access** in the connection card. Enter the dedicated private key and independently verified known_hosts entry, then **Verify & save SSH access**. Enrollment checks both SSH trust and CoreELEC identity before replacing saved access. Failed enrollment leaves prior credentials intact. Credentials live in private per-connection files, never the shared configuration export.
+4. **Refresh OS status** displays release/architecture and Kodi service state. Select an OS action and tick the interruption confirmation before **Run OS action**. **Remove SSH access** deletes active enrollment; Kodi control remains available.
+
+The daemon scopes these authenticated endpoints to `/api/connections/:id/coreelec/{connection,status,action}`. Changing a connection address invalidates its saved SSH enrollment. CoreELEC resolves to the existing Kodi integration for remote control, avoiding a duplicate player state machine. Sonos is a separate connection type described in `docs/sonos.md`.
+
+The runtime must include OpenSSH for optional OS actions. No physical CoreELEC behavior is claimed from fixture tests.
+
+Browser regression: after building the web bundle and host daemon, run `NODE_PATH=build/webui-review/node_modules node tools/tests/media-connections.cjs`. It uses an isolated real configuration server and intercepts every device endpoint; it verifies both connection types, room assignments, SSH enrollment/credential clearing, disruptive-action confirmation and Sonos coordinator-gated playback. Screenshot output is `build/media-connections-web.png`.
 
 ## Primary references
 

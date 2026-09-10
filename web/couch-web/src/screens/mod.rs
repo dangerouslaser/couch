@@ -272,3 +272,6 @@ mod streaming_tv;
 mod infrared;
 
 mod device_commands;
+
+mod sonos;
+mod coreelec;

@@ -159,7 +159,7 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
     if connection.provider == Provider::Ir { return super::infrared::device_setup(app, room, None); }
     let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv | Provider::AppleTv);
-    let receiver = matches!(connection.provider, Provider::Denon { .. });
+    let receiver = matches!(connection.provider, Provider::Denon { .. } | Provider::Sonos { .. });
     let existing = assigned(app, &connection, "");
     let name = RwSignal::new(connection.name.clone());
     view!{<form on:submit=move |e|{e.prevent_default();let title=name.get_untracked().trim().to_string();if title.is_empty(){return}app.run(api::post(format!("/api/rooms/{room}/devices"),json!({"name":title,"kind":if television{"tv"}else if receiver{"speaker"}else{"media-player"},"integration":{"via":"connection","connection_id":connection.id,"resource_id":""}})));}>
@@ -172,6 +172,12 @@ fn manual(app: App, connection: Connection, room: Id) -> AnyView {
 pub fn controls(app: App, device: &Device) -> AnyView {
     let config = app.config.get_untracked().unwrap_or_default();
     let (prefix, id) = match config.resolve_integration(&device.integration) {
+        Some(Integration::Sonos { .. }) => {
+            return match &device.integration {
+                Integration::Connection {connection_id,..} => super::sonos::controls(app,connection_id.to_string()),
+                _ => ().into_any(),
+            };
+        }
         Some(Integration::Denon { .. }) => {
             return match &device.integration {
                 Integration::Connection { connection_id, .. } => {
