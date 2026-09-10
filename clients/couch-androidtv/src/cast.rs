@@ -67,6 +67,26 @@ fn number(value: &Value) -> Option<f64> {
         .as_f64()
         .filter(|v| v.is_finite() && *v >= 0. && *v < 1e10)
 }
+// Standard Cast Image dimensions are optional. Prefer a supplied landscape
+// image for the fullscreen backdrop without inventing URLs or dropping posters.
+fn backdrop(images: &Value) -> Option<String> {
+    let mut fallback = None;
+    for image in images.as_array()? {
+        let Some(url) = artwork(&image["url"]) else {
+            continue;
+        };
+        let landscape = number(&image["width"])
+            .zip(number(&image["height"]))
+            .is_some_and(|(width, height)| height > 0. && width > height);
+        if landscape {
+            return Some(url);
+        }
+        if fallback.is_none() {
+            fallback = Some(url);
+        }
+    }
+    fallback
+}
 fn artwork(value: &Value) -> Option<String> {
     let raw = value.as_str()?;
     if raw.len() > 4096 {
@@ -244,11 +264,7 @@ impl State {
                         .map(|key| text(&metadata[key]))
                         .find(|s| !s.is_empty())
                         .unwrap_or_default();
-                    next.artwork_url = metadata["images"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .find_map(|v| artwork(&v["url"]));
+                    next.artwork_url = backdrop(&metadata["images"]);
                 }
                 if media.get("duration").is_some() {
                     next.duration = number(&media["duration"]);
@@ -727,6 +743,46 @@ mod tests {
         assert!(next.title.is_empty());
         assert!(next.duration.is_none());
         assert!(next.artwork_url.is_none());
+    }
+    #[test]
+    fn standard_image_dimensions_prefer_landscape_over_first_poster() {
+        let now = Instant::now();
+        let mut state = setup(now);
+        let mut report = media(1);
+        report["status"][0]["media"]["metadata"]["images"] = json!([
+            {"url":"https://example.test/poster.jpg","width":1000,"height":1500},
+            {"url":"https://example.test/backdrop.jpg","width":1920,"height":1080}
+        ]);
+        state.receive("transport-a", MEDIA, &report, now).unwrap();
+        assert_eq!(
+            state
+                .snapshot(now)
+                .now_playing
+                .unwrap()
+                .artwork_url
+                .as_deref(),
+            Some("https://example.test/backdrop.jpg")
+        );
+    }
+    #[test]
+    fn artwork_selection_keeps_valid_fallbacks_and_rejects_invalid_urls() {
+        let images = json!([
+            {"url":"https://example.test/unknown.jpg"},
+            {"url":"file:///landscape.jpg","width":1920,"height":1080},
+            {"url":"https://example.test/invalid-size.jpg","width":1920,"height":0},
+            {"url":"https://example.test/poster.jpg","width":1000,"height":1500}
+        ]);
+        assert_eq!(
+            backdrop(&images).as_deref(),
+            Some("https://example.test/unknown.jpg")
+        );
+        assert_eq!(
+            backdrop(&json!([images[3].clone()])).as_deref(),
+            Some("https://example.test/poster.jpg")
+        );
+        assert!(backdrop(&json!([images[1].clone()])).is_none());
+        assert!(backdrop(&Value::Null).is_none());
+        assert!(backdrop(&json!([])).is_none());
     }
     #[test]
     fn limits_malformed_fields_and_rejects_non_http_artwork() {
