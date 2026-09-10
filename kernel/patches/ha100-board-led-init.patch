@@ -1,0 +1,410 @@
+From d1cecbebfb9fd1a18286e90638d8df0926ad7f90 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Thu, 10 Sep 2026 06:35:33 -0400
+Subject: [PATCH 1/2] Restore HA100 stock board LED supply and pinctrl
+ sequencing
+
+---
+ drivers/misc/mediatek/leds/leds_drv.c         |   5 +
+ .../mediatek/leds/mt6580/ha100-led-board.h    |  40 +++++
+ drivers/misc/mediatek/leds/mt6580/leds.c      | 148 ++++++++++++++----
+ drivers/misc/mediatek/leds/mt6580/leds_hal.h  |   2 +
+ tools/testing/ha100-led-board-test.c          |  37 +++++
+ 5 files changed, 204 insertions(+), 28 deletions(-)
+ create mode 100644 drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
+ create mode 100644 tools/testing/ha100-led-board-test.c
+
+diff --git a/drivers/misc/mediatek/leds/leds_drv.c b/drivers/misc/mediatek/leds/leds_drv.c
+index 7e594028..1e53ab63 100644
+--- a/drivers/misc/mediatek/leds/leds_drv.c
++++ b/drivers/misc/mediatek/leds/leds_drv.c
+@@ -754,6 +754,9 @@ static int mt65xx_leds_probe(struct platform_device *pdev)
+              printk("%s,line = %d\n", __func__,__LINE__);
+              Leds_Enable();
+              #endif
++	ret = ha100_led_board_init();
++	if (ret)
++		return ret;
+ 	get_div_array();
+ 	for (i = 0; i < MT65XX_LED_TYPE_TOTAL; i++) {
+ 		if (cust_led_list[i].mode == MT65XX_LED_MODE_NONE) {
+@@ -842,6 +845,7 @@ static int mt65xx_leds_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
++	ha100_led_board_release();
+ 	return ret;
+ }
+ 
+@@ -858,6 +862,7 @@ static int mt65xx_leds_remove(struct platform_device *pdev)
+ 		g_leds_data[i] = NULL;
+ 	}
+ 
++	ha100_led_board_release();
+ 	return 0;
+ }
+ 
+diff --git a/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h b/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
+new file mode 100644
+index 00000000..5c2d50cd
+--- /dev/null
++++ b/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef HA100_LED_BOARD_H
++#define HA100_LED_BOARD_H
++
++/* Stock HA100 LED data values select board functions, never GPIO numbers. */
++enum ha100_led_state {
++	HA100_DEFAULT, HA100_SUPPLY_LOW, HA100_SUPPLY_HIGH,
++	HA100_BUTTON_LOW, HA100_BUTTON_HIGH, HA100_CHARGE_LOW,
++	HA100_CHARGE_HIGH, HA100_STANDBY_LOW, HA100_STANDBY_HIGH,
++	HA100_STATE_COUNT
++};
++
++static const char * const ha100_led_state_names[HA100_STATE_COUNT] = {
++	"default", "btn_light_ldo_3v3_low", "btn_light_ldo_3v3_high",
++	"btn_light_gpio_low", "btn_light_gpio_high", "chrg_gpio_low",
++	"chrg_gpio_high", "stdby_gpio_low", "stdby_gpio_high"
++};
++
++static int ha100_led_runtime_state(const char *name, long selector, int level)
++{
++	if (!name)
++		return -1;
++	if (!strcmp(name, "button-backlight") && selector == 4)
++		return level > 0 ? HA100_BUTTON_HIGH : HA100_BUTTON_LOW;
++	if (!strcmp(name, "red") && selector == 2)
++		return level > 0 ? HA100_CHARGE_HIGH : HA100_CHARGE_LOW;
++	return -1;
++}
++
++static int ha100_led_boot_state(unsigned int step, int normal_boot)
++{
++	switch (step) {
++	case 0: return HA100_SUPPLY_HIGH;
++	case 1: return normal_boot ? HA100_BUTTON_HIGH : HA100_BUTTON_LOW;
++	case 2: return HA100_CHARGE_HIGH;
++	case 3: return HA100_STANDBY_HIGH;
++	default: return -1;
++	}
++}
++#endif
+diff --git a/drivers/misc/mediatek/leds/mt6580/leds.c b/drivers/misc/mediatek/leds/mt6580/leds.c
+index dd09d524..2fd6c9c5 100755
+--- a/drivers/misc/mediatek/leds/mt6580/leds.c
++++ b/drivers/misc/mediatek/leds/mt6580/leds.c
+@@ -18,6 +18,10 @@
+ #include <linux/ctype.h>
+ #include <linux/leds.h>
+ #include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/pinctrl/consumer.h>
++#include <mt-plat/mt_boot_common.h>
++#include "ha100-led-board.h"
+ /* #include <linux/leds-mt65xx.h> */
+ #include <linux/workqueue.h>
+ #include <linux/wakelock.h>
+@@ -166,6 +170,121 @@ void mt_set_bl_frequency(unsigned int freq)
+ 	bl_frequency_hal = freq;
+ }
+ 
++/* Recovered from stock get_cust_led_dtsi / CONFIG_X15_S90_LEDS.
++ * The DT owns pin numbers: 3v3 supply, button light, charge and standby are
++ * separate named states. In particular data=4 is NOT touchscreen reset GPIO4.
++ * Never infer IR wiring from the supply name or toggle unlisted raw GPIOs.
++ */
++static DEFINE_MUTEX(ha100_led_board_mutex);
++static struct platform_device *ha100_led_board_device;
++static struct pinctrl *ha100_led_board_pinctrl;
++static struct pinctrl_state *ha100_led_board_states[HA100_STATE_COUNT];
++static bool ha100_led_board_ready;
++
++static void ha100_led_board_release_locked(void)
++{
++	ha100_led_board_ready = false;
++	if (ha100_led_board_pinctrl)
++		pinctrl_put(ha100_led_board_pinctrl);
++	ha100_led_board_pinctrl = NULL;
++	if (ha100_led_board_device)
++		put_device(&ha100_led_board_device->dev);
++	ha100_led_board_device = NULL;
++	memset(ha100_led_board_states, 0, sizeof(ha100_led_board_states));
++	/* Leave electrical state unchanged; removing a driver must not blindly
++	 * switch a possibly shared board supply off.
++	 */
++}
++
++void ha100_led_board_release(void)
++{
++	mutex_lock(&ha100_led_board_mutex);
++	ha100_led_board_release_locked();
++	mutex_unlock(&ha100_led_board_mutex);
++}
++
++int ha100_led_board_init(void)
++{
++	struct device_node *node;
++	struct pinctrl_state *state;
++	unsigned int i;
++	int ret = 0;
++
++	mutex_lock(&ha100_led_board_mutex);
++	if (ha100_led_board_ready)
++		goto out;
++	node = of_find_compatible_node(NULL, NULL, "mediatek,kpd_btn_light");
++	if (!node || !of_device_is_available(node)) {
++		of_node_put(node);
++		ret = -ENODEV;
++		goto out;
++	}
++	ha100_led_board_device = of_find_device_by_node(node);
++	of_node_put(node);
++	if (!ha100_led_board_device) {
++		ret = -EPROBE_DEFER;
++		goto out;
++	}
++	ha100_led_board_pinctrl = pinctrl_get(&ha100_led_board_device->dev);
++	if (IS_ERR(ha100_led_board_pinctrl)) {
++		ret = PTR_ERR(ha100_led_board_pinctrl);
++		ha100_led_board_pinctrl = NULL;
++		goto fail;
++	}
++	/* Validate every required state before the first electrical change. */
++	for (i = 0; i < HA100_STATE_COUNT; i++) {
++		state = pinctrl_lookup_state(ha100_led_board_pinctrl,
++					     ha100_led_state_names[i]);
++		if (IS_ERR(state)) {
++			ret = PTR_ERR(state);
++			pr_err("HA100 LED: missing state %s: %d\n",
++			       ha100_led_state_names[i], ret);
++			goto fail;
++		}
++		ha100_led_board_states[i] = state;
++	}
++	/* Stock ordering and three 2ms gaps; no default/low-state pulse. */
++	for (i = 0; i < 4; i++) {
++		int index = ha100_led_boot_state(i, get_boot_mode() == NORMAL_BOOT);
++
++		ret = pinctrl_select_state(ha100_led_board_pinctrl,
++					   ha100_led_board_states[index]);
++		if (ret) {
++			pr_err("HA100 LED: select %s failed: %d\n",
++			       ha100_led_state_names[index], ret);
++			goto fail;
++		}
++		if (i < 3)
++			udelay(2000);
++	}
++	ha100_led_board_ready = true;
++	pr_info("HA100 LED: stock supply/button/charge/standby states initialized\n");
++	goto out;
++fail:
++	ha100_led_board_release_locked();
++out:
++	mutex_unlock(&ha100_led_board_mutex);
++	return ret;
++}
++
++static int ha100_led_board_set(struct cust_mt65xx_led *cust, int level)
++{
++	int state = ha100_led_runtime_state(cust->name, cust->data, level);
++	int ret;
++
++	/* Unknown/mismatched DT selectors must never become raw pins or calls. */
++	if (state < 0)
++		return -EINVAL;
++	mutex_lock(&ha100_led_board_mutex);
++	if (!ha100_led_board_ready)
++		ret = -ENODEV;
++	else
++		ret = pinctrl_select_state(ha100_led_board_pinctrl,
++					   ha100_led_board_states[state]);
++	mutex_unlock(&ha100_led_board_mutex);
++	return ret ? ret : 1;
++}
++
+ struct cust_mt65xx_led *get_cust_led_dtsi(void)
+ {
+ 	struct device_node *led_node = NULL;
+@@ -983,34 +1102,7 @@ int mt_mt65xx_led_set_cust(struct cust_mt65xx_led *cust, int level)
+ 		return 1;
+ 
+ 	case MT65XX_LED_MODE_GPIO:
+-#ifdef CONFIG_TOUCHSCREEN_COUCH_TLSC6X
+-		/* HA100's stock LED data=4 is not a usable button LED GPIO:
+-		 * rstoutput0/1 in its DT assign GPIO4 to TLSC6x reset. Driving
+-		 * it low on dim holds touch in reset until the next key wake.
+-		 * Leave reset ownership with tpd; button LED control needs the
+-		 * missing vendor LED implementation, not this GPIO fallback.
+-		 */
+-		if (!strcmp(cust->name, "button-backlight") && cust->data == 4)
+-			return 1;
+-#endif
+-		/* COUCH: upstream casts cust->data to a function pointer and calls
+-		 * it, which only makes sense when a board file supplied one. This
+-		 * board has no board file - the LED table is read from the device
+-		 * tree, where odm/led@5 (button-backlight) is led_mode 2 with
+-		 * data 4. That 4 is a GPIO number, not a function: stock drives it
+-		 * with Sanytron's own CONFIG_X15_S90_LEDS, which exists in no
+-		 * public tree. Calling it lands the CPU at address 4 ("PC is at
+-		 * 0x4"), taking a prefetch abort and panicking the kernel the first
+-		 * time anything writes button-backlight - which both our init and
+-		 * couch-gui do every few seconds. Drive the pin instead.
+-		 */
+-		LEDS_DEBUG("brightness_set_cust: GPIO mode, pin %ld = %d\n",
+-			   cust->data, level ? 1 : 0);
+-		mt_set_gpio_mode(cust->data, GPIO_MODE_00);
+-		mt_set_gpio_dir(cust->data, GPIO_DIR_OUT);
+-		mt_set_gpio_out(cust->data,
+-				level ? GPIO_OUT_ONE : GPIO_OUT_ZERO);
+-		return 1;
++		return ha100_led_board_set(cust, level);
+ 
+ 	case MT65XX_LED_MODE_PMIC:
+ 		/* for button baclight used SINK channel, when set button ISINK,
+diff --git a/drivers/misc/mediatek/leds/mt6580/leds_hal.h b/drivers/misc/mediatek/leds/mt6580/leds_hal.h
+index 7614b8d2..a2b864ba 100644
+--- a/drivers/misc/mediatek/leds/mt6580/leds_hal.h
++++ b/drivers/misc/mediatek/leds/mt6580/leds_hal.h
+@@ -54,6 +54,8 @@ extern int mt_mt65xx_blink_set(struct led_classdev *led_cdev,
+ 			       unsigned long *delay_off);
+ 
+ extern struct cust_mt65xx_led *mt_get_cust_led_list(void);
++extern int ha100_led_board_init(void);
++extern void ha100_led_board_release(void);
+ 
+ extern int mtkfb_set_backlight_level(unsigned int level);
+ #endif
+diff --git a/tools/testing/ha100-led-board-test.c b/tools/testing/ha100-led-board-test.c
+new file mode 100644
+index 00000000..69813887
+--- /dev/null
++++ b/tools/testing/ha100-led-board-test.c
+@@ -0,0 +1,37 @@
++/* Host regression: cc -Wall -Wextra -Werror tools/testing/ha100-led-board-test.c -o /tmp/ha100-led-board-test && /tmp/ha100-led-board-test */
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++#include "../../drivers/misc/mediatek/leds/mt6580/ha100-led-board.h"
++
++int main(void)
++{
++	unsigned int i;
++	const int normal[] = {HA100_SUPPLY_HIGH, HA100_BUTTON_HIGH,
++		HA100_CHARGE_HIGH, HA100_STANDBY_HIGH};
++	const int recovery[] = {HA100_SUPPLY_HIGH, HA100_BUTTON_LOW,
++		HA100_CHARGE_HIGH, HA100_STANDBY_HIGH};
++
++	for (i = 0; i < 4; i++) {
++		assert(ha100_led_boot_state(i, 1) == normal[i]);
++		assert(ha100_led_boot_state(i, 0) == recovery[i]);
++	}
++	assert(ha100_led_boot_state(4, 1) == -1);
++	assert(ha100_led_runtime_state("red", 2, 1) == HA100_CHARGE_HIGH);
++	assert(ha100_led_runtime_state("red", 2, 255) == HA100_CHARGE_HIGH);
++	assert(ha100_led_runtime_state("red", 2, 0) == HA100_CHARGE_LOW);
++	assert(ha100_led_runtime_state("button-backlight", 4, 1) == HA100_BUTTON_HIGH);
++	assert(ha100_led_runtime_state("button-backlight", 4, 0) == HA100_BUTTON_LOW);
++	assert(ha100_led_runtime_state("button-backlight", 4, -1) == HA100_BUTTON_LOW);
++	assert(ha100_led_runtime_state("red", 4, 1) == -1);
++	assert(ha100_led_runtime_state("button-backlight", 2, 1) == -1);
++	assert(ha100_led_runtime_state("lcd-backlight", 4, 1) == -1);
++	assert(ha100_led_runtime_state(NULL, 2, 1) == -1);
++	assert(ha100_led_runtime_state("red", 17, 1) == -1);
++	for (i = 0; i < HA100_STATE_COUNT; i++)
++		assert(ha100_led_state_names[i] && ha100_led_state_names[i][0]);
++	assert(!strcmp(ha100_led_state_names[HA100_SUPPLY_HIGH], "btn_light_ldo_3v3_high"));
++	assert(!strcmp(ha100_led_state_names[HA100_STANDBY_HIGH], "stdby_gpio_high"));
++	puts("HA100 LED sequence/selector tests passed");
++	return 0;
++}
+-- 
+2.43.0
+
+
+From ea122a39f434d962158dc07c5ff2ba2a27de1673 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Thu, 10 Sep 2026 06:39:23 -0400
+Subject: [PATCH 2/2] Allow empty HA100 default pinctrl state and diagnose
+ acquisition
+
+---
+ drivers/misc/mediatek/leds/mt6580/ha100-led-board.h | 8 ++++++++
+ drivers/misc/mediatek/leds/mt6580/leds.c            | 9 ++++++++-
+ tools/testing/ha100-led-board-test.c                | 5 +++++
+ 3 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h b/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
+index 5c2d50cd..4be5c433 100644
+--- a/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
++++ b/drivers/misc/mediatek/leds/mt6580/ha100-led-board.h
+@@ -16,6 +16,14 @@ static const char * const ha100_led_state_names[HA100_STATE_COUNT] = {
+ 	"chrg_gpio_high", "stdby_gpio_low", "stdby_gpio_high"
+ };
+ 
++/* Empty stock default creates no state in this pinctrl core. It is never
++ * selected. Every functional state must still resolve before any writes.
++ */
++static int ha100_led_state_required(unsigned int state)
++{
++	return state > HA100_DEFAULT && state < HA100_STATE_COUNT;
++}
++
+ static int ha100_led_runtime_state(const char *name, long selector, int level)
+ {
+ 	if (!name)
+diff --git a/drivers/misc/mediatek/leds/mt6580/leds.c b/drivers/misc/mediatek/leds/mt6580/leds.c
+index 2fd6c9c5..352c52a3 100755
+--- a/drivers/misc/mediatek/leds/mt6580/leds.c
++++ b/drivers/misc/mediatek/leds/mt6580/leds.c
+@@ -217,22 +217,29 @@ int ha100_led_board_init(void)
+ 	if (!node || !of_device_is_available(node)) {
+ 		of_node_put(node);
+ 		ret = -ENODEV;
++		pr_err("HA100 LED: board DT node missing or disabled\n");
+ 		goto out;
+ 	}
+ 	ha100_led_board_device = of_find_device_by_node(node);
+ 	of_node_put(node);
+ 	if (!ha100_led_board_device) {
+ 		ret = -EPROBE_DEFER;
++		pr_info("HA100 LED: waiting for board platform device\n");
+ 		goto out;
+ 	}
+ 	ha100_led_board_pinctrl = pinctrl_get(&ha100_led_board_device->dev);
+ 	if (IS_ERR(ha100_led_board_pinctrl)) {
+ 		ret = PTR_ERR(ha100_led_board_pinctrl);
++		pr_err("HA100 LED: pinctrl acquisition failed: %d\n", ret);
+ 		ha100_led_board_pinctrl = NULL;
+ 		goto fail;
+ 	}
+-	/* Validate every required state before the first electrical change. */
++	/* Validate all eight functional states before any electrical change.
++	 * Stock default is empty and may not exist as a pinctrl state.
++	 */
+ 	for (i = 0; i < HA100_STATE_COUNT; i++) {
++		if (!ha100_led_state_required(i))
++			continue;
+ 		state = pinctrl_lookup_state(ha100_led_board_pinctrl,
+ 					     ha100_led_state_names[i]);
+ 		if (IS_ERR(state)) {
+diff --git a/tools/testing/ha100-led-board-test.c b/tools/testing/ha100-led-board-test.c
+index 69813887..a994c368 100644
+--- a/tools/testing/ha100-led-board-test.c
++++ b/tools/testing/ha100-led-board-test.c
+@@ -16,6 +16,11 @@ int main(void)
+ 		assert(ha100_led_boot_state(i, 1) == normal[i]);
+ 		assert(ha100_led_boot_state(i, 0) == recovery[i]);
+ 	}
++	/* A missing empty default is acceptable; no functional state is optional. */
++	assert(!ha100_led_state_required(HA100_DEFAULT));
++	for (i = HA100_SUPPLY_LOW; i < HA100_STATE_COUNT; i++)
++		assert(ha100_led_state_required(i));
++	assert(!ha100_led_state_required(HA100_STATE_COUNT));
+ 	assert(ha100_led_boot_state(4, 1) == -1);
+ 	assert(ha100_led_runtime_state("red", 2, 1) == HA100_CHARGE_HIGH);
+ 	assert(ha100_led_runtime_state("red", 2, 255) == HA100_CHARGE_HIGH);
+-- 
+2.43.0
+

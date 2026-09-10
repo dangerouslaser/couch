@@ -6,6 +6,19 @@ waveform generator and `/dev/irtx` transport.
 
 ## Driver status
 
+**LG B4 Volume Up worked on-device on September 10, 2026.** Kernel `ea122a39`
+restores the stock board supply/control initialization and LED callbacks that
+Couch omitted. The user confirmed a successful NEC `0x04 / 0x02` command with
+one ditto after this change; the same command had failed before it. GPIO17's
+named 3.3 V enable and GPIO14's standby control now remain output-high. Button
+lighting correctly controls GPIO58 without touching touchscreen reset GPIO4.
+See the [board initialization fix](ha100-stock-ir-audit.md#restoring-the-stock-board-controls)
+and [`ha100-board-led-init.patch`](../kernel/patches/ha100-board-led-init.patch).
+IR telemetry is disabled. This validates the tested command/device, not every
+catalog code, repeat/hold behavior, or standby/undocked scenario.
+
+The remaining entries in this section record earlier bring-up results.
+
 Kernel `9b699dde` is live and its guarded completion path passed two separate
 zero-word writes (2,136 and 2,149 µs) and one 281 µs carrier-burst write (2,154 µs).
 Longer all-zero transfers also passed: 68 ms requested, 976-byte write returned

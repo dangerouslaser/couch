@@ -305,3 +305,48 @@ touchscreen reset ownership and fail safely if required states are missing.
 Then repeat the optical test. The 3.3 V rail's electrical connection to the
 IR emitter is still unproven, so this audit does not establish an IR fix.
 No pin writes, builds, flashes or transmissions were performed in this audit.
+
+### Restoring the stock board controls
+
+Kernel `d1cecbeb` implements the recovered sequence through the existing named
+pinctrl states. Initialization runs from LED probe; the pinctrl handle and board-device reference
+are retained until teardown. A mutex serializes initialization, runtime
+selection and cleanup. Unknown LED name/selector combinations fail rather
+than becoming raw pins or function pointers. LCD brightness remains on its
+existing path, and button lighting no longer touches touchscreen reset GPIO4.
+
+The implementation and host regression tests are preserved in
+[`ha100-board-led-init.patch`](../kernel/patches/ha100-board-led-init.patch).
+Tests cover normal/recovery startup order and accepted/rejected selector
+combinations. The normal kernel built successfully on Ollie; the packaging
+and boot-health Python suite also passed (eight tests). Image SHA256:
+`2e98a376893c62b1ec1eab01881e427749c5cffe9e358939ec795ad9bd0889b0`.
+The p8 write passed readback verification. Fresh pre-change p8 backups are
+retained on the device and Ollie under `board-init-20260910`; p9 is preserved.
+
+The first device boot exposed a validation error before any board pin changed:
+`pinctrl_lookup_state("default")` returns `-ENODEV` because the DT default state
+is empty. Stock tolerates this absent state and never selects it. Requiring it
+prevented LED probe. The correction validates all eight functional states,
+while skipping the unused empty default; missing functional states still fail.
+Correction `ea122a39` also adds acquisition failure diagnostics and a regression
+check for the optional default state. It built successfully on Ollie and its
+image passed p8 readback verification, SHA256
+`dbe414f9e137fb8df28153680eb50b8549557cb506f8edc86182fdd2ad995725`.
+
+Device validation passed on `3.18.79-couch-normal-gea122a39f434`:
+
+- GPIO17, GPIO14 and GPIO61 are output-high after boot. Button brightness
+  0/255 drives GPIO58 low/high while GPIO4, GPIO17, GPIO14 and GPIO61 stay high.
+- GUI heartbeats advance, USB serial and Wi-Fi SSH work, and local boot-health
+  verification clears the BCB. The recovery partition and GUI binary hashes
+  are unchanged.
+- With telemetry off, the same LG B4 NEC Volume Up command (`0x04`, `0x02`,
+  one ditto) completed and the user confirmed **it worked**. No waveform or
+  transmitter-pin change accompanied this board initialization fix.
+
+This confirms the initialization change resolves the tested IR failure. It
+does not isolate which board control electrically enables the emitter or
+validate other appliances, hold/repeat behavior, or power-management scenarios.
+Kernel source is published on `dangerouslaser/couch-kernel` branch
+`couch-irtx-bringup`; the Couch repository retains the source patches and audit.
