@@ -18,5 +18,18 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: rustup component add rustfmt clippy
       - run: cargo fmt -p couch-unifi-protect --check
-      - run: cargo test --locked -p couch-unifi-protect
-      - run: cargo clippy --locked -p couch-unifi-protect --all-targets -- -D warnings
+      - run: cargo test --locked -p couch-unifi-protect --features media
+      - run: cargo clippy --locked -p couch-unifi-protect --features media --all-targets -- -D warnings
+      - name: Exercise real decoder in Alpine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          CC_x86_64_unknown_linux_musl=musl-gcc CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc cargo test --locked -p couch-unifi-protect --features media --target x86_64-unknown-linux-musl --test live_pipeline --no-run
+          mkdir -p /tmp/protect-fixture
+          cp target/x86_64-unknown-linux-musl/debug/deps/live_pipeline-* /tmp/protect-fixture/
+          docker run --rm -v /tmp/protect-fixture:/fixture:ro alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d sh -ec '
+            apk add --no-cache ffmpeg
+            for executable in /fixture/live_pipeline-*; do
+              if [ -x "$executable" ]; then "$executable" --ignored --nocapture; fi
+            done'

@@ -160,7 +160,7 @@ fn watchdog(
 }
 fn decoder_command() -> Command {
     let mut command = Command::new("/usr/bin/ffmpeg");
-    command.args(["-nostdin","-hide_banner","-loglevel","error","-max_alloc","16777216","-protocol_whitelist","pipe","-threads","1","-f","h264","-i","pipe:0","-an","-sn","-dn","-filter_threads","1","-vf","fps=8,scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2","-threads","1","-pix_fmt","rgb24","-f","rawvideo","pipe:1"])
+    command.args(["-nostdin","-hide_banner","-loglevel","error","-max_alloc","16777216","-protocol_whitelist","pipe","-threads","1","-probesize","65536","-analyzeduration","500000","-f","h264","-i","pipe:0","-an","-sn","-dn","-filter_threads","1","-vf","fps=8,scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2","-threads","1","-pix_fmt","rgb24","-f","rawvideo","pipe:1"])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)]
     {

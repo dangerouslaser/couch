@@ -2,9 +2,10 @@
 
 `clients/couch-unifi-protect` is a read-only Rust client for the official local
 Protect Integration API. It discovers cameras, retrieves a bounded JPEG snapshot,
-and supplies an existing RTSPS URL to a future video player. It does not decode
-video, display a live feed in Slint, enable shared camera streams, change camera
-settings, receive events, or authenticate with a username/password.
+and plays existing low-quality H264 streams in the native Slint camera screen.
+Enrollment and camera selection are available in the browser configuration UI.
+Couch does not enable shared streams, change camera settings, receive events,
+or authenticate with a username/password.
 
 Protocol reference checked 2026-09-10: Ubiquiti's
 [Protect 7.3.47 OpenAPI specification](https://developer.ui.com/protect/v7.3.47/openapi.json).
@@ -42,9 +43,9 @@ it must not delete a preexisting shared stream when a Couch view closes.
 `LiveView` contains the returned RTSPS URL, unchanged (including `?enableSrtp`).
 Its nonzero lifetime of at most 300 seconds is a **local descriptor validity window**, not a server
 lease or automatic URL revocation. `url()` fails after expiry; consuming `close()`
-drops the descriptor. The eventual player owns stopping its media connection on
-close, expiry, backgrounding, Wi-Fi loss and application shutdown. This library
-opens no video sockets and cannot stop a player to which a caller copied the URL.
+drops the descriptor. The optional `media` feature owns media transport and the native player stops it
+on close, expiry, backgrounding, Wi-Fi loss and application shutdown. Callers of
+the API-only descriptor interface remain responsible for their own connections.
 RTSPS URLs are sensitive and deliberately omitted from Debug output.
 [Official stream schemas and endpoints](https://developer.ui.com/protect/v7.3.47/openapi.json).
 
@@ -80,7 +81,7 @@ nonzero maximum of at most 30 seconds, JSON responses
 are limited to 2MiB, snapshots to 8MiB and camera lists to 512. JPEG signature checks
 do not replace decoder dimension/pixel limits. Error bodies are not surfaced,
 and API keys have redacted Debug output and zeroizing owned storage. Keys are not
-sent to RTSPS destinations; media authentication/TLS is the player's responsibility.
+sent to RTSPS destinations; the media transport verifies its own TLS endpoint before sending RTSP requests.
 
 By default stream URLs must have the same host as the API origin. If Protect
 returns a LAN IP while the API uses `nvr.unifi`, explicitly authorize that trusted
@@ -105,7 +106,7 @@ locally; never paste the API key into a command or chat. Its shape is:
 }
 ```
 
-Keep mode0600. Set `private_ca_pem` to an absolute trusted certificate path if
+Keep mode 0600. Set `private_ca_pem` to an absolute trusted certificate path if
 needed, or set `certificate_sha256` only after explicitly verifying the exact
 console fingerprint. Leave both null to use ordinary public trust. Set `stream_host` only if the returned stream host differs, and choose
 `camera_id` only when ready to validate that camera's existing low-quality URL.
@@ -126,22 +127,77 @@ The check prints only application version, visible camera count and, if selected
 whether a low-quality descriptor validated. It does not print stream URLs or open
 video. No NVR call was made while implementing this client.
 
-## Validation and remaining live-view work
+## Setup and live playback
 
-Run `cargo test --locked -p couch-unifi-protect` and
-`cargo clippy --locked -p couch-unifi-protect --all-targets -- -D warnings` in
-`clients/`. Local TLS peers exercise trusted/private CA behavior, rejected
-untrusted chains and wrong hostnames, matching and incorrect certificate pins,
-self-signed hostname aliases, forged handshake signatures, API-key headers, exact routes, redirects,
-status handling, response limits, camera schemas, JPEG validation, stream quality,
-explicit stream hosts and local descriptor expiry. Fixtures use generated keys
-and loopback listeners; no real camera or console is contacted.
+In Connections, add **UniFi Protect**, enter the console HTTPS address and its
+Integration API key, then select **Test & save**. Private certificate pins require
+an explicit confirmation. The media server can use a different certificate and
+port: its optional pin is independently bound to an exact `rtsps://host:port`
+origin. The API pin is never silently reused for the stream. Add cameras through
+Rooms & devices, then open a camera tile on the remote.
 
-Physical acceptance still needs the updated NVR's application version, a locally
-entered API key and valid TLS trust. Confirm camera visibility, low/package stream
-availability and actual response schemas. Then separately implement and test an
-RTSPS/SRTP-capable player with verified media TLS, bounded packet/frame queues,
-codec negotiation, timeout/cancellation and a Slint rendering path. Measure
-480x800 display scaling, frame latency, CPU/RAM, audio policy and battery cost on
-the Cortex-A7 HA100. Hardware decode availability is unproven; do not claim that
-returning a stream URL demonstrates a playable live feed on the remote.
+Enrollment is stored atomically in a private mode 0600 connection file. Status
+responses never return the API key. Native `settings::Settings` uses PEM **contents**
+for `private_ca_pem`, unlike the older `check` example's certificate-file path.
+The native settings also accept optional `media_origin` and
+`media_certificate_sha256`; both must be supplied together. The `watch` example
+accepts these native settings plus `camera_id` and reports frame counts only:
+
+```sh
+cargo run --manifest-path clients/Cargo.toml -p couch-unifi-protect \
+  --features media --example watch -- /path/to/private-native-settings.json
+```
+
+Each explicit view lasts at most 60 seconds, is silent, and requests the existing
+low-quality stream. Rust owns verified RTSPS/TCP, RTSP session lifecycle, SRTP
+AES-CM128/HMAC-SHA1-80 authentication and replay rejection, and H264 packet
+reassembly. Unsupported codecs, security profiles or interleaving fail closed.
+The API key is never sent to the media server. No stream URL or token reaches
+FFmpeg, browser state, process arguments or diagnostic output.
+
+A packaged `/usr/bin/ffmpeg` decodes H264 from stdin with only the `pipe` protocol
+allowed. Output is capped at 480×270 RGB, 8 fps, one latest frame; decoder address
+space is capped at 256 MiB, a single allocation at 16 MiB and CPU time at 90 seconds.
+Socket shutdown interrupts slow or stalled peers when the view closes or its
+absolute deadline expires. A single bounded resolver worker prevents repeated
+opens from accumulating blocked DNS threads. One player is allowed per process.
+The native GUI suspends playback when hidden, the screen turns off, or settings
+change. There is no automatic retry or audio playback.
+
+These are software decoder bounds, not demonstrated HA100 performance figures.
+The Alpine decoder and its immutable dependencies must be included in the image;
+a general desktop FFmpeg build may exceed this address-space budget while loading
+its shared libraries. Packaging must include the applicable license notices and
+corresponding source obligations.
+
+## Validation and physical acceptance
+
+Run `cargo test --locked -p couch-unifi-protect --features media` and
+`cargo clippy --locked -p couch-unifi-protect --features media --all-targets -- -D warnings`
+in `clients/`. TLS peers cover API and media pins, hostname aliases, wrong pins,
+forged handshake signatures, redirects, bounded responses and secret separation.
+Media tests cover SRTP authentication/replay, fragmented RTP loss and malformed
+headers, SDP rejection, slow-trickle deadlines, blocked-read cancellation and
+child-process termination. `tests/live_pipeline.rs` runs generated moving H264
+through local pinned API/RTSPS peers, SRTP and the real bounded decoder; it requires
+the packaged Alpine FFmpeg closure. It contains no camera recordings.
+
+No real NVR or HA100 live-video acceptance is implied by these fixtures. After
+confirming both endpoint certificates, verify the installed Protect version,
+camera discovery, existing low-stream availability, actual SDP/SRTP negotiation,
+moving frames and closing/reopening. On HA100 measure CPU, RSS, frame latency,
+battery and heat; verify 60-second expiry, screen-off, Wi-Fi loss and recovery.
+Hardware decode availability remains unproven. Unsupported H265 or incompatible
+H264 streams should display an unavailable state without changing camera settings.
+
+Protocol references: [Ubiquiti's official API](https://developer.ui.com/protect/v7.3.47/openapi.json),
+[RTSP RFC2326](https://www.rfc-editor.org/rfc/rfc2326),
+[H264 RTP RFC6184](https://www.rfc-editor.org/rfc/rfc6184),
+[SRTP RFC3711](https://www.rfc-editor.org/rfc/rfc3711), and
+[FFmpeg protocol restrictions](https://ffmpeg.org/ffmpeg-protocols.html).
+
+The following previews use synthetic fixtures, not camera footage:
+
+![Native camera preview](images/protect-camera.png)
+
+![Browser enrollment](images/protect-enrollment.png)
