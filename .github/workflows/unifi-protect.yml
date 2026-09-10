@@ -1,0 +1,22 @@
+name: UniFi Protect client
+on:
+  push:
+    paths: ['clients/couch-unifi-protect/**', 'clients/Cargo.toml', 'clients/Cargo.lock', '.github/workflows/unifi-protect.yml']
+  pull_request:
+    paths: ['clients/couch-unifi-protect/**', 'clients/Cargo.toml', 'clients/Cargo.lock', '.github/workflows/unifi-protect.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: clients
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup update stable --no-self-update
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt -p couch-unifi-protect --check
+      - run: cargo test --locked -p couch-unifi-protect
+      - run: cargo clippy --locked -p couch-unifi-protect --all-targets -- -D warnings
