@@ -1,0 +1,147 @@
+From 4ee1dd92f1b1ae310b7915a14362011940f91c58 Mon Sep 17 00:00:00 2001
+From: dangerouslaser <bryan.hoban@gmail.com>
+Date: Thu, 10 Sep 2026 05:56:40 -0400
+Subject: [PATCH] irtx: add opt-in powered output and GPIO input telemetry
+
+---
+ .../misc/mediatek/irtx/mt6580/couch_irtx.c    | 76 +++++++++++++++++++
+ drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c |  2 +
+ 2 files changed, 78 insertions(+)
+
+diff --git a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+index eda94da1..2053c962 100644
+--- a/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
++++ b/drivers/misc/mediatek/irtx/mt6580/couch_irtx.c
+@@ -17,6 +17,8 @@
+ #include <linux/delay.h>
+ #include <linux/jiffies.h>
+ #include <linux/ktime.h>
++#include <linux/bitops.h>
++#include <mt-plat/mt_gpio.h>
+ #include "couch_irtx_complete.h"
+ #include <linux/wakelock.h>
+ #include <mt-plat/mt_pwm.h>
+@@ -27,6 +29,51 @@
+ #define IRTX_GET_SOLUTION _IOR('R', 1, unsigned int)
+ #define IRTX_MAX_BYTES (128 * 1024)
+ 
++/* Explicit opt-in: observe one transfer without changing its waveform, pin
++ * mux, direction, IRQ masks or cleanup. Disabled in normal operation. */
++static bool output_telemetry;
++module_param(output_telemetry, bool, 0600);
++MODULE_PARM_DESC(output_telemetry, "Trace powered PWM registers and GPIO8 input during IR output");
++
++struct ir_pad_trace {
++	unsigned int high, low, errors, transitions;
++	s64 elapsed_us;
++	int mode, direction, ies;
++};
++
++static void ir_sample_pad(struct ir_pad_trace *trace)
++{
++	unsigned int i;
++	int value, previous = -1;
++	ktime_t begin = ktime_get();
++
++	/* MT6580 board DT selects PWM_A on GPIO8. Its input sensing was already
++	 * enabled in read-only live snapshots. Never enable or configure it here.
++	 * The DIN register is observational; alternate-function feedback is not
++	 * guaranteed to measure LED current. No IRQ/preemption disabling. */
++	trace->mode = mt_get_gpio_mode(8);
++	trace->direction = mt_get_gpio_dir(8);
++	trace->ies = mt_get_gpio_ies(8);
++	for (i = 0; i < 256; i++) {
++		if (ktime_us_delta(ktime_get(), begin) >= 500)
++			break;
++		value = mt_get_gpio_in(8);
++		if (value == 1)
++			trace->high++;
++		else if (value == 0)
++			trace->low++;
++		else
++			trace->errors++;
++		if (value >= 0 && value <= 1) {
++			if (previous >= 0 && previous != value)
++				trace->transitions++;
++			previous = value;
++		}
++		udelay(1);
++	}
++	trace->elapsed_us = ktime_us_delta(ktime_get(), begin);
++}
++
+ struct couch_irtx {
+ 	struct miscdevice misc;
+ 	struct device *dev;
+@@ -96,12 +143,17 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	s64 first_complete_us = -1, elapsed_us, setup_us;
+ 	size_t wave_bytes = count - sizeof(u32);
+ 	int ret;
++	bool trace_output;
++	u32 wave_ones = 0, first_words[4] = { 0 };
++	unsigned int nonzero_bytes = 0;
++	struct ir_pad_trace pad_trace = { 0 };
+ 
+ 	/* BUF0_SIZE counts whole 32-bit words minus one. Reject padding ambiguity. */
+ 	if (count < 8 || count > IRTX_MAX_BYTES || count % 4)
+ 		return -EINVAL;
+ 	if (mutex_lock_interruptible(&ir->lock))
+ 		return -ERESTARTSYS;
++	trace_output = READ_ONCE(output_telemetry);
+ 	/* Bound both declared and actual DMA duration; never trust the trailer
+ 	 * as a DMA length or timeout. Partial final words add at most 32 ticks. */
+ 	if (copy_from_user(&duration, buf + wave_bytes, sizeof(duration))) {
+@@ -129,6 +181,16 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 		for (i = 0; i < wave_bytes; i++)
+ 			wave[i] = ~wave[i];
+ 
++	/* Inspect the DMA allocation before enabling output. This walk is bounded
++	 * by IRTX_MAX_BYTES and cannot extend the active carrier or leader. */
++	if (trace_output) {
++		for (i = 0; i < wave_bytes; i++) {
++			wave_ones += hweight8(wave[i]);
++			nonzero_bytes += wave[i] != 0;
++		}
++		memcpy(first_words, wave, min(wave_bytes, sizeof(first_words)));
++	}
++
+ 	wake_lock(&ir->awake);
+ 	/* Clock-gated PWM MMIO can wedge the bus before a timeout can run. */
+ 	mt_pwm_power_on(ir->pwm.pwm_no, ir->pwm.pmic_pad);
+@@ -153,6 +215,20 @@ static ssize_t ir_write(struct file *file, const char __user *buf,
+ 	started = ktime_get();
+ 	setup_us = ktime_us_delta(started, setup_started);
+ 	deadline = jiffies + msecs_to_jiffies(DIV_ROUND_UP(actual_us, 1000) + 50);
++	if (trace_output) {
++		/* Sample before printk and while an ordinary NEC leader is active.
++		 * The timer starts before tracing, preserving the existing duration
++		 * guard and timeout. Capture never mutates GPIO or PWM registers. */
++		ir_sample_pad(&pad_trace);
++		dev_info(ir->dev, "TX output dma=%08x bytes=%zu nonzero_bytes=%u one_bits=%u words=%08x,%08x,%08x,%08x\n",
++			 (u32)physical, wave_bytes, nonzero_bytes, wave_ones,
++			 first_words[0], first_words[1], first_words[2], first_words[3]);
++		dev_info(ir->dev, "TX pad gpio=8 mode=%d dir=%d ies=%d high=%u low=%u errors=%u transitions=%u elapsed_us=%lld\n",
++			 pad_trace.mode, pad_trace.direction, pad_trace.ies,
++			 pad_trace.high, pad_trace.low, pad_trace.errors,
++			 pad_trace.transitions, pad_trace.elapsed_us);
++		mt_pwm_dump_channel_hal(ir->pwm.pwm_no);
++	}
+ 	for (;;) {
+ 		if (mt_get_intr_status(finish + 1) > 0) {
+ 			ret = -EIO;
+diff --git a/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c b/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
+index 80f871e2..891c0381 100644
+--- a/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
++++ b/drivers/misc/mediatek/pwm/mt6580/mt_pwm_hal.c
+@@ -407,6 +407,8 @@ void mt_pwm_dump_channel_hal(u32 pwm_no)
+ 	pr_err("couch-pwm channel=%u enable=%08x clock26=%08x irq_enable=%08x irq_status=%08x\n",
+ 		pwm_no, INREG32(PWM_ENABLE), INREG32(PWM_CK_26M_SEL),
+ 		INREG32(PWM_INT_ENABLE), INREG32(PWM_INT_STATUS));
++	pr_err("couch-pwm buffer_addr=%08x output_3dlcm=%08x\n",
++		INREG32(base + 4 * PWM_BUF0_BASE_ADDR), INREG32(PWM_3DLCM));
+ 	pr_err("couch-pwm con=%08x high=%08x low=%08x guard=%08x\n",
+ 		INREG32(base + 4 * PWM_CON), INREG32(base + 4 * PWM_HDURATION),
+ 		INREG32(base + 4 * PWM_LDURATION), INREG32(base + 4 * PWM_GDURATION));
+-- 
+2.43.0
+

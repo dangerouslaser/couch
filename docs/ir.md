@@ -428,3 +428,64 @@ likewise require a working IR comparison and note that some cameras filter IR.
 
 These are proposed coordinated checks; they were not performed during the
 read-only software audit.
+
+### Positive-control camera result (September 10)
+
+The user subsequently confirmed that the camera **clearly sees the LG remote's
+Power-button IR flash**, but sees **no flash from Couch** during three coordinated
+LG Volume Up full-frame-plus-ditto attempts. This corrects the earlier inconclusive
+camera comparison: the camera now has a working optical positive control.
+It strongly prioritizes the output/emitter path over trying more LG command
+codes, while not measuring carrier frequency or proving that arbitrarily weak
+emission is absent.
+
+Read-only GPIO inspection before and after the subsequent GUI restart still
+reported GPIO8 `21001110`: mode 2 (PWM_A), input low, output latch low,
+output direction, and input sensing enabled. The low static input after a
+completed transfer is expected and does not show the level during transmission.
+No GPIO register was changed.
+
+### Opt-in output telemetry candidate
+
+Kernel source `4ee1dd92` adds an `output_telemetry` boolean parameter, default
+**off**. The patch is preserved as
+[`ha100-irtx-output-telemetry.patch`](../kernel/patches/ha100-irtx-output-telemetry.patch).
+It does not modify carrier samples, GPIO configuration, IRQ masks, DMA cleanup,
+or the existing deadline/duration guards.
+
+When explicitly enabled for a coordinated transmission, it records the DMA
+address, first four words, nonzero-byte count and one-bit count. While the
+channel is powered, it reads the programmed buffer address, control/duration
+registers, enable/clock/IRQ state and shared 3D-LCM output configuration.
+It samples GPIO8 DIN before logging: at most 256 reads with one-microsecond
+spacing and a 500-microsecond wall-time cutoff, without disabling interrupts
+or preemption. Scheduling can delay the observation; the measured interval is
+included. This is pad-feedback evidence, not a measurement of LED current or
+a calibrated carrier-frequency test.
+
+After root review and candidate boot, verify the parameter exists and defaults
+to `N`, then enable it only for the agreed measurement:
+
+```sh
+cat /sys/module/couch_irtx/parameters/output_telemetry
+printf 1 > /sys/module/couch_irtx/parameters/output_telemetry
+# Perform only the separately coordinated transmit/capture.
+printf 0 > /sys/module/couch_irtx/parameters/output_telemetry
+```
+
+Do not replace this with direct PWM MMIO reads while clocks are gated; those
+can wedge the bus. The parameter only controls observations; writing it does
+not transmit. There is no runtime switch to a stock one-microsecond waveform
+ABI in this candidate.
+
+Read-only effective-DT checks also ruled out an ordinary LED PWM0 user: red
+and button backlights use GPIO mode on pins 2 and 4; LCD backlight uses
+`CUST_BLS_PWM` through `disp_bls_set_backlight`, not the generic PWM channel
+used by IR. This does not rule out every possible shared-clock/output override.
+
+Built on Ollie with the normal profile from a clean source tree. Existing IR
+completion-guard tests passed. Local `build/couch-irtx-output.img` preserves
+the previous timing candidate's DTB/ramdisk, is 7,946,240 bytes, and has SHA256
+`355a004bd5491569ed435eb3d1fcaf3dccdfee4f0c9fb154a90e28c5196f34bf`.
+Build success is not physical validation; flashing and the measured send are
+separate coordinated steps.
