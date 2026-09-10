@@ -84,6 +84,16 @@ impl Prompt {
             KeyCode::Down | KeyCode::Tab if self.kind == "choice" => {
                 self.selected = (self.selected + 1).min(self.options.len().saturating_sub(1));
             }
+            KeyCode::Home if self.kind == "choice" => self.selected = 0,
+            KeyCode::End if self.kind == "choice" => {
+                self.selected = self.options.len().saturating_sub(1)
+            }
+            KeyCode::PageUp if self.kind == "choice" => {
+                self.selected = self.selected.saturating_sub(8)
+            }
+            KeyCode::PageDown if self.kind == "choice" => {
+                self.selected = (self.selected + 8).min(self.options.len().saturating_sub(1))
+            }
             KeyCode::Enter => {
                 if self.kind == "choice" {
                     if let Some(option) = self.options.get(self.selected) {
@@ -237,6 +247,31 @@ impl App {
             ],
         });
     }
+    fn demo_networks(&mut self) {
+        self.demo_prompt();
+        self.detail = "Nearby networks are ready.".into();
+        self.action = "Choose a network, enter its password, or use manual entry.".into();
+        let prompt = self.prompt.as_mut().unwrap();
+        prompt.title = "Choose Wi-Fi network".into();
+        prompt.options = (1..=64)
+            .map(|n| Choice {
+                value: format!("network-{n}"),
+                label: format!("Example network {n:02} · WPA2 · -40 dBm"),
+                detail: String::new(),
+            })
+            .collect();
+        for (value, label) in [
+            ("manual", "Enter network manually"),
+            ("rescan", "Scan again"),
+        ] {
+            prompt.options.push(Choice {
+                value: value.into(),
+                label: label.into(),
+                detail: String::new(),
+            });
+        }
+        prompt.selected = prompt.options.len() - 1;
+    }
 }
 fn clean(text: &str) -> String {
     text.chars()
@@ -332,7 +367,12 @@ fn draw(frame: &mut Frame, app: &App) {
     };
     if let Some(prompt) = &app.prompt {
         let desired = if prompt.kind == "choice" {
-            (prompt.options.len() as u16 * 2 + 3).min(11)
+            prompt
+                .options
+                .len()
+                .saturating_mul(2)
+                .saturating_add(3)
+                .min(11) as u16
         } else {
             7
         };
@@ -372,7 +412,11 @@ fn draw(frame: &mut Frame, app: &App) {
     let help = if app.finished.is_some() {
         "Enter / Esc  close"
     } else if app.prompt.as_ref().is_some_and(|p| p.kind == "choice") {
-        "↑ ↓ / Tab  choose     Enter  continue     Esc  cancel"
+        if area.width < 60 {
+            "↑↓ move · End last · Enter select"
+        } else {
+            "↑↓ move · PgUp/PgDn ±8 · Home/End jump · Enter select · Esc cancel"
+        }
     } else if app.prompt.is_some() {
         "Enter  continue     Ctrl+U  clear     Esc  cancel"
     } else {
@@ -477,11 +521,23 @@ fn status(frame: &mut Frame, app: &App, area: Rect, compact: bool) {
     }
 }
 fn prompt_widget(frame: &mut Frame, prompt: &Prompt, area: Rect) {
-    let block = panel(&prompt.title, VIOLET).border_style(Style::default().fg(VIOLET));
+    let mut block = panel(&prompt.title, VIOLET).border_style(Style::default().fg(VIOLET));
+    if prompt.kind == "choice" {
+        // Keep position separate from the title so a long network prompt cannot
+        // hide it. The bottom border costs no list rows on small terminals.
+        let position = if prompt.options.is_empty() {
+            0
+        } else {
+            prompt.selected + 1
+        };
+        block = block.title_bottom(
+            Line::from(format!(" {position}/{} · Home/End ", prompt.options.len())).right_aligned(),
+        );
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if prompt.kind == "choice" {
-        let detailed = inner.height >= prompt.options.len() as u16 * 2;
+        let detailed = usize::from(inner.height) >= prompt.options.len().saturating_mul(2);
         let items = prompt
             .options
             .iter()
@@ -914,12 +970,16 @@ fn snapshot(app: &App) -> io::Result<()> {
 }
 fn main() -> io::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let demo = args == ["--demo"] || args == ["--snapshot"];
+    let network_snapshot = args == ["--snapshot-networks"];
+    let demo = args == ["--demo"] || args == ["--snapshot"] || network_snapshot;
     let mut app = App::new(demo);
     if demo {
         app.demo_prompt();
     }
-    if args == ["--snapshot"] {
+    if network_snapshot {
+        app.demo_networks();
+    }
+    if args == ["--snapshot"] || network_snapshot {
         return snapshot(&app);
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -967,6 +1027,61 @@ mod tests {
             assert!(frame.contains("WPA2 Personal"));
             assert!(frame.contains("Wi-Fi security"));
         }
+    }
+    #[test]
+    fn long_network_menu_keeps_manual_and_rescan_visible_at_end() {
+        let mut app = App::new(true);
+        app.demo_networks();
+        for (w, h) in [(120, 36), (80, 24), (40, 12), (32, 10)] {
+            let frame = text(&app, w, h);
+            assert!(
+                frame.contains("Enter network manually"),
+                "manual missing at {w}x{h}"
+            );
+            assert!(
+                frame.contains("› Scan again"),
+                "selected last choice missing at {w}x{h}"
+            );
+            assert!(frame.contains("66/66"), "position missing at {w}x{h}");
+            assert!(!frame.contains("Example network 01"));
+        }
+        // Degenerate sizes may not fit text, but resizing must never panic.
+        for (w, h) in [(1, 1), (12, 4), (20, 8)] {
+            let _ = text(&app, w, h);
+        }
+    }
+    #[test]
+    fn long_menu_navigation_clamps_and_submits_actual_last_option() {
+        let mut app = App::new(true);
+        app.demo_networks();
+        let p = app.prompt.as_mut().unwrap();
+        for (key, expected) in [
+            (KeyCode::Home, 0),
+            (KeyCode::PageUp, 0),
+            (KeyCode::PageDown, 8),
+            (KeyCode::PageUp, 0),
+            (KeyCode::End, 65),
+            (KeyCode::PageDown, 65),
+            (KeyCode::Down, 65),
+        ] {
+            p.key(KeyEvent::new(key, KeyModifiers::NONE));
+            assert_eq!(p.selected, expected);
+        }
+        assert_eq!(
+            p.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Some("rescan".into()))
+        );
+        p.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(
+            p.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Some("manual".into()))
+        );
+        p.options.clear();
+        p.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(
+            p.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
     }
     #[test]
     fn passwords_never_render_in_frames() {

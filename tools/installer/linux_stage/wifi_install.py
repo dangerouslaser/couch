@@ -151,7 +151,7 @@ def customize_userdata(source, destination, network):
     Path(destination).chmod(0o600)
     security = ('    key_mgmt=NONE\n' if network['psk_hex'] is None else
                 '    key_mgmt=WPA-PSK\n    proto=RSN\n    psk=' + network['psk_hex'] + '\n')
-    data = ('network={\n    ssid=' + network['ssid_hex'] + '\n' + security + '}\n').encode()
+    data = ('network={\n    ssid=' + network['ssid_hex'] + '\n    scan_ssid=1\n' + security + '}\n').encode()
     # Only generated paths appear in debugfs commands; never interpolate SSID/password.
     with tempfile.TemporaryDirectory(prefix='couch-network-') as temporary:
         root = Path(temporary)

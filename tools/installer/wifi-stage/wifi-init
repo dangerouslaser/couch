@@ -65,17 +65,25 @@ while [ ! -d /sys/class/net/wlan0 ]; do
     $BB sleep 1; n=$((n+1))
 done
 $BB ifconfig wlan0 up || fail interface-up
+# Start one supplicant with no networks. Scans and provisioning share its PID.
+printf 'ctrl_interface=/tmp/couch-wpa\nupdate_config=0\n' > /tmp/couch-wpa_supplicant.conf
+/sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf >/dev/null 2>&1 &
+supplicant=$!
+n=0
+while [ ! -S /tmp/couch-wpa/wlan0 ]; do
+    $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
+    [ "$n" -lt 10 ] || fail supplicant-exit
+    $BB sleep 1; n=$((n+1))
+done
 step credentials
 echo ready > /tmp/couch-wifi.status
 while true; do
+    $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
     if [ -f /tmp/couch-wifi.request ] && [ -f /tmp/couch-wpa_supplicant.conf ]; then
         $BB rm -f /tmp/couch-wifi.request /tmp/couch-wifi.ip
         echo connecting > /tmp/couch-wifi.status
         step connect
-        # Provisioning is one-shot per boot; no concurrent supplicant instances.
-        /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf \
-            >/dev/null 2>&1 &
-        supplicant=$!
+        # The USB worker already reconfigured this supplicant and received OK.
         $BB udhcpc -i wlan0 -f -n -t 20 -T 3 -s /bin/couch-dhcp \
             >/dev/null 2>&1 &
         dhcp=$!

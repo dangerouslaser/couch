@@ -1,6 +1,7 @@
 //! Linux 3.18 FunctionFS probe; the private-install feature adds USB-bound TLS installation.
 #[cfg(feature = "private-install")]
 mod install;
+mod scan;
 mod wifi;
 use std::{
     fs::{File, OpenOptions},
@@ -56,7 +57,7 @@ fn request(header: &[u8; 16]) -> io::Result<(u32, u64)> {
     let length = u64::from_le_bytes(header[8..].try_into().unwrap());
     let known = matches!(
         (op, length),
-        (0, 0) | (1..=2, 1..=MAX) | (3, 1) | (4, 1..=16384) | (5, 0)
+        (0, 0) | (1..=2, 1..=MAX) | (3, 1) | (4, 1..=16384) | (5, 0) | (7, 0)
     );
     #[cfg(feature = "private-install")]
     let known = known || matches!((op, length), (6, 1..=512) | (10, 0));
@@ -198,6 +199,11 @@ fn run(root: &Path) -> io::Result<()> {
                 response(&mut output, data.len() as u64)?;
                 output.write_all(&data)?;
             }
+            7 => {
+                let data = scan::response();
+                response(&mut output, data.len() as u64)?;
+                output.write_all(&data)?;
+            }
             #[cfg(feature = "private-install")]
             6 => {
                 let mut payload = vec![0; length as usize];
@@ -256,6 +262,8 @@ mod tests {
             (3, 1, true),
             (3, 2, false),
             (4, 0, false),
+            (7, 0, true),
+            (7, 1, false),
             (6, 128, cfg!(feature = "private-install")),
             (6, 513, false),
             (10, 0, cfg!(feature = "private-install")),

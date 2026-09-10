@@ -5,7 +5,7 @@ and the optional FunctionFS benchmark. The default build is a read-only probe;
 an explicit `--installer` package contains the `private-install` service feature.
 Neither variant is a public release. No credentials are included in the RAM image.
 
-Build on Ollie using `tools/release/prepare_wifi_ramdisk.py` with explicit
+Build on Linux using `tools/release/prepare_wifi_ramdisk.py` with explicit
 `--template`, `--kernel-manifest`, `--busybox`, `--service`, `--vendor-bundle`,
 `--apk-cache`, and a new private `--output` directory. The builder verifies the
 pinned kernel, official vendor provenance, cached APK hashes, ARM ELF dependency
@@ -28,10 +28,20 @@ ephemeral MAC: this stage does not fabricate the normal runtime's CID-derived
 NVRAM record. Existing calibration partitions remain untouched, and full stock
 calibration behavior is not claimed.
 
-After USB provisioning creates `/tmp/couch-wpa_supplicant.conf` and then
-`/tmp/couch-wifi.request`, the watcher starts supplicant and DHCP once. DHCP
-publishes `/tmp/couch-wifi.ip`; `/tmp/couch-wifi.status` reports progress. The host
-reads the assigned address through USB status; it must not assume a previous
+Before reporting ready, `wifi-init` starts one supplicant with an empty RAM-only
+configuration. A capability advertised in USB status enables the host's network
+picker. USB opcode 7 requests a bounded fresh scan through separate Unix control
+and event sockets: clear cached BSS entries, drain old events, request SCAN, then
+require scan-start and scan-complete events before enumerating individual BSSes.
+The 12-second operation returns at most 64 networks and marks partial lists.
+It never scans the host computer or logs raw scan output.
+
+Provisioning atomically replaces the empty config, requests RECONFIGURE from the
+same supplicant, and creates `/tmp/couch-wifi.request` only after acknowledgement.
+The watcher then starts DHCP once. `scan_ssid=1` supports manually entered hidden
+networks, both in RAM and in the private installed Wi-Fi profile. DHCP publishes
+`/tmp/couch-wifi.ip`; `/tmp/couch-wifi.status` reports progress. The host reads the
+assigned address through USB status; it must not assume a previous
 DHCP lease or the remote's normal address. Network
 configuration, credentials, TLS material, logs, and transfer buffers remain in
 RAM. There is no setup AP, SSH dependency, or persistent network configuration.
