@@ -23,7 +23,15 @@ class DependenciesTest(unittest.TestCase):
         with zipfile.ZipFile(self.archive, 'w') as bundle:
             bundle.writestr('platform-tools/adb', self.data)
             if extra:
-                bundle.writestr(*extra)
+                name, data = extra
+                if isinstance(name, str):
+                    member = zipfile.ZipInfo()
+                    # ZipInfo's constructor normalizes host separators on Windows.
+                    # Preserve the malicious raw member name in this fixture.
+                    member.filename = name
+                else:
+                    member = name
+                bundle.writestr(member, data)
         raw = self.archive.read_bytes()
         self.metadata['platforms']['fixture'] = {
             'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(),
