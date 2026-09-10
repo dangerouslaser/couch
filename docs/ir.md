@@ -548,3 +548,16 @@ Further work should establish the actual board route, LED supply/enable and
 drive polarity, or obtain an optical positive control using the original
 Android stack. Do not call the LED defective or change unrelated GPIOs based
 solely on this result; the GPIO8-to-emitter board connection is still unproven.
+
+### Confirmed device controls after board initialization fix
+
+With kernel `ea122a39f434`, the user confirmed the LG B4 in Bryan’s Office
+responds to the physical remote controls through per-device IR assignments:
+NEC address `0x04`, command `0x02` for Volume Up (single and held repeats), and
+command `0x08` for Power toggle (both off and on from TV standby). Volume Down
+was still using webOS during its successful test, so IR Volume Down remains
+unverified. Remote sleep/wake validation is separate from TV standby.
+
+The undocked check exposed an unrelated GUI idle bug: the room-list
+`light-shown` flag prevented dimming, including underneath a TV screen. Remove
+that ordinary-view hold before continuing sleep/wake IR validation.

@@ -956,7 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Standby. Anything a person is looking at or waiting on holds
             // the panel awake and restarts the clock; otherwise it dims, then
             // powers down, on the two idle timers.
-            let hold = app.get_activity_busy() || app.get_activity_keep_awake() || app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown() || app.get_light_shown();
+            let hold = app.get_activity_busy() || app.get_activity_keep_awake() || app.get_pair_shown() || mic.recording() || app.get_setup_mode() || app.get_wifi_setup_shown() || app.get_keyboard_shown();
             let mut idle = now.saturating_sub(last_input);
             // The panel is meant to be showing something in every state but
             // Off. If the driver says it is asleep anyway - it has happened,

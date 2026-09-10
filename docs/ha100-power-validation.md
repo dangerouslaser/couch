@@ -71,3 +71,13 @@ A single snapshot cannot prove a charging trend. Record readings at meaningful
 transitions and actual physical results separately. Missing network access
 while undocked is not by itself proof of a frozen device. Complete these checks
 before removing diagnostics or replacing the already tested kernel binary.
+
+## Room-view idle regression
+
+The room device list uses `light-shown`, which remains true underneath TV and
+media screens. It must not hold the idle timer active: ordinary browsing should
+dim and sleep even when that list is open. Pairing, setup, keyboard input, voice
+recording, and activities explicitly configured to stay awake retain their holds.
+Validate on an undocked remote by opening a room, then a TV, leaving it untouched
+for the configured dim interval, and checking both panel brightness and the
+`standby: dim` log. Repeat after returning to the room list.
