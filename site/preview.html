@@ -5,9 +5,11 @@
 <script type="module">
 const send = (type, data={}) => parent.postMessage({couchPreview:type,...data},location.origin);
 try {
-  // This isolated frame emulates the remote's physical 480 × 800 framebuffer.
-  // Keep Winit and Slint at that scale; the parent scales the entire device.
+  // Emulate the remote's fixed framebuffer inside this isolated frame.
+  // Winit must use CSS size × our DPR, including on browsers whose native
+  // ResizeObserver reports physical Retina pixels independently of DPR.
   Object.defineProperty(window, 'devicePixelRatio', {value:1, configurable:true});
+  delete ResizeObserverEntry.prototype.devicePixelContentBoxSize;
   const {default:init,remote_button,state_json,documentation_screen}=await import('./wasm/couch_preview.js');
   const canvas = document.querySelector('canvas');
   canvas.width = Math.round(480 * devicePixelRatio);

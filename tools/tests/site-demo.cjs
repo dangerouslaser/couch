@@ -2,7 +2,33 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const tmp=require('node:os').tmpdir();
-(async()=>{const browser=await chromium.launch();try{
+async function verifyNativeDisplayScale() {
+ // Playwright's deviceScaleFactor emulation does not reproduce native
+ // ResizeObserver physical sizes. Set Chromium's display scale instead.
+ for (const density of [1, 1.5, 2]) {
+  const browser = await chromium.launch({args:[`--force-device-scale-factor=${density}`]});
+  try {
+   const page = await browser.newPage({viewport:null,reducedMotion:'reduce'});
+   await page.goto(process.env.SITE_URL || 'http://127.0.0.1:8098/');
+   const frame = page.frames().find(f=>f.url().includes('preview.html'));
+   await frame.waitForFunction(()=>!!window.couchDemo,{},{timeout:120000});
+   await page.waitForTimeout(300);
+   assert.equal(await page.evaluate(()=>devicePixelRatio),density,'real parent display density');
+   const framebuffer = () => frame.locator('#canvas').evaluate(c=>({width:c.width,height:c.height}));
+   assert.deepEqual(await framebuffer(),{width:480,height:800},`framebuffer at native DPR ${density}`);
+   await page.locator('#slint-demo').scrollIntoViewIfNeeded();
+   const box = await page.locator('#slint-demo').boundingBox();
+   await page.mouse.click(box.x + 200*box.width/480,box.y + 200*box.height/800);
+   await page.waitForTimeout(550);
+   assert.equal(await frame.evaluate(()=>couchDemo.state().room),0,'touch coordinates match displayed room');
+   await page.locator('[data-remote="back"]').click();
+   await page.waitForTimeout(550);
+   assert.equal(await frame.evaluate(()=>couchDemo.state().room),null);
+   assert.deepEqual(await framebuffer(),{width:480,height:800},'transitions retain framebuffer dimensions');
+  } finally { await browser.close(); }
+ }
+}
+(async()=>{await verifyNativeDisplayScale();const browser=await chromium.launch();try{
  const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[],requests=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>requests.push(r.url()));
  await page.goto(process.env.SITE_URL||'http://127.0.0.1:8098/');
