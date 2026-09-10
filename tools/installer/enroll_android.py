@@ -12,7 +12,7 @@ import sys
 
 from capture_readonly import wait_preloader
 from couch_install import (CHUNK, IDENTITY_PARTITIONS, MODEL, REPO, InstallError, digest, layout,
-                           regular, require, save_json, sync_directory)
+                           regular, require, save_json, sync_directory, identity_record)
 from mtk_session import loader_bytes, read_session, source_pin
 from mtk_usb import ExactUsbBackend
 
@@ -98,7 +98,7 @@ def image_prefix(reader, name, expected):
 
 
 def enroll(args, *, session=read_session, android=android_identity):
-    require(args.confirm_identity_saved, 'Save the Android Device ID, Wi-Fi MAC and Bluetooth MAC first')
+    saved_identity = identity_record(args.identity)
     destination = Path(args.backup_dir).absolute()
     require(not destination.exists() and not destination.is_symlink()
             and not destination.resolve().is_relative_to(REPO), 'Use a new private enrollment directory outside Git')
@@ -153,12 +153,15 @@ def enroll(args, *, session=read_session, android=android_identity):
         for name, checksum in report['backups'].items():
             require(digest(regular(destination/(name+'.img'))) == checksum == reader.hash(name),
                     'Calibration changed during enrollment')
+        save_json(destination/'android-identity.json', saved_identity)
+        identity_checksum = digest(destination/'android-identity.json')
         record = {'schema': 1, 'cid': binding['cid'], 'capacity': observed['capacity'],
                   'partitions': partitions, 'identity_sha256': report['backups'],
                   'source': 'first-stock-android-enrollment', 'prior_baseline': False,
                   'identity_decoded': False, 'normal_os_verified': False,
                   'model_evidence': 'official-stock-boot-and-odmdtbo-prefixes-and-fixed-partition-boundaries',
                   'android_serial_sha256': binding['android_serial_sha256'],
+                  'android_identity_record_sha256': identity_checksum,
                   'official_archive_sha256': json.loads(PIN.read_text())['sha256']}
         save_json(destination/'enrollment-journal.json', {'schema': 1, 'complete': False,
                   'originals': originals, 'identity_sha256': report['backups']})
@@ -169,6 +172,7 @@ def enroll(args, *, session=read_session, android=android_identity):
     save_json(destination/'baseline.json', record)
     save_json(destination/'enrollment-journal.json', {'schema': 1, 'complete': True,
               'usb_cleanup_verified': True, 'originals': originals, 'identity_sha256': report['backups'],
+              'android_identity_record_sha256': identity_checksum,
               'baseline_sha256': digest(destination/'baseline.json')})
     sync_directory(destination)
     print('First enrollment captured and independently verified. No flash writes or reboot requested.')
@@ -177,13 +181,12 @@ def enroll(args, *, session=read_session, android=android_identity):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('official-inputs', 'checkout', 'loader', 'backup-dir', 'lock-dir'):
+    for name in ('official-inputs', 'checkout', 'loader', 'backup-dir', 'lock-dir', 'identity'):
         parser.add_argument('--'+name, type=Path, required=True)
     for name in ('loader-sha256', 'serial', 'ports'):
         parser.add_argument('--'+name, required=True)
     parser.add_argument('--bus', type=int, required=True)
     parser.add_argument('--timeout', type=float, default=120)
-    parser.add_argument('--confirm-identity-saved', action='store_true')
     try:
         enroll(parser.parse_args())
     except (InstallError, ValueError, OSError, RuntimeError) as error:

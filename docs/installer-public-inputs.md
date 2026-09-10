@@ -136,15 +136,17 @@ that must be read from the actual device. `--bootstrap-only` skips runtime
 extraction for an enrollment-only check.
 
 `tools/installer/enroll_android.py` adds a read-only first-capture entry point.
-It requires the owner to save the three Android identity values, an explicitly
-authorized ADB serial and USB bus/port, the owner-side inputs, and a reviewed
+It requires `--identity PRIVATE_IDENTITY_JSON` containing the recorded Android
+`device_id`, `wifi_mac` and `bluetooth_mac` values, an explicitly authorized ADB serial and USB bus/port, the owner-side inputs, and a reviewed
 mtkclient checkout/download-agent pin. It first binds canonical Android CID to
 the selected physical USB device. After a manual restart into preloader, the
 existing read-only adapter checks both GPT copies and fixed CID encoding.
 Enrollment then requires official boot/odmdtbo prefixes and the official static
 partition offsets before capturing calibration, boot, recovery and odmdtbo.
-Every original is independently reread, and usable baseline publication waits
-for USB cleanup. It exposes no partition writer and sends no reboot request.
+The identity record is validated before USB access and copied into the private
+enrollment directory; its hash is bound into the baseline and completed journal.
+These are owner-recorded values, not decoded calibration fields. Every original
+is independently reread, and usable baseline publication waits for USB cleanup. It exposes no partition writer and sends no reboot request.
 
 The resulting baseline is labeled `first-stock-android-enrollment`, with
 `prior_baseline: false` and opaque, undecoded identity preservation. It is not
