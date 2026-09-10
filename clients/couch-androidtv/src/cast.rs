@@ -27,6 +27,10 @@ const STALE: Duration = Duration::from_secs(10);
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Status {
     pub connected: bool,
+    /// False while awaiting the first authoritative media observation for an
+    /// active transport. True with no media means idle, unavailable, or expired.
+    #[serde(default)]
+    pub media_status_known: bool,
     pub app_name: Option<String>,
     pub now_playing: Option<NowPlaying>,
 }
@@ -177,7 +181,11 @@ impl State {
                 self.clear_media();
                 self.retired.clear();
                 self.app = app;
+                self.status.media_status_known = self.app.is_none();
                 return Ok(self.app.is_some());
+            }
+            if self.app.is_none() {
+                self.status.media_status_known = true;
             }
         } else if namespace == MEDIA
             && self.app.as_ref().is_some_and(|a| a.transport == source)
@@ -185,6 +193,7 @@ impl State {
         {
             let statuses = value["status"].as_array().ok_or(Error::Protocol)?;
             if statuses.is_empty() {
+                self.status.media_status_known = true;
                 if let Some(old) = self.status.now_playing.as_ref() {
                     self.retired.push(old.session_id);
                     if self.retired.len() > 8 {
@@ -228,6 +237,7 @@ impl State {
                 self.clear_media();
             }
             if status["playerState"] == "IDLE" {
+                self.status.media_status_known = true;
                 self.retired.push(id);
                 if self.retired.len() > 8 {
                     self.retired.remove(0);
@@ -280,6 +290,7 @@ impl State {
                 self.item = item;
             }
             self.status.now_playing = Some(next);
+            self.status.media_status_known = true;
             self.updated = Some(now);
         }
         Ok(false)
@@ -743,6 +754,77 @@ mod tests {
         assert!(next.title.is_empty());
         assert!(next.duration.is_none());
         assert!(next.artwork_url.is_none());
+    }
+    #[test]
+    fn media_readiness_distinguishes_loading_from_authoritative_empty_status() {
+        let now = Instant::now();
+        let mut state = State::default();
+        assert!(!state.snapshot(now).media_status_known);
+        state
+            .receive(
+                "receiver-0",
+                RECEIVER,
+                &receiver("transport-a", "session-a"),
+                now,
+            )
+            .unwrap();
+        assert!(!state.snapshot(now).media_status_known);
+        state.receive("transport-a", MEDIA, &media(1), now).unwrap();
+        assert!(state.snapshot(now).media_status_known);
+        assert!(state.snapshot(now + STALE).media_status_known);
+        assert!(state.snapshot(now + STALE).now_playing.is_none());
+        state
+            .receive(
+                "receiver-0",
+                RECEIVER,
+                &receiver("transport-b", "session-b"),
+                now,
+            )
+            .unwrap();
+        assert!(!state.snapshot(now).media_status_known);
+        // A late report from the previous transport cannot finish this load.
+        state.receive("transport-a", MEDIA, &media(1), now).unwrap();
+        assert!(!state.snapshot(now).media_status_known);
+        state
+            .receive(
+                "transport-b",
+                MEDIA,
+                &json!({"type":"MEDIA_STATUS","status":[]}),
+                now,
+            )
+            .unwrap();
+        assert!(state.snapshot(now).media_status_known);
+        assert!(state.snapshot(now).now_playing.is_none());
+        state.disconnect();
+        assert!(!state.snapshot(now).media_status_known);
+        state
+            .receive(
+                "receiver-0",
+                RECEIVER,
+                &receiver("transport-a", "session-a"),
+                now,
+            )
+            .unwrap();
+        state.receive("transport-a", MEDIA, &json!({"type":"MEDIA_STATUS","status":[{"mediaSessionId":2,"playerState":"IDLE"}]}), now).unwrap();
+        assert!(state.snapshot(now).media_status_known);
+        assert!(state.snapshot(now).now_playing.is_none());
+    }
+    #[test]
+    fn receiver_without_media_namespace_confirms_unavailable_media() {
+        let now = Instant::now();
+        for applications in [json!([]), json!([{"displayName":"Home","namespaces":[]}])] {
+            let mut state = State::default();
+            state
+                .receive(
+                    "receiver-0",
+                    RECEIVER,
+                    &json!({"type":"RECEIVER_STATUS","status":{"applications":applications}}),
+                    now,
+                )
+                .unwrap();
+            assert!(state.snapshot(now).media_status_known);
+            assert!(state.snapshot(now).now_playing.is_none());
+        }
     }
     #[test]
     fn standard_image_dimensions_prefer_landscape_over_first_poster() {
