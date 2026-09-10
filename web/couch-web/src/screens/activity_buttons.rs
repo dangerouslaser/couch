@@ -33,6 +33,7 @@ const KEYS: &[(Button, &str, &str, i32, i32)] = &[
     (Button::Yellow, "Yellow", "Y", 83, 91),
 ];
 pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
+    let ir_commands=super::device_commands::Commands::new(config);
     let config = StoredValue::new(config.clone());
     let activity = StoredValue::new(activity.clone());
     let selected = RwSignal::new(Button::Ok);
@@ -222,6 +223,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                 .get_value()
                 .resolve_integration(&d.integration)
                 .is_some_and(|i| !functions(&i).is_empty())
+                || d.effective_ir_codeset(&config.get_value()).is_some()
         })
         .map(|(r, d)| (d.id.to_string(), format!("{} · {}", r.name, d.name)))
         .collect();
@@ -264,16 +266,14 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                 <button disabled=move ||app.busy.get() on:click=move |_|save(None)>"Use activity default"</button>
                 <button disabled=move ||app.busy.get() on:click=move |_|save(Some(None))>"Do nothing"</button>
             </div>
-            <p class="dim" role="status">{move ||if app.busy.get(){"Saving mapping…".to_string()}else{discovery.get()}}</p>
+            <p class="dim" role="status">{move ||if app.busy.get(){"Saving mapping…".to_string()}else{[discovery.get(),ir_commands.status()].into_iter().filter(|s|!s.is_empty()).collect::<Vec<_>>().join(" ")}}</p>
             {move ||app.error.get().map(|e|view!{<p class="error" role="alert">{e}</p>})}
             <div class="command-results">
                 {move || {
                     let cfg=config.get_value(); let filter=device.get(); let search=query.get().to_lowercase();
                     let mut groups=Vec::new();
                     for (room,d) in cfg.devices().filter(|(_,d)|filter.is_empty()||d.id.as_str()==filter) {
-                        let Some(integration)=cfg.resolve_integration(&d.integration) else {continue};
-                        let mut choices:Vec<(String,String)>=functions(&integration).iter().map(|(id,name)|(id.to_string(),name.to_string())).collect();
-                        if !filter.is_empty(){choices.extend(dynamic.get());}
+                        let mut choices=ir_commands.choices(&cfg,d,if !filter.is_empty(){dynamic.get()}else{Vec::new()});
                         choices.retain(|(id,name)|format!("{} {} {id} {name}",room.name,d.name).to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ").contains(&search));
                         if choices.is_empty(){continue;}
                         let device_id=d.id.clone();

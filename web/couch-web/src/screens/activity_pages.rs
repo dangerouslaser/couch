@@ -4,6 +4,7 @@ use couch_model::{Action, Activity, ActivityPage, ActivityWidget, Config, Id};
 use leptos::prelude::*;
 
 pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
+    let ir_commands=super::device_commands::Commands::new(config);
     let base = StoredValue::new(activity.clone());
     let cfg = StoredValue::new(config.clone());
     let save =
@@ -26,7 +27,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                 </div>
             </div>}
         }).collect_view();
-        let picker=add_widget(app,&cfg.get_value(),&base.get_value(),index);
+        let picker=add_widget(app,&cfg.get_value(),&base.get_value(),index,ir_commands);
         view!{<section class="card custom-page-editor" aria-label=format!("Custom page {}",index+1)>
             <div class="custom-page-heading"><h3>{format!("Page {}",index+1)}</h3><div class="custom-page-actions">
                 <button class="ghost" aria-label=format!("Move page {} up",index+1) disabled={move ||app.busy.get()||index==0} on:click=move |_|{let mut a=base.get_value();a.setup.pages.swap(index,index-1);save(a);}>"↑"</button>
@@ -45,7 +46,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
         <button class="ghost" disabled={move ||app.busy.get()||base.get_value().setup.pages.len()>=8} on:click=move |_|{let mut a=base.get_value();a.setup.pages.push(ActivityPage{title:format!("Page {}",a.setup.pages.len()+1),widgets:vec![]});save(a);}>"＋ Add page"</button>
     </section>}.into_any()
 }
-fn add_widget(app: App, config: &Config, activity: &Activity, page: usize) -> AnyView {
+fn add_widget(app: App, config: &Config, activity: &Activity, page: usize, ir_commands:super::device_commands::Commands) -> AnyView {
     if activity.setup.pages[page].widgets.len() >= 6 {
         return view!{<p class="dim">"This page has 6 buttons. Add another page for more controls."</p>}.into_any();
     }
@@ -61,17 +62,9 @@ fn add_widget(app: App, config: &Config, activity: &Activity, page: usize) -> An
     );
     let command = RwSignal::new(String::new());
     let functions = move || {
-        cfg.get_value()
-            .devices()
-            .find(|(_, d)| d.id.as_str() == device.get())
-            .and_then(|(_, d)| cfg.get_value().resolve_integration(&d.integration))
-            .map(|i| {
-                couch_model::buttons::functions(&i)
-                    .iter()
-                    .map(|(id, label)| (id.to_string(), label.to_string()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        let c=cfg.get_value();
+        let rows=c.devices().find(|(_,d)|d.id.as_str()==device.get()).map(|(_,d)|ir_commands.choices(&c,d,Vec::new())).unwrap_or_default();
+        rows
     };
     let options = move || {
         functions()
@@ -84,6 +77,7 @@ fn add_widget(app: App, config: &Config, activity: &Activity, page: usize) -> An
             {config.devices().filter(|(_,d)|activity.setup.devices.contains(&d.id)).map(|(_,d)|view!{<option value=d.id.to_string()>{d.name.clone()}</option>}).collect_view()}
         </select></label>
         <label class="field"><span class="label">"Function"</span><select aria-label=format!("Button function for page {}",page+1) prop:value=move ||command.get() on:change=move |ev|command.set(event_target_value(&ev))><option value="">"Choose a function…"</option>{options}</select></label>
+        <p class="dim" role="status">{move ||ir_commands.status()}</p>
         <button class="ghost" disabled={move ||app.busy.get()||command.get().is_empty()} on:click=move |_|{
             let selected=command.get_untracked();
             let Some((_,label))=functions().into_iter().find(|f|f.0==selected) else{return};
