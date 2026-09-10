@@ -2,6 +2,7 @@ name: Installer Python and MTK runtime
 on:
   pull_request:
     paths:
+      - '.gitattributes'
       - 'tools/release/mtk_dependencies*'
       - 'tools/release/test_mtk_dependencies.py'
       - 'tools/installer/mtk_source_inventory.json'
