@@ -2,6 +2,7 @@
 //!
 //! Discovers existing RTSPS streams; it never creates/deletes globally shared
 //! camera streams. Descriptors are not video players. See docs/unifi-protect.md.
+mod pinning;
 use serde::Deserialize;
 use std::{
     fmt,
@@ -180,6 +181,24 @@ impl Client {
             key,
             agent,
         })
+    }
+    /// Explicit alternative trust: bind this HTTPS origin to the SHA-256 of the
+    /// exact leaf DER certificate approved by the operator. Replaces CA/name/time
+    /// certificate validation, but retains TLS handshake-signature verification.
+    /// Never populate this pin automatically from an unauthenticated observation.
+    pub fn new_pinned(
+        origin: &str,
+        key: ApiKey,
+        certificate_sha256: &str,
+        timeout: Duration,
+    ) -> Result<Self> {
+        let mut client = Self::new(origin, key, None, timeout)?;
+        client.agent = pinning::agent(
+            client.agent.config().clone(),
+            &client.origin,
+            certificate_sha256,
+        )?;
+        Ok(client)
     }
     /// Explicitly authorize an additional stream host (for consoles whose API
     /// hostname differs from returned LAN stream IP). Does not change API routing,

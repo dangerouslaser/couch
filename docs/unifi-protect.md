@@ -50,14 +50,30 @@ RTSPS URLs are sensitive and deliberately omitted from Debug output.
 
 ## Trust and credentials
 
-HTTPS verification is always enabled. Public trust roots are the default;
-`Client::new` accepts one explicit private CA PEM to replace roots for that client.
-The certificate must still validate for the configured console hostname/IP. No
-insecure certificate flag or plaintext authenticated API mode exists. A generic
-transport error includes TLS failures; do not work around it by disabling trust.
-Obtain a private CA through a trusted administrative channel. If the console uses
-a self-signed leaf that is not an acceptable CA anchor, provision a properly
-trusted certificate; do not assume any exported certificate will validate.
+Public trust roots and hostname verification are the default. `Client::new`
+accepts an explicit private CA PEM to replace roots for that client; the
+certificate must still validate for the configured console hostname/IP.
+
+For a console with a self-signed certificate whose SAN does not include a local
+alias, `Client::new_pinned` offers an explicit alternative trust model. Supply
+exactly 64 hexadecimal characters: SHA-256 of the leaf certificate's DER bytes.
+The pin binds **only the configured HTTPS origin (scheme, host and port)** to that
+exact certificate. It replaces CA-chain, certificate-date and hostname checks;
+it is not an additional check layered on public CA validation. TLS 1.2/1.3
+handshake signatures are still verified using the pinned certificate's public
+key. The entire handshake completes before an API key or HTTP headers are sent.
+A different certificate, even with the same name or signing CA, fails closed.
+There is no generic insecure mode or automatic trust-on-first-use fallback.
+
+Verify the fingerprint through a trusted administrative channel before enabling
+this mode. Merely observing a certificate on an untrusted connection does not
+prove its identity. Certificate renewal requires separately confirming a new pin.
+Do not populate a pin automatically from a failed connection. A public certificate
+file can be fingerprinted offline with `openssl x509 -in console.pem -outform DER |
+openssl dgst -sha256`; this does not itself establish trust. Pins and private-CA
+configuration are mutually exclusive in the example. The custom connector uses
+ureq's unversioned API, so its exact dependency version is locked and upgrades
+must run the TLS peer fixtures.
 
 Redirects and environment HTTP proxies are disabled. Requests have a configurable
 nonzero maximum of at most 30 seconds, JSON responses
@@ -83,13 +99,15 @@ locally; never paste the API key into a command or chat. Its shape is:
   "origin": "https://nvr.unifi",
   "api_key": "",
   "private_ca_pem": null,
+  "certificate_sha256": null,
   "stream_host": null,
   "camera_id": null
 }
 ```
 
 Keep mode0600. Set `private_ca_pem` to an absolute trusted certificate path if
-needed. Set `stream_host` only if the returned stream host differs, and choose
+needed, or set `certificate_sha256` only after explicitly verifying the exact
+console fingerprint. Leave both null to use ordinary public trust. Set `stream_host` only if the returned stream host differs, and choose
 `camera_id` only when ready to validate that camera's existing low-quality URL.
 The key must be authorized by this console's Integration API; cloud-account key
 availability does not itself prove local Protect access. Use the console's own
@@ -113,7 +131,8 @@ video. No NVR call was made while implementing this client.
 Run `cargo test --locked -p couch-unifi-protect` and
 `cargo clippy --locked -p couch-unifi-protect --all-targets -- -D warnings` in
 `clients/`. Local TLS peers exercise trusted/private CA behavior, rejected
-untrusted chains and wrong hostnames, API-key headers, exact routes, redirects,
+untrusted chains and wrong hostnames, matching and incorrect certificate pins,
+self-signed hostname aliases, forged handshake signatures, API-key headers, exact routes, redirects,
 status handling, response limits, camera schemas, JPEG validation, stream quality,
 explicit stream hosts and local descriptor expiry. Fixtures use generated keys
 and loopback listeners; no real camera or console is contacted.

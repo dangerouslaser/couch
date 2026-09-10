@@ -8,6 +8,7 @@ struct Config {
     origin: String,
     api_key: String,
     private_ca_pem: Option<PathBuf>,
+    certificate_sha256: Option<String>,
     stream_host: Option<String>,
     camera_id: Option<String>,
 }
@@ -40,12 +41,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             fs::read(p)
         })
         .transpose()?;
-    let mut client = Client::new(
-        &config.origin,
-        ApiKey::new(config.api_key)?,
-        ca.as_deref(),
-        Duration::from_secs(10),
-    )?;
+    if config.certificate_sha256.is_some() && ca.is_some() {
+        return Err("Choose private CA or explicit certificate pin, not both".into());
+    }
+    let key = ApiKey::new(config.api_key)?;
+    let mut client = match config.certificate_sha256 {
+        Some(pin) => Client::new_pinned(&config.origin, key, &pin, Duration::from_secs(10))?,
+        None => Client::new(&config.origin, key, ca.as_deref(), Duration::from_secs(10))?,
+    };
     if let Some(host) = config.stream_host {
         client = client.with_stream_host(&host)?;
     }

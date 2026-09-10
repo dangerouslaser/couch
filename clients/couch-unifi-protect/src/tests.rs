@@ -8,6 +8,7 @@ use std::{
 struct Peer {
     origin: String,
     ca: Vec<u8>,
+    pin: String,
     worker: Option<thread::JoinHandle<Option<String>>>,
 }
 impl Peer {
@@ -21,16 +22,58 @@ impl Peer {
         headers: &str,
         delay: Duration,
     ) -> Self {
+        Self::with_signature(
+            status,
+            content,
+            body,
+            headers,
+            delay,
+            false,
+            &rustls::version::TLS13,
+        )
+    }
+    fn with_signature(
+        status: u16,
+        content: &str,
+        body: Vec<u8>,
+        headers: &str,
+        delay: Duration,
+        forged: bool,
+        version: &'static rustls::SupportedProtocolVersion,
+    ) -> Self {
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
         let ca = certified.cert.pem().into_bytes();
-        let config = rustls::ServerConfig::builder()
+        use sha2::Digest;
+        let pin = format!("{:x}", sha2::Sha256::digest(certified.cert.der()));
+        let key = if forged {
+            rcgen::generate_simple_self_signed(vec!["localhost".into()])
+                .unwrap()
+                .key_pair
+                .serialize_der()
+        } else {
+            certified.key_pair.serialize_der()
+        };
+        #[derive(Debug)]
+        struct Resolver(Arc<rustls::sign::CertifiedKey>);
+        impl rustls::server::ResolvesServerCert for Resolver {
+            fn resolve(
+                &self,
+                _: rustls::server::ClientHello<'_>,
+            ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+                Some(self.0.clone())
+            }
+        }
+        // A different signing key deliberately simulates possession of the
+        // public pinned certificate without possession of its private key.
+        let key = rustls::crypto::ring::sign::any_supported_type(
+            &rustls::pki_types::PrivatePkcs8KeyDer::from(key).into(),
+        )
+        .unwrap();
+        let certified_key =
+            rustls::sign::CertifiedKey::new(vec![certified.cert.der().clone()], key);
+        let config = rustls::ServerConfig::builder_with_protocol_versions(&[version])
             .with_no_client_auth()
-            .with_single_cert(
-                vec![certified.cert.der().clone()],
-                rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der())
-                    .into(),
-            )
-            .unwrap();
+            .with_cert_resolver(Arc::new(Resolver(Arc::new(certified_key))));
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!(
             "https://localhost:{}",
@@ -64,6 +107,7 @@ impl Peer {
         Self {
             origin,
             ca,
+            pin,
             worker: Some(worker),
         }
     }
@@ -292,4 +336,93 @@ fn stalled_authenticated_response_obeys_request_timeout() {
     assert_eq!(client.cameras().unwrap_err(), Error::Transport);
     assert!(start.elapsed() < Duration::from_secs(1));
     p.request();
+}
+
+#[test]
+fn explicit_pin_accepts_self_signed_certificate_for_configured_alias() {
+    let p = Peer::new(200, "application/json", b"[]".to_vec(), "");
+    let client = Client::new_pinned(
+        &p.origin.replace("localhost", "127.0.0.1"),
+        ApiKey::new("fixture-secret".into()).unwrap(),
+        &p.pin,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(client.cameras().unwrap().is_empty());
+    assert!(p
+        .request()
+        .unwrap()
+        .to_lowercase()
+        .contains("x-api-key: fixture-secret\r\n"));
+}
+#[test]
+fn wrong_pin_rejects_peer_before_any_http_headers() {
+    let p = Peer::new(200, "application/json", b"[]".to_vec(), "");
+    let client = Client::new_pinned(
+        &p.origin,
+        ApiKey::new("fixture-secret".into()).unwrap(),
+        &"00".repeat(32),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(client.cameras().unwrap_err(), Error::Transport);
+    assert!(p.request().is_none());
+}
+#[test]
+fn correct_pin_does_not_accept_forged_handshake_signature() {
+    for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
+        let p = Peer::with_signature(
+            200,
+            "application/json",
+            b"[]".to_vec(),
+            "",
+            Duration::ZERO,
+            true,
+            version,
+        );
+        let client = Client::new_pinned(
+            &p.origin,
+            ApiKey::new("fixture-secret".into()).unwrap(),
+            &p.pin,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(client.cameras().unwrap_err(), Error::Transport);
+        assert!(p.request().is_none());
+    }
+}
+#[test]
+fn pinned_peer_redirect_is_not_followed() {
+    let p = Peer::new(
+        302,
+        "application/json",
+        b"[]".to_vec(),
+        "Location: https://127.0.0.1:1/stolen\r\n",
+    );
+    let client = Client::new_pinned(
+        &p.origin,
+        ApiKey::new("fixture-secret".into()).unwrap(),
+        &p.pin,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(client.cameras().unwrap_err(), Error::Status(302));
+    assert!(p
+        .request()
+        .unwrap()
+        .starts_with("GET /proxy/protect/integration/v1/cameras "));
+}
+#[test]
+fn malformed_pin_is_configuration_error() {
+    for pin in ["", "abc", &"gg".repeat(32), &"0".repeat(65)] {
+        assert!(matches!(
+            Client::new_pinned(
+                "https://localhost",
+                ApiKey::new("fixture-secret".into()).unwrap(),
+                pin,
+                Duration::from_secs(2)
+            ),
+            Err(Error::Configuration)
+        ));
+    }
 }
