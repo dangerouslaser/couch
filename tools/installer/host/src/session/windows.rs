@@ -24,8 +24,8 @@ use windows_sys::Win32::{
     Storage::FileSystem::{
         CreateDirectoryW, GetVolumeInformationW, GetVolumePathNameW, MoveFileExW,
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        MOVEFILE_WRITE_THROUGH, READ_CONTROL,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, MOVEFILE_WRITE_THROUGH, READ_CONTROL,
     },
     System::{
         SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, FILE_PERSISTENT_ACLS},
@@ -208,7 +208,9 @@ pub(super) struct DirectoryLease {
 pub(super) fn lease_directory(path: &Path) -> Result<DirectoryLease> {
     require_acl_volume(path)?;
     let file = OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL)
+        // A metadata-only handle did not block rename on the current Windows
+        // runner. Request directory read access so delete-sharing is enforced.
+        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)

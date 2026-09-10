@@ -1,5 +1,12 @@
 # Native installer host
 
+The `frontend` module communicates directly with the Ratatui terminal over its
+private inherited socket (Unix) or pipes (Windows). Prompts use increasing IDs;
+invalid, stale, cancelled, truncated or oversized replies stop the channel.
+Input buffers are zeroized and secret replies are never echoed as display state.
+The `--ui-smoke` command is an explicit device-free interface fixture. The full
+installation orchestrator remains a separate integration step.
+
 This independent Rust workspace begins the host-backend migration with complete
 owner-side official input preparation. It verifies the pinned ZIP, bounded
 full-OTA transfer lists and Brotli streams, then reads the approved files through
