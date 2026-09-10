@@ -5,6 +5,7 @@
 Couch is a Linux distribution for the Sanytron Astrion HA100 remote (ARMv7, Alpine userland).
 
 - `model/`, `clients/`, `daemon/`, `ui/`, and `web/` are separate Rust workspaces: shared configuration types, Kodi/voice/IR integrations, configuration server, Slint device GUI, and browser configuration UI respectively. Preserve their independent lockfiles.
+- `daemon/couch-system` owns runtime Wi-Fi and SSH policy through a local socket; the GUI and recovery portal are clients. See `docs/system-service.md`.
 - `initramfs/init`, `recovery/init`, and `stage2/` implement boot, rescue, and runtime setup; `stage2/www/` contains the setup portal.
 - `kernel/` holds kernel build configuration; `tools/` contains build, deployment, and diagnostic scripts.
 - `src/` contains C framebuffer utilities; `gui/` contains the LVGL implementation. Assets live in `assets/` and UI subdirectories. Consult `docs/` for subsystem details.
