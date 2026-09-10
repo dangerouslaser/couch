@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 pub fn config() -> Option<Arc<Config>> {
-    crate::config_snapshot::current().map(|s|s.config.clone())
+    crate::config_snapshot::current().map(|s| s.config.clone())
 }
 
 pub fn file(id: &str, prefix: &str) -> PathBuf {
@@ -73,6 +73,33 @@ pub fn ha_lights() -> Vec<couch_ha::Light> {
                 })
         })
         .collect()
+}
+/// Fetch all room-supported HA entities once per connection. Preserve the
+/// connection prefix because entity IDs are only unique within one server.
+pub fn ha_room_states() -> Vec<crate::lights::DeviceState> {
+    use crate::lights::DeviceState;
+    let mut result = Vec::new();
+    for id in ids(Provider::HomeAssistant) {
+        let Ok(client) = couch_ha::settings::Settings::load(&file(&id, "ha"))
+            .and_then(|settings| settings.client())
+        else {
+            continue;
+        };
+        let Ok(entities) = client.entities() else {
+            continue;
+        };
+        let mut states = Vec::new();
+        states.extend(entities.lights.into_iter().map(DeviceState::Light));
+        states.extend(entities.covers.into_iter().map(DeviceState::Cover));
+        states.extend(entities.climates.into_iter().map(DeviceState::Climate));
+        for mut state in states {
+            if !id.is_empty() {
+                state.set_id(format!("{id}/{}", state.id()));
+            }
+            result.push(state);
+        }
+    }
+    result
 }
 #[derive(Default)]
 pub struct HueFleet {

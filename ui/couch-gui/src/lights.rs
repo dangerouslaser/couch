@@ -1,7 +1,7 @@
 //! Room light controls. Network requests run on one worker, never on Slint's thread.
 use crate::{App, ChoiceItem};
-use couch_ha::{Command, Light};
-use couch_model::{DeviceKind, Id, Integration};
+use couch_ha::{Climate, Command, Cover, CoverCommand, Light};
+use couch_model::{Id, Integration};
 use slint::{Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
@@ -10,21 +10,80 @@ use std::{
     sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
+#[derive(Clone)]
+pub(crate) enum DeviceState {
+    Light(Light),
+    Cover(Cover),
+    Climate(Climate),
+}
+impl DeviceState {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Light(s) => &s.entity_id,
+            Self::Cover(s) => &s.entity_id,
+            Self::Climate(s) => &s.entity_id,
+        }
+    }
+    pub(crate) fn set_id(&mut self, id: String) {
+        match self {
+            Self::Light(s) => s.entity_id = id,
+            Self::Cover(s) => s.entity_id = id,
+            Self::Climate(s) => s.entity_id = id,
+        }
+    }
+    fn active(&self) -> Option<bool> {
+        match self {
+            Self::Light(s) => s.on,
+            Self::Cover(s) => s.state.as_deref().map(|s| s != "closed"),
+            Self::Climate(s) => s.available.then(|| s.hvac_mode.as_deref() != Some("off")),
+        }
+    }
+    fn description(&self) -> String {
+        match self {
+            Self::Light(s) => description(s),
+            Self::Cover(s) => cover_description(s),
+            Self::Climate(s) => {
+                if !s.available {
+                    return "Unavailable".into();
+                }
+                let unit = &s.temperature_unit;
+                match (s.current_temperature, s.target_temperature) {
+                    (Some(current), Some(target)) => {
+                        format!("{current} {unit} · Target {target} {unit}")
+                    }
+                    (_, Some(target)) => format!("Target {target} {unit}"),
+                    (Some(current), _) => format!(
+                        "{current} {unit} · {}",
+                        s.hvac_mode.as_deref().unwrap_or("Thermostat")
+                    ),
+                    _ => s.hvac_mode.clone().unwrap_or_else(|| "Thermostat".into()),
+                }
+            }
+        }
+    }
+}
+fn ha_domain(id: &str) -> &str {
+    crate::connections::split(id)
+        .1
+        .split_once('.')
+        .map(|(domain, _)| domain)
+        .unwrap_or("")
+}
 /// Short-lived observations speed up navigation, never authorize commands.
 #[derive(Default)]
-struct StateCache(HashMap<String, (Instant, Light)>);
+struct StateCache(HashMap<String, (Instant, DeviceState)>);
 impl StateCache {
-    fn get(&self, id: &str) -> Option<Light> {
+    fn get(&self, id: &str) -> Option<DeviceState> {
         self.0
             .get(id)
             .filter(|(at, _)| at.elapsed() < Duration::from_secs(5))
             .map(|(_, s)| s.clone())
     }
-    fn put(&mut self, state: Light) {
+    fn put(&mut self, state: DeviceState) {
         self.0
             .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(5));
         self.0
-            .insert(state.entity_id.clone(), (Instant::now(), state));
+            .insert(state.id().to_owned(), (Instant::now(), state));
     }
 }
 #[derive(Clone)]
@@ -32,7 +91,7 @@ struct Entry {
     icon: couch_model::Icon,
     name: String,
     id: String,
-    state: Option<Light>,
+    state: Option<DeviceState>,
     hue: bool,
 }
 enum Operation {
@@ -42,7 +101,7 @@ enum Operation {
 }
 enum Answer {
     List(Vec<Entry>),
-    State(Light),
+    State(DeviceState),
 }
 enum Input {
     Open(Id),
@@ -63,12 +122,13 @@ pub struct Controller {
     refreshing: bool,
     last_refresh: Instant,
     brightness_pending: VecDeque<(String, u8)>,
+    position_targets: HashMap<String, (Instant, u8)>,
     brightness_flight: Option<(String, u8)>,
     brightness_until: Option<Instant>,
     last_brightness_send: Instant,
 }
 fn configured(room: &Id) -> Result<Vec<Entry>, String> {
-    let config=crate::connections::config().ok_or("Cannot read your rooms")?;
+    let config = crate::connections::config().ok_or("Cannot read your rooms")?;
     let room = config
         .room(room)
         .ok_or("This room was removed; return home to reload")?;
@@ -77,7 +137,9 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
         .iter()
         .filter_map(
             |d| match config.resolve_integration(&d.integration).as_ref() {
-                Some(Integration::HomeAssistant { entity_id }) if d.kind == DeviceKind::Light => {
+                Some(Integration::HomeAssistant { entity_id })
+                    if matches!(ha_domain(entity_id), "light" | "cover" | "climate") =>
+                {
                     Some(Entry {
                         name: d.name.clone(),
                         icon: d.effective_icon(),
@@ -105,9 +167,19 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
             },
         )
         .collect();
-    entries.extend(config.activities.iter().filter(|a|a.room==room.id).map(|a|Entry {
-        icon:couch_model::Icon::Tv,name:a.name.clone(),id:format!("activity:{}",a.id),state:None,hue:false,
-    }));
+    entries.extend(
+        config
+            .activities
+            .iter()
+            .filter(|a| a.room == room.id)
+            .map(|a| Entry {
+                icon: couch_model::Icon::Tv,
+                name: a.name.clone(),
+                id: format!("activity:{}", a.id),
+                state: None,
+                hue: false,
+            }),
+    );
     Ok(entries)
 }
 fn toggle_command(state: &Light) -> Result<Command, String> {
@@ -117,7 +189,11 @@ fn toggle_command(state: &Light) -> Result<Command, String> {
         None => Err("This light is unavailable".into()),
     }
 }
-fn perform(room: &Id, operation: Operation, hue: &crate::connections::HueFleet) -> Result<Answer, String> {
+fn perform(
+    room: &Id,
+    operation: Operation,
+    hue: &crate::connections::HueFleet,
+) -> Result<Answer, String> {
     let mut entries = configured(room)?;
     match operation {
         Operation::List => {
@@ -125,26 +201,26 @@ fn perform(room: &Id, operation: Operation, hue: &crate::connections::HueFleet) 
                 .iter()
                 .any(|e| !e.hue && !e.id.starts_with("device:"))
             {
-                crate::connections::ha_lights()
+                crate::connections::ha_room_states()
             } else {
                 Vec::new()
             };
             let hue_states = if entries.iter().any(|e| e.hue) {
-                hue.lights().unwrap_or_default()
+                hue.lights()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(DeviceState::Light)
+                    .collect::<Vec<_>>()
             } else {
                 Vec::new()
             };
             for e in &mut entries {
                 let states = if e.hue { &hue_states } else { &ha_states };
                 let id = e.id.strip_prefix("hue:").unwrap_or(&e.id);
-                e.state = states
-                    .iter()
-                    .find(|s| s.entity_id == id)
-                    .cloned()
-                    .map(|mut s| {
-                        s.entity_id = e.id.clone();
-                        s
-                    });
+                e.state = states.iter().find(|s| s.id() == id).cloned().map(|mut s| {
+                    s.set_id(e.id.clone());
+                    s
+                });
             }
             Ok(Answer::List(entries))
         }
@@ -153,16 +229,22 @@ fn perform(room: &Id, operation: Operation, hue: &crate::connections::HueFleet) 
                 return Err("This device was removed from the room".into());
             }
             let mut state = if let Some(raw) = id.strip_prefix("hue:") {
-                hue.brightness(raw, percent).map_err(|e| e.to_string())?
+                DeviceState::Light(hue.brightness(raw, percent).map_err(|e| e.to_string())?)
             } else if id.starts_with("device:") {
                 return Err("This device does not support brightness".into());
             } else {
                 let (c, raw) = crate::connections::ha(&id)?;
-                c.command(&raw, Command::Brightness(percent))
-                    .map_err(|e| e.to_string())?;
-                c.light(&raw).map_err(|e| e.to_string())?
+                if ha_domain(&id) == "cover" {
+                    c.cover_command(&raw, CoverCommand::Position(percent))
+                        .map_err(|e| e.to_string())?;
+                    DeviceState::Cover(c.cover(&raw).map_err(|e| e.to_string())?)
+                } else {
+                    c.command(&raw, Command::Brightness(percent))
+                        .map_err(|e| e.to_string())?;
+                    DeviceState::Light(c.light(&raw).map_err(|e| e.to_string())?)
+                }
             };
-            state.entity_id = id;
+            state.set_id(id);
             Ok(Answer::State(state))
         }
         Operation::Toggle(id) => {
@@ -178,17 +260,23 @@ fn perform(room: &Id, operation: Operation, hue: &crate::connections::HueFleet) 
                     started.elapsed().as_millis(),
                     result.is_ok()
                 );
-                result?
+                DeviceState::Light(result?)
             } else if id.starts_with("device:") {
                 return Err("Controls for this device are not available yet".into());
             } else {
                 let (c, raw) = crate::connections::ha(&id)?;
-                let state = c.light(&raw).map_err(|e| e.to_string())?;
-                c.command(&raw, toggle_command(&state)?)
-                    .map_err(|e| e.to_string())?;
-                c.light(&raw).map_err(|e| e.to_string())?
+                if ha_domain(&id) == "cover" {
+                    c.cover_command(&raw, CoverCommand::Toggle)
+                        .map_err(|e| e.to_string())?;
+                    DeviceState::Cover(c.cover(&raw).map_err(|e| e.to_string())?)
+                } else {
+                    let state = c.light(&raw).map_err(|e| e.to_string())?;
+                    c.command(&raw, toggle_command(&state)?)
+                        .map_err(|e| e.to_string())?;
+                    DeviceState::Light(c.light(&raw).map_err(|e| e.to_string())?)
+                }
             };
-            state.entity_id = id;
+            state.set_id(id);
             Ok(Answer::State(state))
         }
     }
@@ -235,6 +323,7 @@ impl Controller {
             refreshing: false,
             last_refresh: Instant::now(),
             brightness_pending: VecDeque::new(),
+            position_targets: HashMap::new(),
             brightness_flight: None,
             brightness_until: None,
             last_brightness_send: Instant::now() - Duration::from_secs(1),
@@ -260,21 +349,24 @@ impl Controller {
         } else if e.id.starts_with("device:") {
             "Press OK for controls".into()
         } else {
-            e.state.as_ref().map(description).unwrap_or_else(|| {
-                if self.refreshing {
-                    "Checking status…".into()
-                } else {
-                    "Unavailable".into()
-                }
-            })
+            e.state
+                .as_ref()
+                .map(DeviceState::description)
+                .unwrap_or_else(|| {
+                    if self.refreshing {
+                        "Checking status…".into()
+                    } else {
+                        "Unavailable".into()
+                    }
+                })
         };
         ChoiceItem {
             icon: crate::icons::image(e.icon),
             title: e.name.clone().into(),
             detail: detail.into(),
             light: !e.id.starts_with("device:"),
-            active: e.state.as_ref().is_some_and(|s| s.on == Some(true)),
-            power_known: e.state.as_ref().is_some_and(|s| s.on.is_some()),
+            active: e.state.as_ref().is_some_and(|s| s.active() == Some(true)),
+            power_known: e.state.as_ref().is_some_and(|s| s.active().is_some()),
         }
     }
     fn update_rows(&self, app: &App, reset: bool) {
@@ -305,6 +397,7 @@ impl Controller {
     }
     pub fn clear_brightness(&mut self, app: &App) {
         self.brightness_pending.clear();
+        self.position_targets.clear();
         self.brightness_flight = None;
         self.brightness_until = None;
         app.set_brightness_shown(false);
@@ -313,8 +406,16 @@ impl Controller {
         let Some(entry) = self.entries.get(i) else {
             return;
         };
+        if ha_domain(&entry.id) == "climate" {
+            app.invoke_thermostat_room_adjust(
+                entry.id.as_str().into(),
+                entry.name.as_str().into(),
+                delta.signum(),
+            );
+            return;
+        }
         let Some(state) = &entry.state else {
-            app.set_light_detail("Checking this light’s status. Try again in a moment.".into());
+            app.set_light_detail("Checking this device’s status. Try again in a moment.".into());
             return;
         };
         let target = self
@@ -326,11 +427,36 @@ impl Controller {
                     .as_ref()
                     .filter(|(id, _)| id == &entry.id)
             })
-            .map(|(_, p)| *p);
-        match brightness_step(state, target, delta) {
+            .map(|(_, p)| *p)
+            .or_else(|| {
+                // Cover reports describe physical motion, not the requested endpoint.
+                // Keep quick presses relative to our last endpoint while it travels.
+                self.position_targets
+                    .get(&entry.id)
+                    .filter(|(at, _)| at.elapsed() < Duration::from_secs(10))
+                    .map(|(_, target)| *target)
+            });
+        let result = match state {
+            DeviceState::Light(s) => brightness_step(s, target, delta),
+            DeviceState::Cover(s) => cover_step(s, target, delta),
+            DeviceState::Climate(_) => return,
+        };
+        match result {
             Ok(percent) => {
                 queue_brightness(&mut self.brightness_pending, entry.id.clone(), percent);
+                if matches!(state, DeviceState::Cover(_)) {
+                    self.position_targets
+                        .insert(entry.id.clone(), (Instant::now(), percent));
+                }
                 app.set_brightness_target(entry.name.clone().into());
+                app.set_brightness_label(
+                    if matches!(state, DeviceState::Cover(_)) {
+                        "Open position"
+                    } else {
+                        "Brightness"
+                    }
+                    .into(),
+                );
                 app.set_light_brightness_percent(percent as i32);
                 app.set_feedback_enabled(true);
                 app.set_brightness_shown(true);
@@ -471,16 +597,36 @@ impl Controller {
                     let Some(e) = self.entries.get(i) else {
                         continue;
                     };
-                    if let Some(id)=e.id.strip_prefix("activity:") {
-                        app.invoke_open_activity(id.into());continue;
+                    if ha_domain(&e.id) == "climate" {
+                        let (id, name) = (e.id.clone(), e.name.clone());
+                        self.clear_brightness(app);
+                        app.invoke_open_thermostat(id.into(), name.into());
+                        continue;
+                    }
+                    if let Some(id) = e.id.strip_prefix("activity:") {
+                        app.invoke_open_activity(id.into());
+                        continue;
                     }
                     if e.id.starts_with("device:") {
-                        let cfg=crate::connections::config();
-                        let kodi=cfg.as_ref().is_some_and(|c|c.devices().find(|(_,d)|d.id.as_str()==e.id.trim_start_matches("device:")).map(|(_,d)|d).and_then(|d|c.resolve_integration(&d.integration)).is_some_and(|i|matches!(i,Integration::Kodi{..})));
-                        if kodi {app.invoke_open_activity(e.id.as_str().into());continue;}
-                        if let Some(connection) = cfg.as_ref().and_then(|c| tv_connection(c, e.id.trim_start_matches("device:"))) {
+                        let cfg = crate::connections::config();
+                        let kodi = cfg.as_ref().is_some_and(|c| {
+                            c.devices()
+                                .find(|(_, d)| d.id.as_str() == e.id.trim_start_matches("device:"))
+                                .map(|(_, d)| d)
+                                .and_then(|d| c.resolve_integration(&d.integration))
+                                .is_some_and(|i| matches!(i, Integration::Kodi { .. }))
+                        });
+                        if kodi {
+                            app.invoke_open_activity(e.id.as_str().into());
+                            continue;
+                        }
+                        if let Some(connection) = cfg
+                            .as_ref()
+                            .and_then(|c| tv_connection(c, e.id.trim_start_matches("device:")))
+                        {
                             app.set_active_activity("".into());
-                            app.invoke_open_tv(connection.as_str().into(),e.name.as_str().into());continue;
+                            app.invoke_open_tv(connection.as_str().into(), e.name.as_str().into());
+                            continue;
                         }
                         app.set_light_detail(
                             "Controls for this device are not available yet.".into(),
@@ -488,6 +634,7 @@ impl Controller {
                         continue;
                     }
                     let id = e.id.clone();
+                    self.position_targets.remove(&id);
                     let generation = self.generation + 1;
                     if self
                         .tx
@@ -534,7 +681,7 @@ impl Controller {
                 Ok(Answer::State(s)) => {
                     self.cache.put(s.clone());
                     for e in &mut self.entries {
-                        if e.id == s.entity_id {
+                        if e.id == s.id() {
                             e.state = Some(s.clone());
                         }
                     }
@@ -543,6 +690,7 @@ impl Controller {
                 }
                 Err(error) => {
                     if let Some((id, _)) = brightness {
+                        self.position_targets.remove(&id);
                         self.brightness_pending
                             .retain(|(pending, _)| pending != &id);
                         app.set_brightness_shown(false);
@@ -594,6 +742,31 @@ fn brightness_step(light: &Light, target: Option<u8>, delta: i32) -> Result<u8, 
         .ok_or("Checking brightness. Try again in a moment.")?;
     Ok((current as i32 + delta.clamp(-100, 100)).clamp(0, 100) as u8)
 }
+fn cover_step(cover: &Cover, target: Option<u8>, delta: i32) -> Result<u8, &'static str> {
+    if cover.state.is_none() {
+        return Err("This blind is unavailable.");
+    }
+    if !cover.can_set_position {
+        return Err("This blind does not support position control.");
+    }
+    let current = target
+        .or(cover.position_percent)
+        .ok_or("This blind has not reported its position.")?;
+    Ok((current as i32 + delta.clamp(-100, 100)).clamp(0, 100) as u8)
+}
+fn cover_description(cover: &Cover) -> String {
+    let text = match cover.state.as_deref() {
+        Some("open") => "Open",
+        Some("closed") => "Closed",
+        Some("opening") => "Opening",
+        Some("closing") => "Closing",
+        _ => return "Unavailable".into(),
+    };
+    match cover.position_percent {
+        Some(position) => format!("{text} · {position}% open"),
+        None => text.into(),
+    }
+}
 fn description(light: &Light) -> String {
     match light.on {
         None => "Unavailable".into(),
@@ -617,7 +790,11 @@ fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String
     };
     match &device.integration {
         Integration::Connection { connection_id, .. } => Some(connection_id.to_string()),
-        _ => config.connections.iter().find(|c| c.provider == provider).map(|c| c.id.to_string()),
+        _ => config
+            .connections
+            .iter()
+            .find(|c| c.provider == provider)
+            .map(|c| c.id.to_string()),
     }
 }
 #[cfg(test)]
@@ -626,8 +803,8 @@ mod tests {
     #[test]
     fn selected_ir_device_keeps_per_device_target() {
         let config:couch_model::Config=serde_json::from_value(serde_json::json!({"schema_version":1,"connections":[{"id":"ir","name":"IR","provider":{"kind":"ir"}}],"rooms":[{"id":"r","name":"Room","devices":[{"id":"tv-a","name":"A","kind":"tv","integration":{"via":"connection","connection_id":"ir","resource_id":"a"}},{"id":"tv-b","name":"B","kind":"tv","integration":{"via":"connection","connection_id":"ir","resource_id":"b"}}]}]})).unwrap();
-        assert_eq!(tv_connection(&config,"tv-a").as_deref(),Some("ir:tv-a"));
-        assert_eq!(tv_connection(&config,"tv-b").as_deref(),Some("ir:tv-b"));
+        assert_eq!(tv_connection(&config, "tv-a").as_deref(), Some("ir:tv-a"));
+        assert_eq!(tv_connection(&config, "tv-b").as_deref(), Some("ir:tv-b"));
     }
     #[test]
     fn selected_apple_tv_uses_its_own_connection() {
@@ -712,16 +889,67 @@ mod tests {
         state.on = None;
         assert!(toggle_command(&state).is_err());
     }
+    fn blind() -> Cover {
+        Cover {
+            entity_id: "cover.office".into(),
+            name: "Office".into(),
+            state: Some("open".into()),
+            position_percent: Some(50),
+            can_open: true,
+            can_close: true,
+            can_set_position: true,
+            can_stop: true,
+        }
+    }
+    #[test]
+    fn blind_steps_use_latest_target_without_inventing_unknown_position() {
+        let mut cover = blind();
+        assert_eq!(cover_step(&cover, None, 5), Ok(55));
+        assert_eq!(cover_step(&cover, Some(55), 5), Ok(60));
+        assert_eq!(cover_step(&cover, Some(98), 5), Ok(100));
+        assert_eq!(cover_step(&cover, Some(2), -5), Ok(0));
+        cover.position_percent = None;
+        assert!(cover_step(&cover, None, 5).is_err());
+        cover.state = None;
+        assert!(cover_step(&cover, Some(50), 5).is_err());
+        cover.state = Some("open".into());
+        cover.can_set_position = false;
+        assert!(cover_step(&cover, Some(50), 5).is_err());
+    }
+    #[test]
+    fn blind_status_describes_motion_and_open_percentage() {
+        let mut cover = blind();
+        assert_eq!(cover_description(&cover), "Open · 50% open");
+        cover.state = Some("closing".into());
+        assert_eq!(cover_description(&cover), "Closing · 50% open");
+        cover.state = None;
+        assert_eq!(cover_description(&cover), "Unavailable");
+    }
+    #[test]
+    fn scoped_ha_entities_keep_domains_and_separate_state_caches() {
+        assert_eq!(ha_domain("upstairs/climate.office"), "climate");
+        assert_eq!(ha_domain("cover.office"), "cover");
+        let mut cache = StateCache::default();
+        let mut a = DeviceState::Cover(blind());
+        a.set_id("a/cover.office".into());
+        let mut b = DeviceState::Cover(blind());
+        b.set_id("b/cover.office".into());
+        cache.put(a);
+        cache.put(b);
+        assert!(cache.get("a/cover.office").is_some());
+        assert!(cache.get("b/cover.office").is_some());
+        assert!(cache.get("cover.office").is_none());
+    }
     #[test]
     fn navigation_cache_expires() {
         let mut c = StateCache::default();
-        c.put(Light {
+        c.put(DeviceState::Light(Light {
             entity_id: "light.test".into(),
             name: "Test".into(),
             on: Some(true),
             brightness_percent: None,
             dimmable: true,
-        });
+        }));
         assert!(c.get("light.test").is_some());
         c.0.get_mut("light.test").unwrap().0 = Instant::now() - Duration::from_secs(6);
         assert!(c.get("light.test").is_none());
