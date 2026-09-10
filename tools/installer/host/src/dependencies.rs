@@ -155,6 +155,40 @@ fn json_receipt(root: &Path, name: &str, value: &Value) -> Result<String> {
     create(root, name, &data, false)?;
     Ok(digest(&data))
 }
+fn describe_file(path: &Path) -> Result<Blob> {
+    let file = crate::regular(path)?;
+    let size = file.metadata()?.len();
+    ensure!(size <= MAX_FILE, "dependency file exceeds bound");
+    let mut reader = file.take(size + 1);
+    let mut hash = Sha256::new();
+    let mut count = 0;
+    let mut buffer = [0; 65536];
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        hash.update(&buffer[..n]);
+    }
+    ensure!(count == size, "dependency file changed while verifying");
+    Ok(Blob {
+        size,
+        sha256: format!("{:x}", hash.finalize()),
+    })
+}
+fn verified_receipt(path: &Path, expected: &str) -> Result<Value> {
+    let mut bytes = Vec::new();
+    crate::regular(path)?
+        .take(16 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 16 * 1024 * 1024 && digest(&bytes) == expected,
+        "dependency receipt changed"
+    );
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 fn file_inventory(root: &Path) -> Result<BTreeMap<String, Blob>> {
     fn visit(
         root: &Path,
@@ -170,9 +204,8 @@ fn file_inventory(root: &Path) -> Result<BTreeMap<String, Blob>> {
                 visit(root, &entry.path(), files, total)?;
             } else {
                 ensure!(kind.is_file(), "dependency special file refused");
-                let size = entry.metadata()?.len();
-                ensure!(size <= MAX_FILE, "dependency file exceeds bound");
-                *total += size;
+                let blob = describe_file(&entry.path())?;
+                *total += blob.size;
                 ensure!(
                     *total <= MAX_TOTAL && files.len() < MAX_MEMBERS,
                     "dependency tree exceeds bound"
@@ -184,13 +217,7 @@ fn file_inventory(root: &Path) -> Result<BTreeMap<String, Blob>> {
                     .context("non-UTF8 dependency path")?
                     .replace('\\', "/");
                 safe_name(&name)?;
-                files.insert(
-                    name,
-                    Blob {
-                        size,
-                        sha256: crate::hash_file(&entry.path())?,
-                    },
-                );
+                files.insert(name, blob);
             }
         }
         Ok(())
@@ -411,6 +438,7 @@ fn zip_files(bytes: &[u8], mut consume: impl FnMut(&str, &[u8], bool) -> Result<
             "zip symlink refused"
         );
         let size = entry.size();
+        ensure!(size <= MAX_FILE, "zip member exceeds bound");
         total += size;
         ensure!(
             size <= MAX_FILE && total <= MAX_TOTAL,
@@ -459,6 +487,7 @@ fn unpack_mtk(
     let mut expanded = 0;
     for (index, entry) in archive.entries()?.enumerate() {
         let entry = entry?;
+        ensure!(entry.size() <= MAX_FILE, "MTK archive member exceeds bound");
         expanded += entry.size();
         ensure!(
             entry.size() <= MAX_FILE && expanded <= MAX_TOTAL && index < MAX_MEMBERS,
@@ -538,6 +567,7 @@ fn unpack_owner_da(
     let mut expanded = 0;
     for (index, entry) in archive.entries()?.enumerate() {
         let entry = entry?;
+        ensure!(entry.size() <= MAX_FILE, "MTK archive member exceeds bound");
         expanded += entry.size();
         ensure!(
             entry.size() <= MAX_FILE && expanded <= MAX_TOTAL && index < MAX_MEMBERS,
@@ -724,6 +754,7 @@ impl PreparedDependencies {
     /// Reverify the remembered receipt hashes and every regular file before a child
     /// process may use these paths. Do not reconstruct trust from an untrusted receipt.
     pub fn verify(&self) -> Result<()> {
+        let mut receipts = BTreeMap::new();
         for (root, receipt, expected, kind) in [
             (
                 &self.runtime_root,
@@ -745,11 +776,7 @@ impl PreparedDependencies {
             ),
         ] {
             let path = root.join(receipt);
-            ensure!(
-                crate::hash_file(&path)? == *expected,
-                "dependency receipt changed"
-            );
-            let value: Value = serde_json::from_reader(crate::regular(&path)?)?;
+            let value = verified_receipt(&path, expected)?;
             ensure!(
                 value["schema"] == 1 && value["kind"] == kind && value["complete"] == true,
                 "invalid dependency receipt"
@@ -762,11 +789,10 @@ impl PreparedDependencies {
                 actual == expected_files,
                 "prepared dependency files changed"
             );
+            receipts.insert(kind, value);
         }
-        let runtime: Value =
-            serde_json::from_reader(crate::regular(&self.runtime_root.join("runtime.json"))?)?;
-        let adb: Value =
-            serde_json::from_reader(crate::regular(&self.adb_root.join("receipt.json"))?)?;
+        let runtime = &receipts["couch-owner-mtk-runtime"];
+        let adb = &receipts["couch-owner-adb"];
         ensure!(
             runtime["platform"] == self.platform
                 && self.python
@@ -792,7 +818,7 @@ impl PreparedDependencies {
             "dependency paths differ from admitted receipts"
         );
         ensure!(
-            self.owner_da_sha256 == DA_SHA256 && crate::hash_file(&self.owner_da)? == DA_SHA256,
+            self.owner_da_sha256 == DA_SHA256 && describe_file(&self.owner_da)?.sha256 == DA_SHA256,
             "owner DA differs from approved pin"
         );
         Ok(())
@@ -888,13 +914,12 @@ pub fn smoke(prepared: &PreparedDependencies) -> Result<Value> {
         adb.contains("Android Debug Bridge version") && adb.contains("37.0.1"),
         "unexpected ADB version"
     );
-    let receipt: Value =
-        serde_json::from_reader(crate::regular(&prepared.runtime_root.join("runtime.json"))?)?;
-    let site = prepared.runtime_root.join(
-        receipt["site_packages"]
-            .as_str()
-            .context("missing site packages")?,
-    );
+    let pins: MtkPins = serde_json::from_slice(MTK_PINS)?;
+    let pin = pins
+        .platforms
+        .get(&prepared.platform)
+        .context("unsupported runtime platform")?;
+    let site = prepared.runtime_root.join(&pin.site_packages);
     let code = r#"import ctypes,json,pathlib,sys
 sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[2])
 import usb.core,serial,colorama,Crypto.Cipher.AES,Cryptodome.Cipher.AES,libusb_package
@@ -968,6 +993,20 @@ mod tests {
     }
     fn no_progress(_: &str, _: u64, _: u64) -> Result<()> {
         Ok(())
+    }
+    #[test]
+    fn receipt_parser_uses_only_authenticated_snapshot_and_file_reads_are_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("receipt.json");
+        let bytes = br#"{"fixture":"original"}"#;
+        fs::write(&path, bytes).unwrap();
+        let admitted = verified_receipt(&path, &digest(bytes)).unwrap();
+        fs::write(&path, br#"{"fixture":"swapped"}"#).unwrap();
+        assert_eq!(admitted["fixture"], "original");
+        assert!(verified_receipt(&path, &digest(bytes)).is_err());
+        let large = root.path().join("too-large");
+        File::create(&large).unwrap().set_len(MAX_FILE + 1).unwrap();
+        assert!(describe_file(&large).is_err());
     }
     #[test]
     fn compiled_pins_cover_all_hosts_and_exact_source_inventory() {
