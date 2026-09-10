@@ -666,11 +666,17 @@ impl Worker {
     fn start(args: &[String]) -> io::Result<Self> {
         let mut python = None;
         let mut backend = None;
+        let mut native_backend = None;
+        let mut native_smoke = false;
         let mut forwarded = Vec::new();
         let mut i = 0;
         while i < args.len() {
             let name = &args[i];
             i += 1;
+            if name == "--ui-smoke" {
+                native_smoke = true;
+                continue;
+            }
             let value = args
                 .get(i)
                 .ok_or_else(|| io::Error::other("Missing argument value"))?;
@@ -678,6 +684,7 @@ impl Worker {
             match name.as_str() {
                 "--python" => python = Some(value.clone()),
                 "--backend" => backend = Some(value.clone()),
+                "--native-backend" => native_backend = Some(value.clone()),
                 "--config" | "--wifi-retry-from" | "--wifi-restore-from" => {
                     forwarded.push(name.clone());
                     forwarded.push(value.clone());
@@ -693,10 +700,14 @@ impl Worker {
         let socket_fd = child_socket.as_raw_fd();
         #[cfg(target_os = "linux")]
         let parent_pid = std::process::id() as libc::pid_t;
-        let mut command = Command::new(python.ok_or_else(|| io::Error::other("Missing --python"))?);
+        if native_smoke && native_backend.is_none() {
+            return Err(io::Error::other("--ui-smoke requires --native-backend"));
+        }
+        let mut command = backend_command(python, backend, native_backend)?;
+        if native_smoke {
+            command.arg("--ui-smoke");
+        }
         command
-            .arg("-B")
-            .arg(backend.ok_or_else(|| io::Error::other("Missing --backend"))?)
             .args(forwarded)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -826,6 +837,23 @@ impl Worker {
         unsafe {
             windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(1, self.child.id());
         }
+    }
+}
+fn backend_command(
+    python: Option<String>,
+    backend: Option<String>,
+    native: Option<String>,
+) -> io::Result<Command> {
+    match (python, backend, native) {
+        (None, None, Some(executable)) => Ok(Command::new(executable)),
+        (Some(python), Some(backend), None) => {
+            let mut command = Command::new(python);
+            command.arg("-B").arg(backend);
+            Ok(command)
+        }
+        _ => Err(io::Error::other(
+            "Use --native-backend, or both --python and --backend",
+        )),
     }
 }
 impl Drop for Worker {
@@ -1007,6 +1035,72 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires COUCH_NATIVE_HOST_TEST built from the host workspace"]
+    fn native_private_channel_roundtrip_and_cancel() {
+        let executable = std::env::var("COUCH_NATIVE_HOST_TEST").expect("native host fixture path");
+        for cancel in [false, true] {
+            let mut worker = Worker::start(&[
+                "--native-backend".into(),
+                executable.clone(),
+                "--ui-smoke".into(),
+            ])
+            .unwrap();
+            let mut prompts = 0;
+            let mut finished = false;
+            for _ in 0..12 {
+                let event = worker.messages.recv_timeout(Duration::from_secs(5));
+                if cancel && prompts == 1 && event.is_err() {
+                    break;
+                }
+                match event.unwrap().unwrap() {
+                    Message::Prompt { id, kind, .. } => {
+                        prompts += 1;
+                        if prompts == 1 {
+                            assert_eq!(kind, "choice");
+                            worker.reply(id, (!cancel).then(|| "0".into())).unwrap();
+                        } else {
+                            assert_eq!(kind, "password");
+                            worker
+                                .reply(id, Some("fixture-private-input".into()))
+                                .unwrap();
+                        }
+                    }
+                    Message::State {
+                        detail,
+                        action,
+                        result,
+                        ..
+                    } => {
+                        assert!(
+                            !format!("{detail}{action}{result}").contains("fixture-private-input")
+                        );
+                    }
+                    Message::Finished { code } => {
+                        assert_eq!(code, 0);
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            assert_eq!(finished, !cancel);
+            assert_eq!(prompts, if cancel { 1 } else { 2 });
+            assert_eq!(worker.child.wait().unwrap().success(), !cancel);
+        }
+    }
+    #[test]
+    fn native_backend_is_exclusive_and_has_no_python_arguments() {
+        let command = super::backend_command(None, None, Some("native-host".into())).unwrap();
+        assert_eq!(command.get_program(), "native-host");
+        assert_eq!(command.get_args().count(), 0);
+        assert!(
+            super::backend_command(Some("python".into()), None, Some("native".into())).is_err()
+        );
+        assert!(
+            super::backend_command(None, Some("script".into()), Some("native".into())).is_err()
+        );
+        assert!(super::backend_command(None, None, None).is_err());
+    }
     use super::*;
     fn text(app: &App, width: u16, height: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
