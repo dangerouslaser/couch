@@ -38,9 +38,18 @@ legacy download agent requests a watchdog restart after verified bootstrap.
 If the stage has not appeared, the user may keep waiting without repeating
 backups, or stop and retain originals.
 
-Once the RAM stage is available, enter the network name and choose WPA2 Personal
-or an open network. Password entry preserves spaces and never enters status or
-log output. Network credentials and ephemeral TLS material are provisioned over
+Once the RAM stage is available, choose from Wi-Fi networks scanned by the
+remote, then enter the password yourself. The list includes security and signal
+strength, with **Scan again** and **Enter network manually / hidden network**.
+Use arrow keys, Page Up/Down and Home/End to navigate long lists. The native layout can be previewed without device access using `couch-installer-tui --snapshot-networks`. Older stages or
+unavailable/empty scans retain manual entry. A broken USB scan response stops the
+session instead of risking misaligned later commands. Only WPA2 Personal and
+open networks are supported; unsupported security is identified explicitly.
+
+SSID bytes are kept separately from safely escaped labels, including spaces and
+non-UTF-8 names. Password entry preserves spaces, rejects an echoed fallback and
+never enters status or log output. Directed scanning supports hidden names in
+both the RAM connection and the installed profile. Network credentials and ephemeral TLS material are provisioned over
 USB; authenticated TLS carries backups and OS data. The host also inserts the
 selected network into the new OS image for first boot.
 

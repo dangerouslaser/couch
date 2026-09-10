@@ -218,3 +218,25 @@ originals, and still requires the durable `backups_complete` ACK before writing.
 The host makes and verifies new sparse/reflink copies of the saved originals;
 it never backs up the partially overwritten userdata as Android. This is an
 operator-started new boot and transaction, not automatic in-session retry.
+
+## Remote Wi-Fi discovery
+
+USB status (opcode 5) advertises `"scan": true` when opcode 7, length zero, is
+available. Hosts must check this capability before using it: older stages reject
+unknown operations and must retain manual SSID entry. Scan is USB-only and is
+unavailable once credentials have been provisioned; authenticated TLS does not
+expose the operation.
+
+The normal CBR1 response contains at most 16 KiB of JSON:
+`{"status":"ok","networks":[{"ssid_hex":"6578616d706c65","security":"wpa2","dbm":-45}],"truncated":false}`.
+Security values are `wpa2`, `open`, `enterprise`, `wpa3`, `wep`, and `unsupported`;
+only the first two can be selected for provisioning. Results preserve SSID bytes,
+deduplicate by bytes/security, and order by strongest signal. Hidden empty SSIDs
+are omitted. A completed scan failure returns `status: "unavailable"` and an empty
+list, allowing rescan/manual entry. Invalid, incomplete or timed-out USB frames
+stop the host session; they must not be treated as a clean fallback response.
+
+The stage uses [wpa_supplicant's control interface](https://w1.fi/wpa_supplicant/devel/ctrl_iface_page.html),
+with separate command/event sockets, a 12-second absolute scan deadline, bounded
+datagrams and BSS enumeration to avoid truncated SCAN_RESULTS tables. No new
+external CLI is packaged: the existing supplicant provides the control socket.

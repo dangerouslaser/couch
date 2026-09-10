@@ -13,6 +13,28 @@ import wifi_install as install
 
 
 class WifiInstallTests(unittest.TestCase):
+    def test_selected_raw_ssid_and_directed_scan_persist_in_private_userdata(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, destination = root/'source', root/'private'
+            source.write_bytes(b'filesystem fixture')
+            captured = []
+            def command(argv, **kwargs):
+                if '-f' in argv:
+                    config = Path(argv[argv.index('-f') + 1]).parent/'networks.conf'
+                    captured.append(config.read_bytes())
+                    self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+                    return SimpleNamespace(returncode=0)
+                return SimpleNamespace(returncode=0, stdout=captured[-1])
+            with patch.object(install.shutil, 'which', return_value='/fixture/debugfs'), \
+                    patch.object(install, 'copy_private_image', side_effect=shutil.copyfile), \
+                    patch.object(install.subprocess, 'run', side_effect=command):
+                install.customize_userdata(source, destination, {'ssid_hex': b' hidden\xff '.hex(), 'psk_hex': None})
+            self.assertIn(b'ssid=2068696464656eff20\n', captured[0])
+            self.assertIn(b'scan_ssid=1\n', captured[0])
+            self.assertEqual(source.read_bytes(), b'filesystem fixture')
+
     def test_compaction_trims_only_checked_filesystem_tail_and_rejects_short_file(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as temporary:
@@ -179,7 +201,7 @@ class WifiInstallTests(unittest.TestCase):
             def run(argv,**kwargs):
                 seen.append(argv)
                 if argv[0]=='cp': Path(argv[-1]).write_bytes(source.read_bytes())
-                class Result: returncode=0;stdout=b'network={\n    ssid=636f756368\n    key_mgmt=WPA-PSK\n    proto=RSN\n    psk='+b'ab'*32+b'\n}\n'
+                class Result: returncode=0;stdout=b'network={\n    ssid=636f756368\n    scan_ssid=1\n    key_mgmt=WPA-PSK\n    proto=RSN\n    psk='+b'ab'*32+b'\n}\n'
                 return Result()
             with patch.object(install.shutil,'which',return_value='/usr/sbin/debugfs'),patch.object(install.subprocess,'run',run):
                 install.customize_userdata(source,root/'private.img',network)

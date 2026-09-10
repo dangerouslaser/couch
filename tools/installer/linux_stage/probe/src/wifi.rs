@@ -50,7 +50,7 @@ fn configuration(value: &Provision) -> io::Result<String> {
         "    key_mgmt=NONE\n".into()
     };
     Ok(format!(
-        "ctrl_interface=/tmp/couch-wpa\nupdate_config=0\nnetwork={{\n    ssid={}\n{security}}}\n",
+        "ctrl_interface=/tmp/couch-wpa\nupdate_config=0\nnetwork={{\n    ssid={}\n    scan_ssid=1\n{security}}}\n",
         value.ssid_hex
     ))
 }
@@ -90,13 +90,15 @@ pub fn provision(payload: &[u8]) -> io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", 8443))?;
     // Commit only fully validated credentials; config and request are on tmpfs.
     private_file("/tmp/couch-wpa_supplicant.conf.pending", conf.as_bytes())?;
-    if std::path::Path::new("/tmp/couch-wpa_supplicant.conf").exists() {
+    if active() {
         return Err(invalid("already provisioned"));
     }
     fs::rename(
         "/tmp/couch-wpa_supplicant.conf.pending",
         "/tmp/couch-wpa_supplicant.conf",
     )?;
+    // Reuse the credential-free scan supplicant; DHCP starts only after its ACK.
+    super::scan::reconfigure().map_err(|_| invalid("supplicant reconfigure failed"))?;
     private_file("/tmp/couch-wifi.request.pending", b"connect\n")?;
     fs::rename("/tmp/couch-wifi.request.pending", "/tmp/couch-wifi.request")?;
     let config = Arc::new(config);
@@ -207,7 +209,7 @@ pub fn status() -> Vec<u8> {
     } else {
         "none"
     };
-    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active()})
+    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true})
         .to_string()
         .into_bytes()
 }
@@ -235,6 +237,7 @@ mod tests {
     fn credentials_are_hex_bounded_and_injection_is_rejected() {
         let mut p = value();
         assert!(configuration(&p).unwrap().contains("ssid=636f756368"));
+        assert!(configuration(&p).unwrap().contains("scan_ssid=1\n"));
         for s in ["", "00\n}", &"ab".repeat(33)] {
             p.ssid_hex = s.into();
             assert!(configuration(&p).is_err());

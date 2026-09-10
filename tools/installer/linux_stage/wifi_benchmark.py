@@ -19,9 +19,9 @@ from benchmark import benchmark, header, read_exact, response, usb_probe
 
 
 def credentials(ssid, password):
-    encoded = ssid.encode('utf-8')
+    encoded = ssid if isinstance(ssid, bytes) else ssid.encode('utf-8')
     if not 1 <= len(encoded) <= 32:
-        raise ValueError('SSID must be 1–32 UTF-8 bytes')
+        raise ValueError('SSID must be 1–32 bytes')
     if password is None:
         psk = None
     else:

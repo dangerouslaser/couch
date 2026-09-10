@@ -77,6 +77,12 @@ def wait_stage(args, terminal, timeout=120):
 
 
 
+def network_password(terminal, security):
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', getpass.GetPassWarning)
+        return None if security == 'open' else terminal.secret(getpass.getpass)
+
+
 def network_form(terminal):
     while True:
         ssid = terminal.ask('Wi-Fi network name (SSID)', strip=False)
@@ -84,9 +90,7 @@ def network_form(terminal):
             {'value': 'wpa2', 'label': 'WPA2 Personal', 'detail': 'Password-protected home network.'},
             {'value': 'open', 'label': 'Open network', 'detail': 'No Wi-Fi password.'}])
         core.require(security in ('wpa2', 'open'), 'Choose WPA2 or open')
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', getpass.GetPassWarning)
-            password = None if security == 'open' else terminal.secret(getpass.getpass)
+        password = network_password(terminal, security)
         try:
             network = wifi.credentials(ssid, password)
         except ValueError as error:
@@ -230,7 +234,8 @@ def run_wizard(terminal, config, retry_from=None, restore_from=None):
                 terminal.stage(2, 'Checking Wi-Fi hardware...')
                 wifi.wait_ready(out,incoming)
                 terminal.stage(2, 'Wi-Fi is ready.', 'Enter the Wi-Fi network for this transfer.' if restoring else 'Enter the network you want Couch to use.')
-                network = network_form(terminal)
+                from wifi_scan import network_form as scanned_network_form
+                network = scanned_network_form(terminal, out, incoming)
                 plan,paths=install.make_plan(release,bundle,args.backup_dir,args.stage_sha256,network,
                                              run_dir/'private-image',terminal.line, skip_userdata_backup=skip_userdata,
                                              reused_backups=prior['journal']['backups'] if prior else None,
