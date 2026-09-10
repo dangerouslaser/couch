@@ -16,11 +16,10 @@
 //! [`transmit`] sends the frame once and then `repeats` more times. What it
 //! sends for the repeats is the protocol's business ([`Repeat`]): NEC sends its
 //! short ditto frame, everyone else resends the whole command. Between frames
-//! it paces to the protocol's period. One honesty note carried from the driver
-//! source: `mt_irtx`'s own `write()` sleeps ~100 ms after each transmission
-//! (see docs/ir.md), so the real cadence is at least that, and our pacing can
-//! only add to it, not tighten it. For single presses (the common case,
-//! `repeats = 0`) none of this runs.
+//! it subtracts the previous frame's nominal airtime from the protocol's
+//! start-to-start period. A driver's completion overhead can lengthen that
+//! cadence; this pacing cannot shorten a blocking write. For single presses
+//! (the common case, `repeats = 0`) none of this runs.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -197,16 +196,19 @@ where
     };
     if repeats > 0 {
         let repeat_wave = pwm::to_wave(repeat_frame, solution);
-        // Pace to the period, minus the airtime we are about to spend. The
-        // driver's own post-write sleep means this is a floor, not a ceiling.
-        let airtime_ms = (repeat_frame.duration_us() / 1000) as u64;
-        let gap = Duration::from_millis(period_ms.saturating_sub(airtime_ms as u32) as u64);
+        // write_wave blocks for the frame that just finished. Subtract that
+        // frame's airtime, not the upcoming repeat's: NEC's first frame is
+        // much longer than its ditto. Preserve microseconds when pacing.
+        let period = Duration::from_millis(u64::from(period_ms));
+        let mut previous_airtime = Duration::from_micros(u64::from(message.frame.duration_us()));
+        let repeat_airtime = Duration::from_micros(u64::from(repeat_frame.duration_us()));
         for _ in 0..repeats {
-            sleep(gap);
+            sleep(period.saturating_sub(previous_airtime));
             blaster
                 .write_wave(&repeat_wave)
                 .map_err(|e| irtx_err("write", e))?;
             frames += 1;
+            previous_airtime = repeat_airtime;
         }
     }
 
@@ -287,6 +289,39 @@ mod tests {
         assert!(f.writes[1] == f.writes[2] && f.writes[2] == f.writes[3]);
         assert!(f.writes[1].len() < f.writes[0].len());
         assert_eq!(f.sleeps.len(), 3);
+    }
+
+    #[test]
+    fn nec_first_repeat_accounts_for_the_full_frame_then_uses_ditto_airtime() {
+        let m = proto::nec(0x04, 0x08).unwrap();
+        let f = run(&m, 3, 1);
+        // NEC full frame: 67,980 us; ditto: 11,810 us. Each following
+        // frame starts 110,000 us after the previous one, before driver overhead.
+        assert_eq!(
+            f.sleeps,
+            vec![
+                Duration::from_micros(42_020),
+                Duration::from_micros(98_190),
+                Duration::from_micros(98_190),
+            ]
+        );
+        assert_eq!(f.writes.len(), 4);
+    }
+
+    #[test]
+    fn repeat_gaps_preserve_fractional_milliseconds_and_saturate() {
+        let mut m = proto::Message {
+            frame: proto::Frame {
+                carrier_hz: 38_000,
+                pattern_us: vec![1_250],
+            },
+            repeat: Repeat::Resend { period_ms: 10 },
+        };
+        assert_eq!(run(&m, 2, 1).sleeps, vec![Duration::from_micros(8_750); 2]);
+        m.repeat = Repeat::Resend { period_ms: 1 };
+        let f = run(&m, 2, 1);
+        assert_eq!(f.sleeps, vec![Duration::ZERO; 2]);
+        assert_eq!(f.writes.len(), 3);
     }
 
     #[test]
