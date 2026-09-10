@@ -10,3 +10,6 @@ ha100-irtx-waveform.patch
 ha100-irtx-diagnostics.patch
 ha100-irtx-counter.patch
 ha100-irtx-timing.patch
+ha100-irtx-output-telemetry.patch
+ha100-irtx-pad-api.patch
+ha100-board-led-init.patch

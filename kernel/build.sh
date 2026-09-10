@@ -21,6 +21,7 @@ SOURCE_COMMIT=$(git -C "$KTREE" rev-parse HEAD)
 [ -z "$(git -C "$KTREE" status --porcelain)" ] || {
     echo "commit kernel source changes before building" >&2; exit 1;
 }
+[ "$PROFILE" != normal ] || python3 kernel/source_policy.py "$KTREE"
 KIMAGE=$(docker image inspect "$KIMAGE" --format '{{.Id}}')
 KBUILD_BUILD_TIMESTAMP=$(git -C "$KTREE" show -s --format=%cD HEAD)
 export KBUILD_BUILD_TIMESTAMP

@@ -1,16 +1,14 @@
 # The from-source kernel
 
-Couch now boots a kernel we build ourselves: `3.18.79 #4`, from MediaTek's
-ALPS 3.18 sources, with the display, keypad, USB serial and WiFi working. The
-vendor's own `#7` build is kept as the known-good fallback and is the kernel
-in the recovery slot. The plan and its history are in `docs/frankenkernel.md`;
-this is the working reference.
+Couch boots a custom ARMv7 kernel built on Ollie. The current release-staging
+candidate is `ea122a39`, pinned with exact artifact hashes in
+[`release-pin.json`](release-pin.json). It restores stock board supply and LED
+pinctrl initialization; LG B4 IR volume control is confirmed while awake and USB
+docked. Unplugged standby/charging and complete installer validation remain open.
+See [candidate validation](../docs/kernel-release-candidate.md).
 
-The September 8 input/display fixes are on `couch-ha100` at `f332af05`
-(following `fc3d0e69`). The user confirmed the screen and D-pad work after
-booting the diagnostic build. See `../docs/ha100-input-display-validation.md`
-for the hardware findings and validation limits. The original `#4` status
-below describes the earlier bring-up, not a complete regression test.
+The stock kernel remains the independent recovery-slot fallback. Historical
+bring-up information below is not a current hardware validation matrix.
 
 ## Where the tree is
 
@@ -19,7 +17,7 @@ in its own git history. It lives on the build box (Ollie, `~/couch-kernel/`):
 
 ```
 ~/couch-kernel/base     the tree: parthibx24/android_kernel_wiko_k300 @ 521b3081
-                        plus our delta, committed on branch couch-ha100 (9b699dde)
+                        plus our delta, committed on branch couch-ha100 (ea122a39)
 ~/couch-kernel/donor    LCM-MTK/android_kernel_mediatek_mt6580, the tree the
                         CONSYS_6580 connectivity driver was grafted from
 ~/couch-kernel/out      build output (O=), disposable
@@ -40,7 +38,7 @@ What the delta on top of wiko_k300 is (one commit, 541 files, ~19MB):
 | `drivers/misc/mediatek/connectivity/` | replaced with the CONSYS_6580 tree from the donor: wmt core, chip detect, wlan gen2, gps. Built in, because the vendor's `.ko` blobs are pinned to Sanytron's exact build and can never load into ours |
 | `lcm/st7701s_wvga_dsi_vdo_boe_tn_tianxian/` | the panel this unit ships, adapted from wiko's `st7701s_wvga_dsi_vdo_tn_boe` |
 | `include/mt-plat/mt6580/x15cm_s90_kr/`, `mach/mt6580/x15cm_s90_kr/` | the project's cust GPIO/EINT/keypad headers, seeded from `k300` |
-| `leds/mt6580/leds.c` | the GPIO-mode LED case called `cust->data` (the value 4) as a function pointer, so the first backlight write jumped to address 4. Drive the pin with `mt_set_gpio_*` |
+| `leds/mt6580/leds.c` | stock values 2/4 select charging/button callbacks, not pins. Restored named pinctrl initialization and validated dispatch replace the incorrect early GPIO fallback |
 | `misc/mediatek/Makefile` | cameraisp gated on `MTK_IMGSENSOR`, which this config turns off |
 
 `couch-ha100.config` here is the `.config` that built `#4`: `config-stock.txt`
@@ -49,24 +47,19 @@ built in.
 
 ## IR transfer validation
 
-The reviewed Ollie base and published `couch-ha100` branch are at `9b699dde`.
-The normal profile enables `CONFIG_MTK_IRTX_PWM_SUPPORT`; guarded sent-wave
-completion replaces polling masked interrupt status. Two zero-word writes and
-one short carrier burst completed in about 2.15 ms with advancing GUI heartbeats.
-Actual optical output and target control remain unvalidated.
-
-The isolated development worktree remains available:
+The normal source checkout on Ollie now contains the tested board initialization
+fix. The isolated `irtx-worktree` remains available for reviewed experiments.
+The normal build recipe requires this baseline as an ancestor; release staging
+requires the exact pin and effective artifact/configuration hashes.
 
 ```sh
-KTREE=/home/bryan/couch-kernel/irtx-worktree \
-KOUT=/home/bryan/couch-kernel/out-irtx-normal kernel/build.sh normal
+python3 tools/release/kernel_provenance.py \
+  --boot build/couch-board-init-fixed.img \
+  --kernel-manifest build/board-init-manifest.json
 ```
 
-`build/couch-irtx-counter.img` preserves the verified motion image's DTB and
-ramdisk. Its adjacent JSON records input/output hashes; the corresponding
-`build/irtx-counter-manifest.json` records clean source, compiler and config.
-See [IR](../docs/ir.md) for the staged probes, actual results and recovery setup.
-These local build products are not an installer release.
+This verifies kernel provenance without enabling the physical installer. See
+[IR](../docs/ir.md) for current device tests and the independent recovery setup.
 
 ## Building
 
@@ -154,18 +147,15 @@ Touch is now provided by `couch_tlsc6x` with bounded report retries and no
 firmware-update path. The keypad EINT mux and production panel setup are live.
 Apply the mail patches in `patches/series` order on top of `7a0e5e8f`.
 
-The normal profile now builds the corrected PWM IR driver as a **bringup
-candidate**. The previous revision hung during a minimal transmission. The
-candidate fixes carrier-scaled sample timing, excludes the duration trailer
-from DMA, keeps carrier state per descriptor and waits for the PWM provider.
-It passes bounded controller transfers, but optical output and target control
-remain unvalidated; see [IR](../docs/ir.md).
+The normal profile includes the board pinctrl fix and guarded PWM IR driver.
+Optical LG B4 control has been validated awake/docked. Output telemetry defaults
+off; retain the exact tested binary until remaining power-state checks pass.
 
 The boot-health gate requires advancing local GUI heartbeats before clearing
 the recovery BCB. It does not protect failures before init arms the BCB.
 
 See [Slint performance](../docs/slint-performance.md) and
 [GPU experiments](../docs/gpu-acceleration.md) for current optimization work.
-Unplugged suspend, thermal/battery measurements, and full IR transmission remain
+Unplugged suspend, thermal/battery measurements, and IR following unplugged standby remain
 unvalidated. Kernel source is committed on Ollie and backed up separately; this
 repository and kernel have separate configured GitHub publishing remotes.

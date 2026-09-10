@@ -11,6 +11,8 @@ from pathlib import Path
 import struct
 import subprocess
 
+from kernel_provenance import boot_kernel, PIN
+
 from clean_stage import REPO, archive_name, build, require, secret_path
 
 RUNTIME = {
@@ -38,7 +40,8 @@ VENDOR_REQUIRED = (
 )
 BOOT_SOURCES = ('initramfs/init', 'initramfs/boot-health.sh', 'recovery/init',
                 'tools/mkcpio.py', 'tools/bootimg.py', 'tools/build.sh', 'tools/build-recovery.sh',
-                'kernel/pack.py', 'kernel/couch-ha100.config', 'src/fbcon.c', 'src/font.h', 'src/logo.h')
+                'kernel/pack.py', 'kernel/couch-ha100.config', 'kernel/release-pin.json',
+                'kernel/source_policy.py', 'tools/release/kernel_provenance.py', 'src/fbcon.c', 'src/font.h', 'src/logo.h')
 
 
 def sha(data):
@@ -129,13 +132,15 @@ def boot_inventory(root, relative, init_source):
     if init_source == 'initramfs/init':
         expected['extra/boot-health.sh'] = 'initramfs/boot-health.sh'
     mismatches = [name for name, source in expected.items() if entries.get(name) != regular(root / source)]
-    return {**describe(root, relative), 'mismatched_source_members': mismatches, 'kernel_sha256': sha(kernel), 'ramdisk_entries': len(entries),
+    promoted = (boot_kernel(data, json.loads(PIN.read_text()))
+                if init_source == 'initramfs/init' else None)
+    return {'promoted_kernel': promoted, **describe(root, relative), 'mismatched_source_members': mismatches, 'kernel_sha256': sha(kernel), 'ramdisk_entries': len(entries),
             'init_matches_current_source': entries['init'] == regular(root / init_source),
             'busybox_matches_candidate': entries['bin/busybox'] == regular(root / 'build/busybox-armv7l'),
             'status': 'candidate only; boot/kernel/DTB provenance and hardware validation required'}
 
 
-def audit(root=REPO, vendor=None, boot='build/linux-recovery.img', recovery='build/couch-recovery.img'):
+def audit(root=REPO, vendor=None, boot='build/couch-board-init-fixed.img', recovery='build/couch-recovery.img'):
     artifacts, blockers, embedded, sources = [], [], {}, []
     binaries = {}
     def add(source, destination, mode, executable=False):
@@ -233,7 +238,7 @@ def main():
     parser.add_argument('base_spec', type=Path, help='Existing clean Alpine staging spec')
     parser.add_argument('output', type=Path, help='New inventory/spec output directory')
     parser.add_argument('--vendor-dir', type=Path)
-    parser.add_argument('--boot-image', default='build/linux-recovery.img')
+    parser.add_argument('--boot-image', default='build/couch-board-init-fixed.img')
     parser.add_argument('--recovery-image', default='build/couch-recovery.img')
     args = parser.parse_args()
     require(not args.output.exists(), 'Output directory must be new')
