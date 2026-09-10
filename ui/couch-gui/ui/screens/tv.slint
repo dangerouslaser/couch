@@ -39,7 +39,7 @@ export component Television inherits Rectangle {
     in property <float> media-progress;
     in property <bool> media-has-duration;
     in property <bool> media-live;
-    property <bool> media-view: root.android-tv && root.media-active;
+    property <bool> media-view: (root.android-tv || root.apple-tv) && root.media-active;
     property <bool> streaming-tv: root.android-tv || root.apple-tv || root.infrared || root.sonos;
     in property <string> title;
     in property <string> status;
@@ -98,8 +98,8 @@ export component Television inherits Rectangle {
     }
     if root.media-view: Rectangle {x:32px;y:644px;width:parent.width - 64px;height:90px;background:transparent;
         for icon[i] in [@image-url("../../../../assets/lucide/skip-back.svg"),@image-url("../../../../assets/lucide/skip-forward.svg"),@image-url("../../../../assets/lucide/square.svg")]: IconButton {
-            x:i*82px;y:8px;width:70px;height:70px;icon:icon;
-            activate=>{root.action(i==0 ? "previous" : i==1 ? "next" : "stop");}
+            x:i*82px;y:8px;width:70px;height:70px;icon:root.apple-tv ? (i==0 ? @image-url("../../../../assets/lucide/house.svg") : i==1 ? @image-url("../../../../assets/lucide/arrow-left.svg") : @image-url("../../../../assets/lucide/power.svg")) : icon;
+            activate=>{root.action(root.apple-tv ? (i==0 ? "home" : i==1 ? "back" : "wake") : (i==0 ? "previous" : i==1 ? "next" : "stop"));}
         }
         Rectangle {x:256px;y:8px;width:parent.width - 256px;height:70px;border-radius:18px;background:Theme.surface-raised;
             Image {x:17px;y:23px;width:24px;height:24px;source:@image-url("../../../../assets/lucide/layout-grid.svg");colorize:Theme.accent;}
@@ -111,8 +111,8 @@ export component Television inherits Rectangle {
     if root.sonos: Tile {x:246px;y:514px;width:210px;height:120px;title:"Volume +";detail:"This speaker";icon:@image-url("../../../../assets/lucide/volume-2.svg");activate=>{root.action("volume-up");}}
     if root.sonos: Tile {x:24px;y:646px;width:210px;height:120px;title:"Mute";detail:"Toggle this speaker";icon:@image-url("../../../../assets/lucide/volume-x.svg");activate=>{root.action("toggle-mute");}}
     if root.sonos: Tile {x:246px;y:646px;width:210px;height:120px;title:"Refresh";detail:"Playback and volume";icon:@image-url("../../../../assets/lucide/refresh-cw.svg");activate=>{root.action("retry");}}
-    if root.apple-tv: Tile {x:24px;y:514px;width:210px;height:120px;title:"Wake";detail:"Resume Apple TV";icon:@image-url("../../../../assets/lucide/power.svg");activate=>{root.action("wake");}}
-    if root.apple-tv: Tile {x:246px;y:514px;width:210px;height:120px;title:"Apps";detail:"Installed apps";icon:@image-url("../../../../assets/lucide/layout-grid.svg");activate=>{root.action("apps");}}
+    if root.apple-tv && !root.media-view: Tile {x:24px;y:514px;width:210px;height:120px;title:"Wake";detail:"Resume Apple TV";icon:@image-url("../../../../assets/lucide/power.svg");activate=>{root.action("wake");}}
+    if root.apple-tv && !root.media-view: Tile {x:246px;y:514px;width:210px;height:120px;title:"Apps";detail:"Installed apps";icon:@image-url("../../../../assets/lucide/layout-grid.svg");activate=>{root.action("apps");}}
     if root.infrared: Tile {x:24px;y:424px;width:432px;height:120px;title:"Commands";detail:"Assigned to this device";icon:@image-url("../../../../assets/lucide/list.svg");activate=>{root.action("commands");}}
     tray := BottomTray {
         width: parent.width; height: parent.height;

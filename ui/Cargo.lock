@@ -886,6 +886,7 @@ dependencies = [
  "prost",
  "rand 0.8.8",
  "serde",
+ "serde_json",
  "sha2",
  "srp",
  "subtle",
@@ -921,6 +922,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "couch-androidtv",
+ "couch-appletv",
  "couch-control",
  "couch-denon",
  "couch-ha",
