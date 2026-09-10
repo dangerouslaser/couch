@@ -21,6 +21,7 @@ print("stock kernel:", ks, "bytes")
 PY
 
 tools/build-fbcon.sh
+python3 tools/build-busybox.py verify "${BUSYBOX_BUILD_DIR:-build/busybox-source}" --install build/busybox-armv7l
 
 rm -rf build/rec
 mkdir -p build/rec/extra
