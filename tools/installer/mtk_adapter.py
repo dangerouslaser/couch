@@ -21,6 +21,7 @@ from mtk_readonly import ConnectedMtkReader, REVIEWED_REVISION
 from mtk_session import Candidate, ReadPolicy, loader_bytes, source_pin
 from mtk_usb import ExactUsbBackend, supervised_operations
 from mtk_writer import ConnectedMtkWriter
+from stage_usb import StageUsb
 
 MAX = 1024 * 1024
 READABLE = IDENTITY_PARTITIONS | {'boot', 'recovery', 'odmdtbo'}
@@ -54,6 +55,7 @@ class Wire:
 
     def chunk(self, data):
         require(0 < len(data) <= MAX, 'RPC data exceeds bound')
+        self.send({'event': 'chunk', 'size': len(data)})
         self.outgoing.write(struct.pack('<III', len(data), len(data), 0))
         self.outgoing.write(data)
         self.outgoing.flush()
@@ -63,7 +65,11 @@ class Wire:
         require(isinstance(seconds, (int, float)) and 0 < seconds <= 900, 'Invalid operation deadline')
         self.send({'event': 'deadline', 'seconds': seconds})
         require(self.receive() == {'ack': 'deadline'}, 'Native supervisor did not arm deadline')
-        yield
+        try:
+            yield
+        finally:
+            self.send({'event': 'deadline_end'})
+            require(self.receive() == {'ack': 'deadline_end'}, 'Native supervisor did not close deadline')
 
 
 class Adapter:
@@ -74,6 +80,9 @@ class Adapter:
         self.loader = self.stage = self.binding = None
         self.written = False
         self.verified = False
+        self.boot_requested = False
+        self.stage_usb = None
+        self.selected = None
 
     def prepare(self, command):
         require(self.backend is None, 'Adapter already prepared')
@@ -94,6 +103,7 @@ class Adapter:
                 and isinstance(raw['ports'], list) and raw['ports']
                 and all(type(n) is int and 0 < n <= 255 for n in raw['ports']), 'Invalid USB topology')
         selected = Candidate(raw['bus'], raw['address'], tuple(raw['ports']), raw['vid'], raw['pid'])
+        self.selected = selected
         self.backend.claim(selected)
         require(self.backend.claimed_candidate() == selected, 'Claimed USB selection differs')
         mtk = self.backend.start_readonly(self.loader, ReadPolicy())
@@ -163,7 +173,38 @@ class Adapter:
         elif op == 'boot':
             require(set(command) == {'op'} and self.verified and self.writer is not None, 'No verified boot operation')
             self.backend.boot_after_capture()
+            self.boot_requested = True
             self.wire.send({'event': 'boot_requested'})
+        elif op == 'stage_present':
+            require(set(command) == {'op'} and self.boot_requested and self.backend is not None,
+                    'Stage discovery requires verified bootstrap')
+            with self.wire.deadline(10):
+                found = [d for d in self.backend.usb.core.find(find_all=True, idVendor=0x0e8d,
+                    idProduct=0x201c, backend=self.backend.usb_backend)
+                    if d.bus == self.selected.bus and tuple(d.port_numbers or ()) == self.selected.ports]
+            require(len(found) <= 1, 'Ambiguous stage device')
+            self.wire.send({'event': 'stage_present', 'present': bool(found)})
+        elif op == 'stage_open':
+            require(set(command) == {'op'} and self.boot_requested and self.stage_usb is None,
+                    'Stage USB not admitted or already opened')
+            if self.writer is not None:
+                self.writer.close()
+                self.writer = None
+            self.backend.close(reset=False)
+            with self.wire.deadline(40):
+                self.stage_usb = StageUsb(self.backend.usb, self.backend.usb_backend, self.selected)
+            self.wire.send({'event': 'stage_open'})
+        elif op in ('stage_status', 'stage_scan', 'stage_bind', 'stage_provision'):
+            require(set(command) == {'op', 'payload'} and self.stage_usb is not None,
+                    'Unexpected stage USB command')
+            with self.wire.deadline(60):
+                result = self.stage_usb.dispatch(op, command['payload'])
+            self.wire.send({'event': op, 'result': result})
+        elif op == 'stage_close':
+            require(set(command) == {'op'} and self.stage_usb is not None, 'No stage USB session')
+            self.stage_usb.close()
+            self.stage_usb = None
+            self.wire.send({'event': 'stage_closed'})
         elif op == 'close':
             require(set(command) == {'op'}, 'Unexpected close fields')
             self.close()
@@ -174,6 +215,9 @@ class Adapter:
         return True
 
     def close(self):
+        if self.stage_usb is not None:
+            self.stage_usb.close()
+            self.stage_usb = None
         if self.writer is not None:
             self.writer.close()
             self.writer = None

@@ -1,4 +1,5 @@
 //! Native host input preparation. No commands, device access or filesystem mounts.
+pub mod adapter;
 pub mod frontend;
 pub mod session;
 pub mod stage;
