@@ -1,13 +1,11 @@
 //! Full-screen activity controls. Provider I/O stays outside Slint.
-#[path = "activity_pages.rs"]
-mod pages;
 #[path = "activity_cache.rs"]
 mod cache;
+#[path = "activity_pages.rs"]
+mod pages;
 use crate::{App, PlayerChoice};
-use couch_kodi::{
-    playback::{Chapter, Playback},
-};
 use couch_control::Kodi;
+use couch_kodi::playback::{Chapter, Playback};
 use couch_model::{Config, Integration};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, VecModel};
@@ -21,6 +19,8 @@ use std::{
 #[derive(Clone)]
 struct Target {
     connection: String,
+    device: String,
+    config: std::sync::Arc<Config>,
     host: String,
     port: u16,
     name: String,
@@ -55,6 +55,8 @@ fn target(config: &Config, id: &str) -> Result<Target, String> {
     };
     match config.resolve_integration(&device.integration) {
         Some(Integration::Kodi { host, port }) => Ok(Target {
+            device: device.id.to_string(),
+            config: std::sync::Arc::new(config.clone()),
             connection: match &device.integration {
                 Integration::Connection { connection_id, .. } => connection_id.to_string(),
                 _ => String::new(),
@@ -114,7 +116,7 @@ fn art(p: &Playback, key: &str) -> String {
 enum Request {
     Open(Target),
     Close,
-    Command(String, Value, String),
+    Command(String, Value, String, bool),
 }
 struct Snapshot {
     playing: Option<Playback>,
@@ -124,8 +126,34 @@ enum Event {
     State(Result<Snapshot, String>),
     Done(Result<(), String>),
 }
-fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>) {
+fn kodi_ir_function(method: &str, params: &Value) -> Option<couch_model::commands::Function> {
+    use couch_model::commands::Function as F;
+    Some(match method {
+        "Input.Select" => F::Ok,
+        "Input.Up" => F::Up,
+        "Input.Down" => F::Down,
+        "Input.Left" => F::Left,
+        "Input.Right" => F::Right,
+        "Input.Back" => F::Back,
+        "Input.Home" => F::Home,
+        "Input.ContextMenu" => F::Menu,
+        "Application.SetVolume" if params["delta"].as_i64()? > 0 => F::VolumeUp,
+        "Application.SetVolume" => F::VolumeDown,
+        "Application.SetMute" => F::Mute,
+        "Player.PlayPause" => F::PlayPause,
+        "Player.Stop" => F::Stop,
+        "Player.GoTo" if params["to"] == "next" => F::Next,
+        "Player.GoTo" if params["to"] == "previous" => F::Previous,
+        _ => return None,
+    })
+}
+fn worker(
+    rx: mpsc::Receiver<(u64, Request)>,
+    tx: mpsc::SyncSender<(u64, Event)>,
+    active: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) {
     let mut client: Option<Kodi> = None;
+    let mut selected: Option<Target> = None;
     let mut generation = 0;
     let mut last = Instant::now() - Duration::from_secs(10);
     let mut known = String::new();
@@ -138,6 +166,7 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
             Ok((g, Request::Open(t))) => {
                 generation = g;
                 client = Some(kodi_client(&t).with_timeout(Duration::from_secs(2)));
+                selected = Some(t);
                 known.clear();
                 chapters = None;
                 current = None;
@@ -146,10 +175,31 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
             }
             Ok((_, Request::Close)) => {
                 client = None;
+                selected = None;
                 current = None;
             }
-            Ok((g, Request::Command(method, params, item))) if g == generation => {
-                let result = (|| {
+            Ok((g, Request::Command(method, params, item, repeat)))
+                if g == generation && active.load(std::sync::atomic::Ordering::Acquire) == g =>
+            {
+                let result = (|| -> Result<(), String> {
+                    if let (Some(target), Some(function)) =
+                        (&selected, kodi_ir_function(&method, &params))
+                    {
+                        let live = || {
+                            active.load(std::sync::atomic::Ordering::Acquire) == g
+                                && crate::connections::config()
+                                    .is_some_and(|c| *c == *target.config)
+                        };
+                        if crate::activity_buttons::try_device_ir(
+                            &target.config,
+                            &target.device,
+                            &function,
+                            repeat,
+                            &live,
+                        )? {
+                            return Ok(());
+                        }
+                    }
                     let c = client.as_ref().ok_or("Kodi is unavailable")?;
                     if method == "Input.Select" {
                         c.select().map_err(|_| "Kodi rejected OK")?;
@@ -169,8 +219,7 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
                             .map_err(|_| "Kodi rejected that command")?;
                     }
                     Ok(())
-                })()
-                .map_err(str::to_string);
+                })();
                 completed = Some(result);
                 // Refresh once after acknowledgement; never publish a pre-command snapshot afterwards.
                 last = Instant::now() - Duration::from_secs(10);
@@ -220,7 +269,10 @@ fn worker(rx: mpsc::Receiver<(u64, Request)>, tx: mpsc::SyncSender<(u64, Event)>
 }
 
 pub struct Controller {
-    input: Rc<RefCell<Vec<(String, f64)>>>,
+    input: Rc<RefCell<Vec<(String, f64, bool)>>>,
+    physical_repeat: Rc<std::cell::Cell<bool>>,
+    dispatch_repeat: bool,
+    active_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     tx: mpsc::SyncSender<(u64, Request)>,
     rx: mpsc::Receiver<(u64, Event)>,
     generation: u64,
@@ -240,18 +292,33 @@ pub struct Controller {
 impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
+        let physical_repeat = Rc::new(std::cell::Cell::new(false));
         let queue = input.clone();
-        app.on_open_activity_ready(move |id| queue.borrow_mut().push((format!("open:{id}"), 0.)));
-        let queue = input.clone();
-        app.on_player_action(move |action, value| {
-            queue.borrow_mut().push((action.into(), value as f64))
+        app.on_open_activity_ready(move |id| {
+            queue.borrow_mut().push((format!("open:{id}"), 0., false))
         });
         let queue = input.clone();
-        app.on_custom_activity_action(move |action, value| queue.borrow_mut().push((format!("custom:{action}"), value as f64)));
+        let repeat = physical_repeat.clone();
+        app.on_player_action(move |action, value| {
+            queue
+                .borrow_mut()
+                .push((action.into(), value as f64, repeat.get()))
+        });
+        let queue = input.clone();
+        app.on_custom_activity_action(move |action, value| {
+            queue
+                .borrow_mut()
+                .push((format!("custom:{action}"), value as f64, false))
+        });
         let (tx, rx) = mpsc::sync_channel(16);
         let (events, receive) = mpsc::sync_channel(4);
-        std::thread::spawn(move || worker(rx, events));
+        let active_generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_generation = active_generation.clone();
+        std::thread::spawn(move || worker(rx, events, worker_generation));
         Self {
+            physical_repeat,
+            dispatch_repeat: false,
+            active_generation,
             input,
             tx,
             rx: receive,
@@ -271,29 +338,52 @@ impl Controller {
         }
     }
     fn remember(&mut self, app: &App) {
-        if let (Some(key),Some(at)) = (self.cache_key.clone(),self.presentation_at) {
+        if let (Some(key), Some(at)) = (self.cache_key.clone(), self.presentation_at) {
             if app.get_player_shown() && !app.get_custom_activity_shown() {
-                self.cache.insert(key,at,cache::Presentation::capture(app,&self.art_key),Instant::now());
+                self.cache.insert(
+                    key,
+                    at,
+                    cache::Presentation::capture(app, &self.art_key),
+                    Instant::now(),
+                );
             }
         }
     }
-    fn forget_view(&mut self,app:&App) {
-        if let Some(key)=&self.cache_key {self.cache.remove(key);}
-        self.presentation_at=None;
+    fn forget_view(&mut self, app: &App) {
+        if let Some(key) = &self.cache_key {
+            self.cache.remove(key);
+        }
+        self.presentation_at = None;
         self.art_key.clear();
         app.set_player_fanart(slint::Image::default());
         app.set_player_logo(slint::Image::default());
-        app.set_player_has_art(false);app.set_player_has_logo(false);
+        app.set_player_has_art(false);
+        app.set_player_has_logo(false);
     }
     fn error(&mut self, app: &App, text: &str) {
         app.set_player_message(text.into());
         self.error_until = Some(Instant::now() + Duration::from_secs(4));
     }
+    pub fn physical_input(&self, repeat: bool, dispatch: impl FnOnce()) {
+        let previous = self.physical_repeat.replace(repeat);
+        dispatch();
+        self.physical_repeat.set(previous);
+    }
     fn open_pages(&mut self, app: &App, config: std::sync::Arc<Config>, id: &str) {
-        let Some(activity) = config.activities.iter().find(|a| a.id.as_str() == id).filter(|a| !a.setup.pages.is_empty()) else { return };
+        let Some(activity) = config
+            .activities
+            .iter()
+            .find(|a| a.id.as_str() == id)
+            .filter(|a| !a.setup.pages.is_empty())
+        else {
+            return;
+        };
         self.remember(app);
-        self.cache_key=None;self.presentation_at=None;
+        self.cache_key = None;
+        self.presentation_at = None;
         self.generation += 1;
+        self.active_generation
+            .store(self.generation, std::sync::atomic::Ordering::Release);
         self.busy = false;
         self.snapshot = None;
         self.target = None;
@@ -313,18 +403,21 @@ impl Controller {
         let weak = app.as_weak();
         slint::Timer::single_shot(Duration::ZERO, move || {
             if let Some(app) = weak.upgrade() {
-                if app.get_custom_activity_shown() { app.invoke_focus_player(); }
+                if app.get_custom_activity_shown() {
+                    app.invoke_focus_player();
+                }
             }
         });
     }
     fn open(&mut self, app: &App, id: &str, custom: bool) {
         self.remember(app);
-        self.cache_key=None;self.presentation_at=None;
-        app.set_active_activity(if id.starts_with("device:") {""}else{id}.into());
+        self.cache_key = None;
+        self.presentation_at = None;
+        app.set_active_activity(if id.starts_with("device:") { "" } else { id }.into());
         self.pages.close(app);
         app.set_custom_activity_available(false);
         if let Some(config) = crate::connections::config() {
-            if let Some(activity) = config.activities.iter().find(|a| a.id.as_str()==id) {
+            if let Some(activity) = config.activities.iter().find(|a| a.id.as_str() == id) {
                 app.set_custom_activity_available(!activity.setup.pages.is_empty());
                 if custom && activity.setup.custom_screen && !activity.setup.pages.is_empty() {
                     self.open_pages(app, config.clone(), id);
@@ -332,8 +425,7 @@ impl Controller {
                 }
             }
         }
-        if let Some(config) = crate::connections::config()
-        {
+        if let Some(config) = crate::connections::config() {
             let source = config
                 .activities
                 .iter()
@@ -344,29 +436,25 @@ impl Controller {
                     config.resolve_integration(&device.integration),
                     Some(Integration::WebOs | Integration::AndroidTv | Integration::AppleTv)
                 ) {
-                    let connection = match &device.integration {
-                        Integration::Connection { connection_id, .. } => connection_id.to_string(),
-                        _ => config
-                            .connections
-                            .iter()
-                            .find(|c| match config.resolve_integration(&device.integration) {
-                                Some(Integration::WebOs) => c.provider == couch_model::Provider::WebOs,
-                                Some(Integration::AndroidTv) => c.provider == couch_model::Provider::AndroidTv,
-                                Some(Integration::AppleTv) => c.provider == couch_model::Provider::AppleTv,
-                                _ => false,
-                            })
-                            .map(|c| c.id.to_string())
-                            .unwrap_or_default(),
-                    };
-                    self.generation+=1;self.snapshot=None;self.target=None;self.busy=false;
-                    let _=self.tx.try_send((self.generation,Request::Close));
+                    self.generation += 1;
+                    self.active_generation
+                        .store(self.generation, std::sync::atomic::Ordering::Release);
+                    self.snapshot = None;
+                    self.target = None;
+                    self.busy = false;
+                    let _ = self.tx.try_send((self.generation, Request::Close));
                     app.set_player_shown(false);
-                    app.invoke_open_tv(connection.as_str().into(), device.name.as_str().into());
+                    app.invoke_open_tv(
+                        format!("device:{}", device.id).into(),
+                        device.name.as_str().into(),
+                    );
                     return;
                 }
             }
         }
         self.generation += 1;
+        self.active_generation
+            .store(self.generation, std::sync::atomic::Ordering::Release);
         self.busy = false;
         self.snapshot = None;
         self.art_key.clear();
@@ -375,11 +463,13 @@ impl Controller {
         app.set_player_ready(false);
         app.set_player_connected(false);
         app.set_player_message("".into());
-        self.error_until=None;
+        self.error_until = None;
         app.set_player_title("Connecting to Kodi…".into());
         app.set_player_metadata("".into());
-        app.set_player_elapsed("".into());app.set_player_remaining("".into());
-        app.set_player_progress(0.);app.set_player_can_seek(false);
+        app.set_player_elapsed("".into());
+        app.set_player_remaining("".into());
+        app.set_player_progress(0.);
+        app.set_player_can_seek(false);
         app.set_player_fanart(slint::Image::default());
         app.set_player_logo(slint::Image::default());
         app.set_player_has_logo(false);
@@ -387,17 +477,27 @@ impl Controller {
         app.set_player_activity("Watch Kodi".into());
         app.set_player_room("".into());
         app.invoke_focus_player();
-        let result = crate::connections::config().ok_or_else(||"Cannot read configuration".into()).and_then(|c|target(&c,id));
+        let result = crate::connections::config()
+            .ok_or_else(|| "Cannot read configuration".into())
+            .and_then(|c| target(&c, id));
         match result {
             Ok(t) => {
                 app.set_player_activity(t.name.clone().into());
                 app.set_player_room(t.room.clone().into());
-                if let Some(config)=crate::config_snapshot::current() {
-                    let key=cache::Key {id:id.into(),serial:config.serial,connection:t.connection.clone(),host:t.host.clone(),port:t.port};
-                    if let Some((view,at))=self.cache.get(&key,Instant::now()) {
-                        view.restore(app);self.art_key=view.art_key;self.presentation_at=Some(at);
+                if let Some(config) = crate::config_snapshot::current() {
+                    let key = cache::Key {
+                        id: id.into(),
+                        serial: config.serial,
+                        connection: t.connection.clone(),
+                        host: t.host.clone(),
+                        port: t.port,
+                    };
+                    if let Some((view, at)) = self.cache.get(&key, Instant::now()) {
+                        view.restore(app);
+                        self.art_key = view.art_key;
+                        self.presentation_at = Some(at);
                     }
-                    self.cache_key=Some(key);
+                    self.cache_key = Some(key);
                 }
                 // Restored properties never populate snapshot: Player.* needs
                 // the new worker's authoritative playback observation.
@@ -421,8 +521,14 @@ impl Controller {
         if self.busy {
             return;
         }
-        if method.starts_with("Player.") && self.snapshot.as_ref().and_then(|s|s.playing.as_ref()).is_none() {
-            self.error(app,"Refreshing playback. Try again in a moment.");
+        if method.starts_with("Player.")
+            && self
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.playing.as_ref())
+                .is_none()
+        {
+            self.error(app, "Refreshing playback. Try again in a moment.");
             return;
         }
         let item = self
@@ -435,7 +541,7 @@ impl Controller {
             .tx
             .try_send((
                 self.generation,
-                Request::Command(method.into(), params, item),
+                Request::Command(method.into(), params, item, self.dispatch_repeat),
             ))
             .is_ok()
         {
@@ -507,28 +613,37 @@ impl Controller {
         app.invoke_focus_player();
     }
     pub fn navigation_pending(&self, app: &App) -> bool {
-        self.input.borrow().iter().any(|(action, _)| {
-            action.starts_with("open:") || action == "pages" || action == "custom:source" || (action == "back" || action == "custom:back") && app.get_player_panel() == 0
+        self.input.borrow().iter().any(|(action, _, _)| {
+            action.starts_with("open:")
+                || action == "pages"
+                || action == "custom:source"
+                || (action == "back" || action == "custom:back") && app.get_player_panel() == 0
         })
     }
     pub fn poll(&mut self, app: &App) {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
-        for (action, value) in inputs {
+        for (action, value, repeat) in inputs {
+            self.dispatch_repeat = repeat;
             if let Some(id) = action.strip_prefix("open:") {
                 self.open(app, id, true);
                 continue;
             }
-            if action=="pages" {
-                if let Some(config)=crate::connections::config() {
-                    let id=app.get_active_activity().to_string();
+            if action == "pages" {
+                if let Some(config) = crate::connections::config() {
+                    let id = app.get_active_activity().to_string();
                     self.open_pages(app, config, &id);
                 }
                 continue;
             }
-            if let Some(custom)=action.strip_prefix("custom:") {
-                if custom=="source" {let id=app.get_active_activity().to_string();self.open(app,&id,false);}
-                else if custom=="back" {app.invoke_player_action("back".into(),0.);}
-                else {self.pages.handle(app,custom,value as i32);}
+            if let Some(custom) = action.strip_prefix("custom:") {
+                if custom == "source" {
+                    let id = app.get_active_activity().to_string();
+                    self.open(app, &id, false);
+                } else if custom == "back" {
+                    app.invoke_player_action("back".into(), 0.);
+                } else {
+                    self.pages.handle(app, custom, value as i32);
+                }
                 continue;
             }
             if !app.get_player_shown() {
@@ -541,8 +656,11 @@ impl Controller {
                         app.invoke_focus_player();
                     } else {
                         self.remember(app);
-                        self.cache_key=None;self.presentation_at=None;
+                        self.cache_key = None;
+                        self.presentation_at = None;
                         self.generation += 1;
+                        self.active_generation
+                            .store(self.generation, std::sync::atomic::Ordering::Release);
                         self.busy = false;
                         self.snapshot = None;
                         self.pages.close(app);
@@ -557,7 +675,8 @@ impl Controller {
                     }
                 }
                 "retry" => {
-                    self.snapshot=None;self.busy=false;
+                    self.snapshot = None;
+                    self.busy = false;
                     if let Some(t) = self.target.clone() {
                         let _ = self.tx.try_send((self.generation, Request::Open(t)));
                     }
@@ -610,17 +729,31 @@ impl Controller {
             }
         }
         self.pages.poll(app);
-        let serial=crate::config_snapshot::current().map_or(0,|c|c.serial);
-        self.cache.prune(serial,Instant::now());
-        if self.cache_key.as_ref().is_some_and(|k|k.serial!=serial) {
-            self.forget_view(app);self.cache_key=None;self.snapshot=None;self.target=None;
-            self.generation+=1;self.busy=false;
-            let _=self.tx.try_send((self.generation,Request::Close));
-            app.set_player_ready(false);app.set_player_connected(false);app.set_player_panel(0);
+        let serial = crate::config_snapshot::current().map_or(0, |c| c.serial);
+        self.cache.prune(serial, Instant::now());
+        if self.cache_key.as_ref().is_some_and(|k| k.serial != serial) {
+            self.forget_view(app);
+            self.cache_key = None;
+            self.snapshot = None;
+            self.target = None;
+            self.generation += 1;
+            self.active_generation
+                .store(self.generation, std::sync::atomic::Ordering::Release);
+            self.busy = false;
+            let _ = self.tx.try_send((self.generation, Request::Close));
+            app.set_player_ready(false);
+            app.set_player_connected(false);
+            app.set_player_panel(0);
             app.set_player_title("Configuration changed. Reopen the activity.".into());
         }
-        if self.snapshot.is_none() && self.presentation_at.is_some_and(|at|at.elapsed()>=Duration::from_secs(30)) {
-            self.forget_view(app);app.set_player_ready(false);app.set_player_connected(false);
+        if self.snapshot.is_none()
+            && self
+                .presentation_at
+                .is_some_and(|at| at.elapsed() >= Duration::from_secs(30))
+        {
+            self.forget_view(app);
+            app.set_player_ready(false);
+            app.set_player_connected(false);
             app.set_player_title("Refreshing Kodi…".into());
         }
         while let Ok((g, event)) = self.rx.try_recv() {
@@ -636,8 +769,10 @@ impl Controller {
                 }
                 Event::State(result) => match result {
                     Ok(s) => {
-                        if let Some(key)=&self.cache_key {self.cache.remove(key);}
-                        self.presentation_at=Some(Instant::now());
+                        if let Some(key) = &self.cache_key {
+                            self.cache.remove(key);
+                        }
+                        self.presentation_at = Some(Instant::now());
                         let previous = self.snapshot.as_ref().and_then(|s| s.playing.as_ref());
                         let changed = previous.map(identity) != s.playing.as_ref().map(identity)
                             || previous.map(|p| {
@@ -707,9 +842,12 @@ impl Controller {
                             );
                             self.forget_view(app);
                             // Confirmed idle is also a useful, safe presentation.
-                            self.presentation_at=Some(Instant::now());
-                            app.set_player_metadata("".into());app.set_player_can_seek(false);
-                            app.set_player_elapsed("".into());app.set_player_remaining("".into());app.set_player_progress(0.);
+                            self.presentation_at = Some(Instant::now());
+                            app.set_player_metadata("".into());
+                            app.set_player_can_seek(false);
+                            app.set_player_elapsed("".into());
+                            app.set_player_remaining("".into());
+                            app.set_player_progress(0.);
                         }
                         self.snapshot = Some(s);
                     }
@@ -766,58 +904,158 @@ impl Controller {
 mod tests {
     use super::*;
     #[test]
+    fn kodi_ir_overrides_use_explicit_functions_without_replacing_seek() {
+        use couch_model::commands::Function as F;
+        assert_eq!(kodi_ir_function("Input.Select", &json!({})), Some(F::Ok));
+        assert_eq!(
+            kodi_ir_function("Application.SetVolume", &json!({"delta":5})),
+            Some(F::VolumeUp)
+        );
+        assert_eq!(
+            kodi_ir_function("Application.SetVolume", &json!({"delta":-5})),
+            Some(F::VolumeDown)
+        );
+        assert_eq!(
+            kodi_ir_function("Player.GoTo", &json!({"to":"next"})),
+            Some(F::Next)
+        );
+        assert_eq!(kodi_ir_function("Player.Seek", &json!({"value":50})), None);
+        assert_eq!(kodi_ir_function("Player.GoTo", &json!({"to":3})), None);
+    }
+    #[test]
     fn physical_keys_control_kodi_without_opening_an_overlay() {
         // Slint is configured as single-threaded on this target. Run this
         // window test separately from the scene-controller window fixture.
         if std::env::var_os("COUCH_TEST_KODI_KEYS").is_none() {
-            let out=std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact","activity::tests::physical_keys_control_kodi_without_opening_an_overlay"])
-                .env("COUCH_TEST_KODI_KEYS","1").output().unwrap();
-            assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "activity::tests::physical_keys_control_kodi_without_opening_an_overlay",
+                ])
+                .env("COUCH_TEST_KODI_KEYS", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
             return;
         }
-        use slint::{ComponentHandle, platform::{Key, WindowEvent}};
-        let window=crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480,800)).unwrap();
-        let app=App::new().unwrap();
-        let actions=Rc::new(RefCell::new(Vec::new()));let received=actions.clone();
-        app.on_player_action(move |name,_|received.borrow_mut().push(name.to_string()));
-        app.set_player_shown(true);app.set_player_connected(true);app.show().unwrap();app.invoke_focus_player();
-        for playing in [false,true] {
+        use slint::{
+            platform::{Key, WindowEvent},
+            ComponentHandle,
+        };
+        let window =
+            crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480, 800)).unwrap();
+        let app = App::new().unwrap();
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let received = actions.clone();
+        app.on_player_action(move |name, _| received.borrow_mut().push(name.to_string()));
+        app.set_player_shown(true);
+        app.set_player_connected(true);
+        app.show().unwrap();
+        app.invoke_focus_player();
+        for playing in [false, true] {
             app.set_player_ready(playing);
-            for key in [Key::UpArrow,Key::DownArrow,Key::LeftArrow,Key::RightArrow,Key::Return,Key::Escape,Key::Home,Key::F14] {
-                let text=char::from(key).to_string().into();
-                window.dispatch_event(WindowEvent::KeyPressed{text});
+            for key in [
+                Key::UpArrow,
+                Key::DownArrow,
+                Key::LeftArrow,
+                Key::RightArrow,
+                Key::Return,
+                Key::Escape,
+                Key::Home,
+                Key::F14,
+            ] {
+                let text = char::from(key).to_string().into();
+                window.dispatch_event(WindowEvent::KeyPressed { text });
             }
-            assert_eq!(&*actions.borrow(), &["Input.Up","Input.Down","Input.Left","Input.Right","Input.Select","Input.Back","Input.Home","mute"]);
-            actions.borrow_mut().clear();assert_eq!(app.get_player_panel(),0);
+            assert_eq!(
+                &*actions.borrow(),
+                &[
+                    "Input.Up",
+                    "Input.Down",
+                    "Input.Left",
+                    "Input.Right",
+                    "Input.Select",
+                    "Input.Back",
+                    "Input.Home",
+                    "mute"
+                ]
+            );
+            actions.borrow_mut().clear();
+            assert_eq!(app.get_player_panel(), 0);
         }
         app.hide().unwrap();
     }
     #[test]
     fn restored_presentation_does_not_authorize_player_commands() {
         if std::env::var_os("COUCH_TEST_KODI_CACHE").is_none() {
-            let out=std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact","activity::tests::restored_presentation_does_not_authorize_player_commands"])
-                .env("COUCH_TEST_KODI_CACHE","1").output().unwrap();
-            assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));return;
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "activity::tests::restored_presentation_does_not_authorize_player_commands",
+                ])
+                .env("COUCH_TEST_KODI_CACHE", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
         }
-        crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480,800)).unwrap();
-        let app=App::new().unwrap();let mut controller=Controller::new(&app);
-        app.set_player_title("Cached film".into());app.set_player_metadata("2026".into());
-        app.set_player_ready(true);app.set_player_connected(true);app.set_player_can_seek(true);
-        app.set_player_progress(42.);app.set_player_panel(2);app.set_player_message("Old toast".into());
-        let view=cache::Presentation::capture(&app,"pending-art");
-        assert!(view.art_key.is_empty(),"unfinished artwork must be requested after reopening");
-        app.set_player_title("Connecting".into());app.set_player_panel(0);app.set_player_message("".into());
+        crate::panel::CouchPlatform::install(slint::PhysicalSize::new(480, 800)).unwrap();
+        let app = App::new().unwrap();
+        let mut controller = Controller::new(&app);
+        for repeat in [false, true, true, false] {
+            controller.physical_input(repeat, || app.invoke_player_action("volume".into(), 5.));
+        }
+        assert_eq!(
+            controller
+                .input
+                .borrow()
+                .iter()
+                .map(|(_, _, repeat)| *repeat)
+                .collect::<Vec<_>>(),
+            vec![false, true, true, false]
+        );
+        controller.input.borrow_mut().clear();
+        app.set_player_title("Cached film".into());
+        app.set_player_metadata("2026".into());
+        app.set_player_ready(true);
+        app.set_player_connected(true);
+        app.set_player_can_seek(true);
+        app.set_player_progress(42.);
+        app.set_player_panel(2);
+        app.set_player_message("Old toast".into());
+        let view = cache::Presentation::capture(&app, "pending-art");
+        assert!(
+            view.art_key.is_empty(),
+            "unfinished artwork must be requested after reopening"
+        );
+        app.set_player_title("Connecting".into());
+        app.set_player_panel(0);
+        app.set_player_message("".into());
         view.restore(&app);
-        assert_eq!(app.get_player_title(),"Cached film");assert_eq!(app.get_player_progress(),42.);
-        assert_eq!(app.get_player_panel(),0);assert!(app.get_player_message().is_empty());
+        assert_eq!(app.get_player_title(), "Cached film");
+        assert_eq!(app.get_player_progress(), 42.);
+        assert_eq!(app.get_player_panel(), 0);
+        assert!(app.get_player_message().is_empty());
         assert!(controller.snapshot.is_none());
-        controller.send(&app,"Player.Seek",json!({"value":{"percentage":80}}));
-        assert!(!controller.busy,"cached visuals must not enqueue Player.* commands");
+        controller.send(&app, "Player.Seek", json!({"value":{"percentage":80}}));
+        assert!(
+            !controller.busy,
+            "cached visuals must not enqueue Player.* commands"
+        );
         assert!(app.get_player_message().contains("Refreshing playback"));
         controller.forget_view(&app);
-        assert!(!app.get_player_has_art());assert!(!app.get_player_has_logo());
+        assert!(!app.get_player_has_art());
+        assert!(!app.get_player_has_logo());
         assert!(controller.presentation_at.is_none());
     }
     #[test]

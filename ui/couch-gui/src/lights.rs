@@ -95,15 +95,19 @@ struct Entry {
     hue: bool,
 }
 enum Operation {
+    IrCheck(Id, String, bool, Arc<couch_model::Config>, Input),
     List,
     Toggle(String),
     Brightness(String, u8),
 }
 enum Answer {
+    IrChecked(bool, Input),
     List(Vec<Entry>),
     State(DeviceState),
 }
 enum Input {
+    PhysicalPick(usize, bool),
+    PhysicalLevel(usize, i32, bool),
     Open(Id),
     Pick(usize),
     Brightness(usize, i32),
@@ -111,6 +115,9 @@ enum Input {
 }
 pub struct Controller {
     input: Rc<RefCell<VecDeque<Input>>>,
+    ir_pending: VecDeque<Operation>,
+    physical_repeat: Rc<std::cell::Cell<bool>>,
+    active: Arc<std::sync::atomic::AtomicU64>,
     tx: mpsc::SyncSender<(u64, Id, Operation)>,
     rx: mpsc::Receiver<(u64, Result<Answer, String>)>,
     generation: u64,
@@ -193,9 +200,30 @@ fn perform(
     room: &Id,
     operation: Operation,
     hue: &crate::connections::HueFleet,
+    current: &dyn Fn() -> bool,
 ) -> Result<Answer, String> {
     let mut entries = configured(room)?;
     match operation {
+        Operation::IrCheck(device, function, repeat, config, resume) => {
+            if !config
+                .room(room)
+                .is_some_and(|r| r.devices.iter().any(|d| d.id == device))
+            {
+                return Err("Device was removed from room".into());
+            }
+            let live = || {
+                current() && crate::connections::config().is_some_and(|c| Arc::ptr_eq(&c, &config))
+            };
+            let handled = crate::activity_buttons::try_device_ir(
+                &config,
+                device.as_str(),
+                &couch_model::commands::Function::parse(&function)
+                    .ok_or("Unsupported IR function")?,
+                repeat,
+                &live,
+            )?;
+            Ok(Answer::IrChecked(handled, resume))
+        }
         Operation::List => {
             let ha_states = if entries
                 .iter()
@@ -285,17 +313,21 @@ fn perform(
 impl Controller {
     pub fn install(app: &App) -> Self {
         let input = Rc::new(RefCell::new(VecDeque::new()));
+        let physical_repeat = Rc::new(std::cell::Cell::new(false));
+        let repeat = physical_repeat.clone();
         let q = input.clone();
         app.on_light_activate(move |i| {
             if i >= 0 {
-                q.borrow_mut().push_back(Input::Pick(i as usize));
+                q.borrow_mut()
+                    .push_back(Input::PhysicalPick(i as usize, repeat.get()));
             }
         });
         let q = input.clone();
+        let repeat = physical_repeat.clone();
         app.on_light_brightness(move |i, delta| {
             if i >= 0 {
                 q.borrow_mut()
-                    .push_back(Input::Brightness(i as usize, delta));
+                    .push_back(Input::PhysicalLevel(i as usize, delta, repeat.get()));
             }
         });
         let q = input.clone();
@@ -304,13 +336,23 @@ impl Controller {
         let (events, rx) = mpsc::channel();
         let hue = Arc::new(crate::connections::HueFleet::default());
         let worker_hue = hue.clone();
+        let active = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_active = active.clone();
         std::thread::spawn(move || {
             let _ = worker_hue.lights(); // Warm the cache without delaying GUI startup.
             while let Ok((generation, room, op)) = requests.recv() {
-                let _ = events.send((generation, perform(&room, op, &worker_hue)));
+                let _ = events.send((
+                    generation,
+                    perform(&room, op, &worker_hue, &|| {
+                        worker_active.load(std::sync::atomic::Ordering::SeqCst) == generation
+                    }),
+                ));
             }
         });
         Self {
+            ir_pending: VecDeque::new(),
+            physical_repeat,
+            active,
             input,
             tx,
             rx,
@@ -397,10 +439,74 @@ impl Controller {
     }
     pub fn clear_brightness(&mut self, app: &App) {
         self.brightness_pending.clear();
+        self.ir_pending.clear();
         self.position_targets.clear();
         self.brightness_flight = None;
         self.brightness_until = None;
         app.set_brightness_shown(false);
+    }
+    pub fn physical_input(&self, repeat: bool, dispatch: impl FnOnce()) {
+        let previous = self.physical_repeat.replace(repeat);
+        dispatch();
+        self.physical_repeat.set(previous);
+    }
+    fn intercept_ir(&mut self, i: usize, function: &str, repeat: bool, resume: Input) {
+        let device = self.room.as_ref().and_then(|room| {
+            crate::connections::config().and_then(|c| {
+                c.room(room)
+                    .and_then(|r| r.devices.get(i))
+                    .filter(|d| d.effective_ir_codeset(&c).is_some())
+                    .map(|d| (d.id.clone(), c.clone()))
+            })
+        });
+        if let Some((device, config)) = device {
+            if self.ir_pending.len() < 32 {
+                self.ir_pending.push_back(Operation::IrCheck(
+                    device,
+                    function.into(),
+                    repeat,
+                    config,
+                    resume,
+                ));
+            }
+        } else {
+            self.input.borrow_mut().push_front(resume);
+        }
+    }
+    fn send_ir(&mut self) {
+        if !self.input.borrow().is_empty() || self.busy.is_some() || self.refreshing {
+            return;
+        }
+        let Some(room) = self.room.clone() else {
+            return;
+        };
+        let Some(operation) = self.ir_pending.pop_front() else {
+            return;
+        };
+        let next = self.generation + 1;
+        self.active.store(next, std::sync::atomic::Ordering::SeqCst);
+        match self.tx.try_send((next, room, operation)) {
+            Ok(()) => {
+                self.generation = next;
+                self.busy = Some("ir-command".into());
+            }
+            Err(error) => {
+                self.active
+                    .store(self.generation, std::sync::atomic::Ordering::SeqCst);
+                let (mpsc::TrySendError::Full(work) | mpsc::TrySendError::Disconnected(work)) =
+                    error;
+                self.ir_pending.push_front(work.2);
+            }
+        }
+    }
+    fn device_resource(&self, i: usize) -> Option<String> {
+        self.room.as_ref().and_then(|room| {
+            crate::connections::config().and_then(|c| {
+                c.room(room)
+                    .and_then(|r| r.devices.get(i))
+                    .map(|d| format!("device:{}", d.id))
+            })
+        })
     }
     fn adjust_brightness(&mut self, app: &App, i: usize, delta: i32) {
         let Some(entry) = self.entries.get(i) else {
@@ -408,7 +514,9 @@ impl Controller {
         };
         if ha_domain(&entry.id) == "climate" {
             app.invoke_thermostat_room_adjust(
-                entry.id.as_str().into(),
+                self.device_resource(i)
+                    .unwrap_or_else(|| entry.id.clone())
+                    .into(),
                 entry.name.as_str().into(),
                 delta.signum(),
             );
@@ -488,6 +596,8 @@ impl Controller {
             .is_ok()
         {
             self.generation = generation;
+            self.active
+                .store(self.generation, std::sync::atomic::Ordering::SeqCst);
             self.busy = Some(id.clone());
             self.brightness_flight = Some((id, percent));
             self.brightness_pending.pop_front();
@@ -498,6 +608,8 @@ impl Controller {
         self.clear_brightness(app);
         let started = Instant::now();
         self.generation += 1;
+        self.active
+            .store(self.generation, std::sync::atomic::Ordering::SeqCst);
         self.room = Some(room.clone());
         self.busy = None;
         let title = crate::connections::config()
@@ -572,10 +684,33 @@ impl Controller {
                 break;
             };
             match input {
+                Input::PhysicalLevel(i, delta, repeat) => self.intercept_ir(
+                    i,
+                    if delta > 0 {
+                        "volume-up"
+                    } else {
+                        "volume-down"
+                    },
+                    repeat,
+                    Input::Brightness(i, delta),
+                ),
+                Input::PhysicalPick(i, repeat) => {
+                    if self
+                        .entries
+                        .get(i)
+                        .is_some_and(|e| e.hue || matches!(ha_domain(&e.id), "light" | "cover"))
+                    {
+                        self.intercept_ir(i, "toggle", repeat, Input::Pick(i));
+                    } else {
+                        self.input.borrow_mut().push_front(Input::Pick(i));
+                    }
+                }
                 Input::Open(room) => self.open_room(app, room),
                 Input::Back => {
                     self.clear_brightness(app);
                     self.generation += 1;
+                    self.active
+                        .store(self.generation, std::sync::atomic::Ordering::SeqCst);
                     self.room = None;
                     self.busy = None;
                     self.refreshing = false;
@@ -598,7 +733,10 @@ impl Controller {
                         continue;
                     };
                     if ha_domain(&e.id) == "climate" {
-                        let (id, name) = (e.id.clone(), e.name.clone());
+                        let (id, name) = (
+                            self.device_resource(i).unwrap_or_else(|| e.id.clone()),
+                            e.name.clone(),
+                        );
                         self.clear_brightness(app);
                         app.invoke_open_thermostat(id.into(), name.into());
                         continue;
@@ -620,12 +758,12 @@ impl Controller {
                             app.invoke_open_activity(e.id.as_str().into());
                             continue;
                         }
-                        if let Some(connection) = cfg
+                        if let Some(_connection) = cfg
                             .as_ref()
                             .and_then(|c| tv_connection(c, e.id.trim_start_matches("device:")))
                         {
                             app.set_active_activity("".into());
-                            app.invoke_open_tv(connection.as_str().into(), e.name.as_str().into());
+                            app.invoke_open_tv(e.id.as_str().into(), e.name.as_str().into());
                             continue;
                         }
                         app.set_light_detail(
@@ -646,6 +784,8 @@ impl Controller {
                         .is_ok()
                     {
                         self.generation = generation;
+                        self.active
+                            .store(self.generation, std::sync::atomic::Ordering::SeqCst);
                         self.busy = Some(id);
                         self.refreshing = false;
                         app.set_light_detail("".into());
@@ -665,6 +805,12 @@ impl Controller {
             self.busy = None;
             let brightness = self.brightness_flight.take();
             match result {
+                Ok(Answer::IrChecked(handled, resume)) => {
+                    if !handled {
+                        self.input.borrow_mut().push_front(resume);
+                    }
+                    app.set_light_detail("".into());
+                }
                 Ok(Answer::List(entries)) => {
                     let reset = self.entries.len() != entries.len()
                         || self.entries.iter().zip(&entries).any(|(a, b)| a.id != b.id);
@@ -700,9 +846,11 @@ impl Controller {
                 }
             }
         }
+        self.send_ir();
         self.send_brightness();
         if self.room.is_some()
             && self.brightness_pending.is_empty()
+            && self.ir_pending.is_empty()
             && self.busy.is_none()
             && !self.refreshing
             && self.last_refresh.elapsed()
@@ -781,7 +929,16 @@ fn description(light: &Light) -> String {
 // TV when multiple TVs are configured.
 fn tv_connection(config: &couch_model::Config, device_id: &str) -> Option<String> {
     let (_, device) = config.devices().find(|(_, d)| d.id.as_str() == device_id)?;
-    let provider = match config.resolve_integration(&device.integration)? {
+    let integration = config.resolve_integration(&device.integration);
+    if device.effective_ir_codeset(config).is_some()
+        && matches!(
+            integration,
+            Some(Integration::None | Integration::Ir { .. }) | None
+        )
+    {
+        return Some(format!("ir:{device_id}"));
+    }
+    let provider = match integration? {
         Integration::WebOs => couch_model::Provider::WebOs,
         Integration::AndroidTv => couch_model::Provider::AndroidTv,
         Integration::AppleTv => couch_model::Provider::AppleTv,

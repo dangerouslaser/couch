@@ -4,7 +4,7 @@ use couch_model::{commands::Function, Action, Integration};
 use couch_webos::Button;
 use std::sync::atomic::AtomicU64;
 
-fn function(action: &Command) -> Result<Option<String>, String> {
+pub(super) fn function(action: &Command) -> Result<Option<String>, String> {
     Ok(Some(match action {
         Command::Retry => return Ok(None),
         Command::IrFunction(name) if Function::parse(name).is_some() => name.clone(),
@@ -42,7 +42,7 @@ fn function(action: &Command) -> Result<Option<String>, String> {
     }))
 }
 
-fn request_current(
+pub(super) fn request_current(
     work: &Work,
     active: &AtomicU64,
     latest: Option<&std::sync::Arc<couch_model::Config>>,
@@ -72,11 +72,11 @@ pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, Stri
         .devices()
         .find(|(_, d)| d.id.as_str() == id)
         .ok_or("IR device was removed")?;
-    let integration = config
-        .resolve_integration(&device.integration)
-        .ok_or("IR connection was removed")?;
-    let Integration::Ir { codeset } = &integration else {
-        return Err("Selected device is not infrared".into());
+    let codeset = device
+        .effective_ir_codeset(config)
+        .ok_or("Selected device has no infrared commands")?;
+    let integration = Integration::Ir {
+        codeset: codeset.into(),
     };
     let codes =
         couch_ir::codeset::load(&crate::home::path("ir"), codeset).map_err(|e| e.to_string())?;
@@ -138,6 +138,7 @@ mod tests {
         let config = Arc::new(couch_model::Config::default());
         let active = AtomicU64::new(9);
         let mut work = Work {
+            device: None,
             connection: "ir:test".into(),
             generation: 9,
             action: Command::Volume(true),

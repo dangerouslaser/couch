@@ -261,6 +261,7 @@ fn power(
 }
 struct Work {
     connection: String,
+    device: Option<String>,
     generation: u64,
     action: Command,
     at: Instant,
@@ -425,6 +426,38 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                     && w.at.elapsed() > Duration::from_millis(750))
             {
                 continue;
+            }
+            if !w.connection.starts_with("ir:") {
+                if let (Some(device), Some(config), Ok(Some(function))) =
+                    (&w.device, &w.config, infrared::function(&w.action))
+                {
+                    let current = || {
+                        infrared::request_current(
+                            &w,
+                            &active,
+                            crate::connections::config().as_ref(),
+                        )
+                    };
+                    let result = crate::activity_buttons::try_device_ir(
+                        config,
+                        device,
+                        &couch_model::commands::Function::parse(&function).unwrap(),
+                        w.repeat,
+                        &current,
+                    );
+                    match result {
+                        Ok(false) => {}
+                        result => {
+                            let status = result.map(|_| String::new());
+                            let _ = tx.try_send(Event {
+                                generation,
+                                details: None,
+                                status,
+                            });
+                            continue;
+                        }
+                    }
+                }
             }
             if w.connection.starts_with("ir:") {
                 let result = infrared::run(&w, &active);
@@ -628,6 +661,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
 #[derive(Clone, PartialEq, Eq)]
 struct ViewKey {
     connection: String,
+    device: String,
     name: String,
     activity: String,
     config: u64,
@@ -683,6 +717,47 @@ impl ViewPresentation {
         app.set_tv_status(self.status.clone());
     }
 }
+fn resolve_target(
+    config: Option<&couch_model::Config>,
+    requested: &str,
+) -> Result<(String, Option<String>), String> {
+    let Some(id) = requested.strip_prefix("device:") else {
+        return Ok((
+            requested.into(),
+            requested.strip_prefix("ir:").map(str::to_owned),
+        ));
+    };
+    let config = config.ok_or("Configuration unavailable")?;
+    let device = config
+        .devices()
+        .find(|(_, d)| d.id.as_str() == id)
+        .map(|(_, d)| d)
+        .ok_or("Device was removed")?;
+    let integration = config.resolve_integration(&device.integration);
+    if matches!(
+        integration,
+        Some(couch_model::Integration::None | couch_model::Integration::Ir { .. }) | None
+    ) && device.effective_ir_codeset(config).is_some()
+    {
+        return Ok((format!("ir:{id}"), Some(id.into())));
+    }
+    let provider = match integration {
+        Some(couch_model::Integration::AndroidTv) => couch_model::Provider::AndroidTv,
+        Some(couch_model::Integration::AppleTv) => couch_model::Provider::AppleTv,
+        Some(couch_model::Integration::WebOs) => couch_model::Provider::WebOs,
+        _ => return Err("This device does not have TV controls".into()),
+    };
+    let connection = match &device.integration {
+        couch_model::Integration::Connection { connection_id, .. } => connection_id.to_string(),
+        _ => config
+            .connections
+            .iter()
+            .find(|c| c.provider == provider)
+            .map(|c| c.id.to_string())
+            .unwrap_or_default(),
+    };
+    Ok((connection, Some(id.into())))
+}
 pub struct Controller {
     media: media::Controller,
     view_cache: ViewCache<ViewPresentation>,
@@ -691,6 +766,7 @@ pub struct Controller {
     choices: Vec<(String, String, String)>,
     settings_app: Option<String>,
     connection: String,
+    device: Option<String>,
     input: Rc<RefCell<Vec<(String, bool, Option<Arc<couch_model::Config>>)>>>,
     physical_repeat: Rc<Cell<bool>>,
     tx: mpsc::SyncSender<Work>,
@@ -732,6 +808,7 @@ impl Controller {
             choices: Vec::new(),
             settings_app: None,
             connection: String::new(),
+            device: None,
             input,
             physical_repeat,
             tx,
@@ -779,10 +856,21 @@ impl Controller {
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
         for (action, repeat, config) in inputs {
             let action = if let Some(target) = action.strip_prefix("open:") {
-                let (connection, name) = target.split_once('/').unwrap_or(("", target));
+                let (requested, name) = target.split_once('/').unwrap_or(("", target));
+                let resolved = resolve_target(config.as_deref(), requested);
+                let (connection, device) = match resolved {
+                    Ok(target) => target,
+                    Err(error) => {
+                        app.set_tv_error(error.into());
+                        continue;
+                    }
+                };
+                let connection = connection.as_str();
                 self.save_view(app);
+                self.device = device;
                 let key = ViewKey {
                     connection: connection.into(),
+                    device: self.device.clone().unwrap_or_default(),
                     name: name.into(),
                     activity: app.get_active_activity().to_string(),
                     config: crate::config_snapshot::current().map_or(0, |s| s.serial),
@@ -944,6 +1032,7 @@ impl Controller {
                     .tx
                     .try_send(Work {
                         connection: self.connection.clone(),
+                        device: self.device.clone(),
                         generation: self.generation,
                         action,
                         at: Instant::now(),
@@ -1020,9 +1109,33 @@ impl Controller {
 mod tests {
     use super::*;
     #[test]
+    fn device_targets_preserve_network_views_and_distinguish_connection_aliases() {
+        let config: couch_model::Config = serde_json::from_value(json!({"schema_version":1,
+            "connections":[{"id":"shared","name":"TV","provider":{"kind":"android-tv"}}],
+            "rooms":[{"id":"r","name":"Room","devices":[
+                {"id":"a","name":"A","kind":"tv","integration":{"via":"connection","connection_id":"shared","resource_id":""},"ir":{"codeset":"first"}},
+                {"id":"b","name":"B","kind":"tv","integration":{"via":"connection","connection_id":"shared","resource_id":""},"ir":{"codeset":"second"}},
+                {"id":"ir-only","name":"IR","kind":"other","ir":{"codeset":"third"}}
+            ]}]})).unwrap();
+        assert_eq!(
+            resolve_target(Some(&config), "device:a").unwrap(),
+            ("shared".into(), Some("a".into()))
+        );
+        assert_eq!(
+            resolve_target(Some(&config), "device:b").unwrap(),
+            ("shared".into(), Some("b".into()))
+        );
+        assert_eq!(
+            resolve_target(Some(&config), "device:ir-only").unwrap(),
+            ("ir:ir-only".into(), Some("ir-only".into()))
+        );
+        assert!(resolve_target(Some(&config), "device:removed").is_err());
+    }
+    #[test]
     fn presentation_cache_is_bounded_scoped_and_does_not_renew_age() {
         let key = |id: &str, config| ViewKey {
             connection: id.into(),
+            device: id.into(),
             name: "TV".into(),
             activity: String::new(),
             config,

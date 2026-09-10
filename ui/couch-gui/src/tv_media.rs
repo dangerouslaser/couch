@@ -476,6 +476,7 @@ mod tests {
         let mut controller = Controller::new();
         let key = super::super::ViewKey {
             connection: "fixture".into(),
+            device: "fixture-device".into(),
             name: "TV".into(),
             activity: "movie".into(),
             config: 1,

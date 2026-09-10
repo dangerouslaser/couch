@@ -17,38 +17,76 @@ use std::{
 #[derive(Clone)]
 struct Target {
     id: String,
+    device: String,
     name: String,
     serial: u64,
 }
 enum Input {
     Open(String, String),
     RoomAdjust(String, String, i32),
-    Action(String, i32),
+    Action(String, i32, bool),
 }
 enum Operation {
+    IrAdjust(i32, bool),
     Read,
     Command(ClimateCommand),
 }
 enum Answer {
+    IrAdjusted(bool, i32),
     State(Climate),
     Accepted,
+}
+fn resolve_resource(resource: &str) -> (String, String) {
+    let Some(id) = resource.strip_prefix("device:") else {
+        return (resource.into(), String::new());
+    };
+    let entity = crate::connections::config()
+        .and_then(|c| {
+            c.devices()
+                .find(|(_, d)| d.id.as_str() == id)
+                .and_then(|(_, d)| c.resolve_integration(&d.integration))
+        })
+        .and_then(|i| match i {
+            couch_model::Integration::HomeAssistant { entity_id } => Some(entity_id),
+            _ => None,
+        });
+    (entity.unwrap_or_default(), id.into())
 }
 fn configured(target: &Target) -> bool {
     crate::config_snapshot::current().is_some_and(|s| {
         s.serial == target.serial
             && s.config.devices().any(|(_, d)| {
-                d.kind == couch_model::DeviceKind::Thermostat
+                (target.device.is_empty() || d.id.as_str() == target.device)
+                    && d.kind == couch_model::DeviceKind::Thermostat
                     && matches!(s.config.resolve_integration(&d.integration),
             Some(couch_model::Integration::HomeAssistant{entity_id}) if entity_id == target.id)
             })
     })
 }
-fn perform(target: &Target, op: Operation) -> Result<Answer, String> {
+fn perform(target: &Target, op: Operation, current: &dyn Fn() -> bool) -> Result<Answer, String> {
     if !configured(target) {
         return Err("Thermostat configuration changed. Reopen the device.".into());
     }
+    if let Operation::IrAdjust(delta, repeat) = op {
+        let config = crate::connections::config().ok_or("Configuration unavailable")?;
+        let live = || current() && configured(target);
+        let function = if delta > 0 {
+            couch_model::commands::Function::VolumeUp
+        } else {
+            couch_model::commands::Function::VolumeDown
+        };
+        let handled = crate::activity_buttons::try_device_ir(
+            &config,
+            &target.device,
+            &function,
+            repeat,
+            &live,
+        )?;
+        return Ok(Answer::IrAdjusted(handled, delta));
+    }
     let (client, id) = crate::connections::ha(&target.id)?;
     match op {
+        Operation::IrAdjust(..) => unreachable!(),
         Operation::Read => client
             .climate(&id)
             .map(Answer::State)
@@ -62,6 +100,8 @@ fn perform(target: &Target, op: Operation) -> Result<Answer, String> {
 
 pub struct Controller {
     input: Rc<RefCell<VecDeque<Input>>>,
+    ir_pending: VecDeque<(i32, bool)>,
+    physical_repeat: Rc<std::cell::Cell<bool>>,
     tx: mpsc::SyncSender<(u64, Target, Operation)>,
     rx: mpsc::Receiver<(u64, Result<Answer, String>)>,
     generation: u64,
@@ -97,10 +137,12 @@ impl Controller {
             q.borrow_mut()
                 .push_back(Input::RoomAdjust(id.to_string(), name.to_string(), delta))
         });
+        let physical_repeat = Rc::new(std::cell::Cell::new(false));
+        let repeat = physical_repeat.clone();
         let q = input.clone();
         app.on_thermostat_action(move |name, index| {
             q.borrow_mut()
-                .push_back(Input::Action(name.to_string(), index))
+                .push_back(Input::Action(name.to_string(), index, repeat.get()))
         });
         let (tx, requests) = mpsc::sync_channel::<(u64, Target, Operation)>(1);
         let (events, rx) = mpsc::channel();
@@ -111,12 +153,22 @@ impl Controller {
                 if worker_generation.load(Ordering::Acquire) != generation {
                     continue;
                 }
-                if events.send((generation, perform(&target, op))).is_err() {
+                if events
+                    .send((
+                        generation,
+                        perform(&target, op, &|| {
+                            worker_generation.load(Ordering::Acquire) == generation
+                        }),
+                    ))
+                    .is_err()
+                {
                     break;
                 }
             }
         });
         Self {
+            physical_repeat,
+            ir_pending: VecDeque::new(),
             input,
             tx,
             rx,
@@ -144,10 +196,16 @@ impl Controller {
     pub fn navigation_pending(&self) -> bool {
         self.input.borrow().iter().any(|v| {
             matches!(v, Input::Open(..))
-                || matches!(v,Input::Action(a,_) if a=="close" || a=="home")
+                || matches!(v,Input::Action(a,_,_) if a=="close" || a=="home")
         })
     }
+    pub fn physical_input(&self, repeat: bool, dispatch: impl FnOnce()) {
+        let previous = self.physical_repeat.replace(repeat);
+        dispatch();
+        self.physical_repeat.set(previous);
+    }
     fn invalidate(&mut self) {
+        self.ir_pending.clear();
         self.generation += 1;
         self.active_generation
             .store(self.generation, Ordering::Release);
@@ -159,6 +217,7 @@ impl Controller {
         self.mode_expected = None;
     }
     fn select(&mut self, id: String, name: String) {
+        let (id, device) = resolve_resource(&id);
         let serial = crate::config_snapshot::current().map_or(0, |s| s.serial);
         let same = self
             .target
@@ -168,7 +227,12 @@ impl Controller {
             self.state = None;
         }
         self.invalidate();
-        self.target = Some(Target { id, name, serial });
+        self.target = Some(Target {
+            id,
+            device,
+            name,
+            serial,
+        });
         self.busy = false;
         self.desired = None;
         self.queued_delta = 0;
@@ -369,11 +433,10 @@ impl Controller {
                 Input::RoomAdjust(id, name, delta) => {
                     self.feedback_room = Some(app.get_light_room_id().to_string());
                     let serial = crate::config_snapshot::current().map_or(0, |s| s.serial);
-                    if !self
-                        .target
-                        .as_ref()
-                        .is_some_and(|t| t.id == id && t.serial == serial)
-                    {
+                    if !self.target.as_ref().is_some_and(|t| {
+                        let (entity, device) = resolve_resource(&id);
+                        t.id == entity && t.device == device && t.serial == serial
+                    }) {
                         self.select(id, name);
                     }
                     if self.state_at.elapsed() > Duration::from_secs(5)
@@ -384,10 +447,26 @@ impl Controller {
                     }
                     self.adjust(app, delta.signum());
                 }
-                Input::Action(action, index) => match action.as_str() {
+                Input::Action(action, index, repeat) => match action.as_str() {
                     "close" | "home" => self.close(app, action == "home"),
                     "dismiss" => app.set_thermostat_modes_shown(false),
-                    "adjust" => self.adjust(app, index.signum()),
+                    "adjust" => {
+                        let assigned = self.target.as_ref().is_some_and(|t| {
+                            crate::connections::config().is_some_and(|c| {
+                                c.devices().any(|(_, d)| {
+                                    d.id.as_str() == t.device
+                                        && d.effective_ir_codeset(&c).is_some()
+                                })
+                            })
+                        });
+                        if assigned {
+                            if self.ir_pending.len() < 32 {
+                                self.ir_pending.push_back((index.signum(), repeat));
+                            }
+                        } else {
+                            self.adjust(app, index.signum());
+                        }
+                    }
                     "modes" => {
                         if self
                             .state
@@ -437,6 +516,12 @@ impl Controller {
             self.busy = false;
             self.in_flight = None;
             match result {
+                Ok(Answer::IrAdjusted(handled, delta)) => {
+                    if !handled {
+                        self.adjust(app, delta);
+                    }
+                    self.next_read = Instant::now();
+                }
                 Ok(Answer::State(state)) => {
                     // A read started before a key press must not erase the new target.
                     let mut state = state;
@@ -475,7 +560,13 @@ impl Controller {
             }
         }
         if !self.busy && self.target.is_some() {
-            if let Some(command) = self.desired.clone().filter(|_| Instant::now() >= self.due) {
+            if let Some((delta, repeat)) = self.ir_pending.pop_front() {
+                if !self.send(Operation::IrAdjust(delta, repeat)) {
+                    self.ir_pending.push_front((delta, repeat));
+                }
+            } else if let Some(command) =
+                self.desired.clone().filter(|_| Instant::now() >= self.due)
+            {
                 if self.send(Operation::Command(command.clone())) {
                     self.in_flight = Some(command);
                     self.desired = None;
@@ -612,7 +703,7 @@ mod tests {
             .borrow_mut()
             .drain(..)
             .map(|i| match i {
-                Input::Action(a, d) => (a, d),
+                Input::Action(a, d, _) => (a, d),
                 _ => panic!("unexpected input"),
             })
             .collect();
@@ -659,6 +750,7 @@ mod tests {
         );
         assert!(!app.get_thermostat_shown());
         controller.target = Some(Target {
+            device: String::new(),
             id: "test/climate.test".into(),
             name: "Living room".into(),
             serial: 0,

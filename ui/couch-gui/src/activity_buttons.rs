@@ -308,49 +308,22 @@ pub(crate) fn execute_with_input(
         .find(|(_, d)| d.id == action.device)
         .map(|(_, d)| d)
         .ok_or("Mapped device was removed")?;
+    let command = F::parse(&action.command).ok_or("Unsupported button function")?;
+    if try_device_ir(config, device.id.as_str(), &command, repeat, current)? {
+        return Ok(());
+    }
     let integration = config
         .resolve_integration(&device.integration)
         .ok_or("Mapped connection was removed")?;
-    let command = F::parse(&action.command)
-        .filter(|f| f.supports(&integration))
-        .ok_or("Unsupported button function")?;
+    if !command.supports(&integration) {
+        return Err("Unsupported button function".into());
+    }
     let connection = match &device.integration {
         Integration::Connection { connection_id, .. } => connection_id.as_str(),
         _ => "",
     };
     match integration {
-        Integration::Ir { codeset } => {
-            let codes = couch_ir::codeset::load(&crate::home::path("ir"), &codeset)
-                .map_err(|e| e.to_string())?;
-            if !current() {
-                return Ok(());
-            }
-            // One transmission per input edge. RC5/RC6 hold repeats retain
-            // their toggle; a new press changes it. No retry on TX failure.
-            static TOGGLES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
-                std::sync::OnceLock::new();
-            let mut states = TOGGLES
-                .get_or_init(Default::default)
-                .lock()
-                .map_err(|_| "IR command state unavailable")?;
-            ir_send_with(
-                &mut states,
-                device.id.as_str(),
-                &codes,
-                &command,
-                repeat,
-                current,
-                |message| {
-                    let mut blaster =
-                        couch_ir::tx::Irtx::open("/dev/irtx").map_err(|e| e.to_string())?;
-                    if !current() {
-                        return Ok(false);
-                    }
-                    couch_ir::tx::transmit(&mut blaster, message, 0).map_err(|e| e.to_string())?;
-                    Ok(true)
-                },
-            )
-        }
+        Integration::Ir { .. } => Err(format!("No IR code assigned to {}", command.id())),
         Integration::AndroidTv | Integration::AppleTv => {
             let kind = if matches!(integration, Integration::AppleTv) {
                 "appletv"
@@ -539,6 +512,67 @@ pub(crate) fn execute_with_input(
     }
 }
 
+/// Exact per-device assignment wins; a missing entry leaves the existing
+/// network behavior intact. Never retry a failed IR write over the network.
+pub(crate) fn try_device_ir(
+    config: &Config,
+    device_id: &str,
+    command: &F,
+    repeat: bool,
+    current: &dyn Fn() -> bool,
+) -> Result<bool, String> {
+    let device = config
+        .devices()
+        .find(|(_, d)| d.id.as_str() == device_id)
+        .map(|(_, d)| d)
+        .ok_or("Device was removed")?;
+    let Some(codeset) = device.effective_ir_codeset(config) else {
+        return Ok(false);
+    };
+    if !current() {
+        return Ok(true);
+    }
+    let codes =
+        couch_ir::codeset::load(&crate::home::path("ir"), codeset).map_err(|e| e.to_string())?;
+    ir_override_with(&codes, command, || {
+        static TOGGLES: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
+            std::sync::OnceLock::new();
+        let mut states = TOGGLES
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| "IR command state unavailable")?;
+        ir_send_with(
+            &mut states,
+            device_id,
+            &codes,
+            command,
+            repeat,
+            current,
+            |message| {
+                let mut blaster =
+                    couch_ir::tx::Irtx::open("/dev/irtx").map_err(|e| e.to_string())?;
+                if !current() {
+                    return Ok(false);
+                }
+                couch_ir::tx::transmit(&mut blaster, message, 0).map_err(|e| e.to_string())?;
+                Ok(true)
+            },
+        )?;
+        Ok(())
+    })
+}
+fn ir_override_with(
+    codes: &couch_ir::codeset::Codeset,
+    command: &F,
+    send: impl FnOnce() -> Result<(), String>,
+) -> Result<bool, String> {
+    if codes.get(&command.id()).is_none() {
+        return Ok(false);
+    }
+    send()?;
+    Ok(true)
+}
+
 fn ir_send_with(
     states: &mut HashMap<String, bool>,
     device: &str,
@@ -580,6 +614,29 @@ fn ir_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn supplemental_ir_routes_only_exact_assignments_and_never_falls_back_on_error() {
+        let codes =
+            couch_ir::codeset::Codeset::parse("fixture", "toggle nec 4 8\nvolume-up nec 4 2\n")
+                .unwrap();
+        assert_eq!(
+            ir_override_with(&codes, &F::PowerOn, || panic!(
+                "power-on must not use toggle"
+            )),
+            Ok(false)
+        );
+        assert_eq!(
+            ir_override_with(&codes, &F::VolumeDown, || panic!(
+                "unassigned must stay on network"
+            )),
+            Ok(false)
+        );
+        assert_eq!(ir_override_with(&codes, &F::VolumeUp, || Ok(())), Ok(true));
+        assert_eq!(
+            ir_override_with(&codes, &F::VolumeUp, || Err("TX failure".into())),
+            Err("TX failure".into())
+        );
+    }
     #[test]
     fn infrared_discrete_power_never_falls_back_to_toggle() {
         let codes =

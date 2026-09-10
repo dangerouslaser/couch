@@ -229,6 +229,7 @@ mod tests {
     fn closed_changed_and_expired_work_never_routes_a_key() {
         let active = AtomicU64::new(2);
         let mut work = Work {
+            device: None,
             repeat: false,
             config: None,
             connection: "tv".into(),
