@@ -20,6 +20,8 @@ open(sys.argv[2], "wb").write(d[pgsz:pgsz + ks])
 print("stock kernel:", ks, "bytes")
 PY
 
+tools/build-fbcon.sh
+
 rm -rf build/rec
 mkdir -p build/rec/extra
 cp recovery/init build/rec/init

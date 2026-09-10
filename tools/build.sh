@@ -18,13 +18,7 @@ mkdir -p build
 }
 
 # On-screen console. This kernel has no CONFIG_VT, so without this a boot is silent.
-NDK="${NDK:-$HOME/Library/Android/sdk/ndk/29.0.14206865}"
-CC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang"
-if [ ! -f build/fbcon ] && [ -x "$CC" ]; then
-    echo "building fbcon..."
-    "$CC" -static -Os -o build/fbcon src/fbcon.c
-    "$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip" build/fbcon
-fi
+tools/build-fbcon.sh
 
 rm -rf build/tree
 mkdir -p build/tree/extra
