@@ -86,6 +86,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(value['ssid_hex'], raw.hex())
         self.assertEqual(value['psk_hex'], hashlib.pbkdf2_hmac('sha1', b'password', raw, 4096, 32).hex())
         label = terminal.prompts[0][1][0]['label']
+        self.assertTrue(label.startswith(' a'))
         self.assertIn('\\xff', label)
         self.assertNotIn('\x1b', label)
         self.assertNotIn('\x00', label)

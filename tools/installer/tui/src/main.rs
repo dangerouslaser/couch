@@ -256,7 +256,7 @@ impl App {
         prompt.options = (1..=64)
             .map(|n| Choice {
                 value: format!("network-{n}"),
-                label: format!("Example network {n:02} · WPA2"),
+                label: format!("Example network {n:02} · WPA2 · -40 dBm"),
                 detail: String::new(),
             })
             .collect();

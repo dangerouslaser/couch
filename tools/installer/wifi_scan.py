@@ -5,6 +5,9 @@ import unicodedata
 
 import wifi_trial as trial
 
+SHORT_SECURITY = {'wpa2': 'WPA2', 'open': 'Open', 'enterprise': 'Enterprise',
+                  'wpa3': 'WPA3-only', 'wep': 'WEP', 'unsupported': 'Unsupported'}
+
 SECURITY = {'wpa2': 'WPA2 Personal', 'open': 'Open', 'enterprise': 'Enterprise · unsupported',
             'wpa3': 'WPA3-only · unsupported', 'wep': 'WEP · unsupported',
             'unsupported': 'Unsupported security'}
@@ -75,8 +78,8 @@ def network_form(terminal, out, incoming):
             detail = 'Choose a network, then enter its password. Only your remote was scanned.'
         terminal.stage(2, 'Choose Wi-Fi for your remote.', detail)
         options = [{'value': str(i),
-                    'label': f"[{SECURITY[n['security']]} · {n['dbm']} dBm] {display_ssid(bytes.fromhex(n['ssid_hex']))}",
-                    'detail': 'Signal measured by your remote.'} for i, n in enumerate(networks)]
+                    'label': f"{display_ssid(bytes.fromhex(n['ssid_hex']))} · {SHORT_SECURITY[n['security']]} · {n['dbm']} dBm",
+                    'detail': SECURITY[n['security']] + ' · Signal measured by your remote.'} for i, n in enumerate(networks)]
         options.append({'value': 'manual', 'label': 'Enter network manually / hidden network',
                         'detail': 'Type the exact SSID and select WPA2 Personal or open.'})
         if result['status'] != 'unsupported':
