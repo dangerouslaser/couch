@@ -1,12 +1,12 @@
 //! TV control: one background owner, bounded input, no network on the UI thread.
 #[path = "tv_android.rs"]
 mod android;
-#[path = "tv_media.rs"]
-mod media;
 #[path = "tv_apple.rs"]
 mod apple;
 #[path = "tv_ir.rs"]
 mod infrared;
+#[path = "tv_media.rs"]
+mod media;
 use crate::{home, App, TvChoice};
 use couch_control::WebOs as Client;
 use couch_webos::{Button, Playback, Settings};
@@ -42,7 +42,9 @@ enum Command {
     IrFunction(String),
 }
 fn command(name: &str) -> Option<Command> {
-    if let Some(id)=name.strip_prefix("ir:"){return Some(Command::IrFunction(id.into()));}
+    if let Some(id) = name.strip_prefix("ir:") {
+        return Some(Command::IrFunction(id.into()));
+    }
     if let Some(id) = name.strip_prefix("input:") {
         return Some(Command::Input(id.into()));
     }
@@ -103,7 +105,9 @@ fn execute(c: &mut Client, action: &Command) -> couch_control::Result<()> {
             Playback::Pause
         }),
         Command::Retry => Ok(()),
-        Command::Next(_) | Command::Wake | Command::IrFunction(_) => Err(couch_control::Error::Rejected),
+        Command::Next(_) | Command::Wake | Command::IrFunction(_) => {
+            Err(couch_control::Error::Rejected)
+        }
         Command::Stop => c.playback(Playback::Stop),
         Command::Rewind(forward) => c.playback(if *forward {
             Playback::FastForward
@@ -423,11 +427,19 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
                 continue;
             }
             if w.connection.starts_with("ir:") {
-                let result=infrared::run(&w,&active);
+                let result = infrared::run(&w, &active);
                 match result {
-                    Ok(Some(event))=>{let _=tx.try_send(event);},
-                    Ok(None)=>{},
-                    Err(error)=>{let _=tx.try_send(Event{generation,details:None,status:Err(error)});}
+                    Ok(Some(event)) => {
+                        let _ = tx.try_send(event);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = tx.try_send(Event {
+                            generation,
+                            details: None,
+                            status: Err(error),
+                        });
+                    }
                 }
                 continue;
             }
@@ -612,12 +624,74 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
         }
     }
 }
+// UI-thread presentation only. Cached values never enter Work or client state.
+#[derive(Clone, PartialEq, Eq)]
+struct ViewKey {
+    connection: String,
+    name: String,
+    activity: String,
+    config: u64,
+}
+struct ViewCache<T>(std::collections::VecDeque<(ViewKey, Instant, T)>);
+impl<T> Default for ViewCache<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<T: Clone> ViewCache<T> {
+    fn put(&mut self, key: ViewKey, at: Instant, value: T) {
+        self.0.retain(|(k, stamp, _)| {
+            k != &key && k.config == key.config && stamp.elapsed() < Duration::from_secs(30)
+        });
+        self.0.push_back((key, at, value));
+        while self.0.len() > 3 {
+            self.0.pop_front();
+        }
+    }
+    fn get(&mut self, key: &ViewKey) -> Option<(Instant, T)> {
+        self.0
+            .retain(|(k, at, _)| k.config == key.config && at.elapsed() < Duration::from_secs(30));
+        self.0
+            .iter()
+            .find(|(k, _, _)| k == key)
+            .map(|(_, at, v)| (*at, v.clone()))
+    }
+    fn remove(&mut self, key: &ViewKey) {
+        self.0.retain(|(k, _, _)| k != key);
+    }
+}
+#[derive(Clone)]
+struct ViewPresentation {
+    source: slint::SharedString,
+    sound: slint::SharedString,
+    picture: slint::SharedString,
+    status: slint::SharedString,
+}
+impl ViewPresentation {
+    fn capture(app: &App) -> Self {
+        Self {
+            source: app.get_tv_source(),
+            sound: app.get_tv_sound(),
+            picture: app.get_tv_picture(),
+            status: app.get_tv_status(),
+        }
+    }
+    fn apply(&self, app: &App) {
+        app.set_tv_source(self.source.clone());
+        app.set_tv_sound(self.sound.clone());
+        app.set_tv_picture(self.picture.clone());
+        app.set_tv_status(self.status.clone());
+    }
+}
 pub struct Controller {
     media: media::Controller,
+    view_cache: ViewCache<ViewPresentation>,
+    view_key: Option<ViewKey>,
+    view_at: Option<Instant>,
     choices: Vec<(String, String, String)>,
     settings_app: Option<String>,
     connection: String,
-    input: Rc<RefCell<Vec<(String, bool, Option<Arc<couch_model::Config>>)>>> ,
+    input: Rc<RefCell<Vec<(String, bool, Option<Arc<couch_model::Config>>)>>>,
     physical_repeat: Rc<Cell<bool>>,
     tx: mpsc::SyncSender<Work>,
     rx: mpsc::Receiver<Event>,
@@ -628,11 +702,23 @@ impl Controller {
     pub fn new(app: &App) -> Self {
         let input = Rc::new(RefCell::new(Vec::new()));
         let q = input.clone();
-        app.on_open_tv(move |id, name| q.borrow_mut().push((format!("open:{id}/{name}"),false,crate::connections::config())));
+        app.on_open_tv(move |id, name| {
+            q.borrow_mut().push((
+                format!("open:{id}/{name}"),
+                false,
+                crate::connections::config(),
+            ))
+        });
         let q = input.clone();
-        let physical_repeat=Rc::new(Cell::new(false));
-        let repeat=physical_repeat.clone();
-        app.on_tv_action(move |action| q.borrow_mut().push((action.to_string(),repeat.get(),crate::connections::config())));
+        let physical_repeat = Rc::new(Cell::new(false));
+        let repeat = physical_repeat.clone();
+        app.on_tv_action(move |action| {
+            q.borrow_mut().push((
+                action.to_string(),
+                repeat.get(),
+                crate::connections::config(),
+            ))
+        });
         let (tx, requests) = mpsc::sync_channel(8);
         let (events, rx) = mpsc::sync_channel(16);
         let active = Arc::new(AtomicU64::new(0));
@@ -640,6 +726,9 @@ impl Controller {
         std::thread::spawn(move || worker(requests, events, current));
         Self {
             media: media::Controller::new(),
+            view_cache: ViewCache::default(),
+            view_key: None,
+            view_at: None,
             choices: Vec::new(),
             settings_app: None,
             connection: String::new(),
@@ -654,7 +743,7 @@ impl Controller {
     /// Slint synthesizes releases after each press; preserve physical repeat
     /// metadata only during this dispatch, without affecting touch callbacks.
     pub fn physical_input(&self, repeat: bool, dispatch: impl FnOnce()) {
-        let previous=self.physical_repeat.replace(repeat);
+        let previous = self.physical_repeat.replace(repeat);
         dispatch();
         self.physical_repeat.set(previous);
     }
@@ -662,13 +751,44 @@ impl Controller {
         self.input
             .borrow()
             .iter()
-            .any(|(action,_,_)| action.starts_with("open:") || action == "close")
+            .any(|(action, _, _)| action.starts_with("open:") || action == "close")
+    }
+    fn save_view(&mut self, app: &App) {
+        if let (Some(key), Some(at)) = (&self.view_key, self.view_at) {
+            if app.get_tv_error().is_empty() {
+                self.view_cache
+                    .put(key.clone(), at, ViewPresentation::capture(app));
+            }
+        }
     }
     pub fn poll(&mut self, app: &App) {
+        if app.get_tv_shown()
+            && self
+                .view_at
+                .is_some_and(|at| at.elapsed() >= Duration::from_secs(30))
+        {
+            self.view_at = None;
+            if let Some(key) = &self.view_key {
+                self.view_cache.remove(key);
+            }
+            app.set_tv_source("Checking…".into());
+            app.set_tv_sound("Checking…".into());
+            app.set_tv_picture("Checking…".into());
+            app.set_tv_status("Checking TV status…".into());
+        }
         let inputs = std::mem::take(&mut *self.input.borrow_mut());
-        for (action,repeat,config) in inputs {
+        for (action, repeat, config) in inputs {
             let action = if let Some(target) = action.strip_prefix("open:") {
                 let (connection, name) = target.split_once('/').unwrap_or(("", target));
+                self.save_view(app);
+                let key = ViewKey {
+                    connection: connection.into(),
+                    name: name.into(),
+                    activity: app.get_active_activity().to_string(),
+                    config: crate::config_snapshot::current().map_or(0, |s| s.serial),
+                };
+                self.view_key = Some(key.clone());
+                self.view_at = None;
                 self.connection = connection.into();
                 let android = crate::connections::config().is_some_and(|c| {
                     c.connection(&couch_model::Id::new(connection))
@@ -684,19 +804,37 @@ impl Controller {
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 if android {
-                    self.media.open(app, self.generation, connection);
+                    self.media.open(app, self.generation, &key);
                 } else {
                     self.media.clear(app);
                 }
                 self.choices.clear();
                 self.settings_app = None;
-                app.set_tv_source(if app.get_tv_ir(){"Loading commands…"}else{"Connecting…"}.into());
+                app.set_tv_source(
+                    if app.get_tv_ir() {
+                        "Loading commands…"
+                    } else {
+                        "Connecting…"
+                    }
+                    .into(),
+                );
                 app.set_tv_sound("Checking…".into());
                 app.set_tv_picture("Checking…".into());
                 app.set_tv_panel(0);
                 app.set_tv_title(name.into());
-                app.set_tv_status(if app.get_tv_ir(){"Infrared · No device feedback"}else{"Connecting to TV…"}.into());
+                app.set_tv_status(
+                    if app.get_tv_ir() {
+                        "Infrared · No device feedback"
+                    } else {
+                        "Connecting to TV…"
+                    }
+                    .into(),
+                );
                 app.set_tv_error("".into());
+                if let Some((at, view)) = self.view_cache.get(&key) {
+                    view.apply(app);
+                    self.view_at = Some(at);
+                }
                 app.set_tv_shown(true);
                 app.invoke_focus_tv();
                 "retry"
@@ -708,7 +846,10 @@ impl Controller {
                 continue;
             }
             if ["inputs", "apps", "picture", "sound", "commands"].contains(&action) {
-                if app.get_tv_ir() && action != "commands" {app.set_tv_error("Infrared devices do not report apps or settings".into());continue;}
+                if app.get_tv_ir() && action != "commands" {
+                    app.set_tv_error("Infrared devices do not report apps or settings".into());
+                    continue;
+                }
                 if (app.get_tv_android() || app.get_tv_apple()) && action != "apps" {
                     app.set_tv_error("This control is only available for LG webOS TVs".into());
                     continue;
@@ -744,7 +885,9 @@ impl Controller {
                         if panel == 1 {
                             id.starts_with("input:")
                         } else {
-                            panel == 2 && (id.starts_with("app:") || (app.get_tv_ir() && id.starts_with("ir:")))
+                            panel == 2
+                                && (id.starts_with("app:")
+                                    || (app.get_tv_ir() && id.starts_with("ir:")))
                         }
                     })
                     .map(|(id, title, detail)| TvChoice {
@@ -779,6 +922,8 @@ impl Controller {
                 continue;
             }
             if action == "close" {
+                self.save_view(app);
+                app.set_tv_panel(0);
                 self.active.store(0, Ordering::SeqCst);
                 self.media.clear(app);
                 app.set_tv_shown(false);
@@ -817,6 +962,7 @@ impl Controller {
                 continue;
             }
             if let Some(view) = event.details {
+                self.view_at = Some(Instant::now());
                 app.set_tv_source(view.source.into());
                 app.set_tv_sound(
                     match view.sound.as_str() {
@@ -855,6 +1001,14 @@ impl Controller {
                     }
                 }
                 Err(error) => {
+                    if let Some(key) = &self.view_key {
+                        self.view_cache.remove(key);
+                    }
+                    self.view_at = None;
+                    self.media.invalidate(app);
+                    app.set_tv_source("Unavailable".into());
+                    app.set_tv_sound("Unavailable".into());
+                    app.set_tv_picture("On your TV".into());
                     app.set_tv_status("Control needs attention".into());
                     app.set_tv_error(error.into());
                 }
@@ -865,6 +1019,29 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn presentation_cache_is_bounded_scoped_and_does_not_renew_age() {
+        let key = |id: &str, config| ViewKey {
+            connection: id.into(),
+            name: "TV".into(),
+            activity: String::new(),
+            config,
+        };
+        let mut cache = ViewCache::default();
+        let now = Instant::now();
+        for id in ["a", "b", "c", "d"] {
+            cache.put(key(id, 1), now, id.to_owned());
+        }
+        assert!(cache.get(&key("a", 1)).is_none());
+        assert_eq!(cache.get(&key("d", 1)).unwrap().1, "d");
+        let mut activity = key("d", 1);
+        activity.activity = "movie".into();
+        assert!(cache.get(&activity).is_none());
+        cache.put(key("d", 1), now - Duration::from_secs(31), "old".into());
+        assert!(cache.get(&key("d", 1)).is_none());
+        assert!(cache.get(&key("b", 2)).is_none());
+        assert!(cache.get(&key("b", 1)).is_none());
+    }
     #[test]
     fn default_lg_power_requires_ir_codes_before_any_network_connection() {
         let root = std::env::temp_dir().join(format!(
@@ -1059,10 +1236,21 @@ mod tests {
     }
     #[test]
     fn infrared_screen_routes_physical_keys_without_an_overlay() {
-        let out=std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact","tv::tests::android_screen_routes_physical_keys_without_an_overlay"])
-            .env("COUCH_TEST_ANDROID_KEYS","1").env("COUCH_TEST_IR_KEYS","1").output().unwrap();
-        assert!(out.status.success(),"{}\n{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tv::tests::android_screen_routes_physical_keys_without_an_overlay",
+            ])
+            .env("COUCH_TEST_ANDROID_KEYS", "1")
+            .env("COUCH_TEST_IR_KEYS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     #[test]
     fn android_screen_routes_physical_keys_without_an_overlay() {
@@ -1137,21 +1325,57 @@ mod tests {
         );
         assert_eq!(app.get_tv_panel(), 0);
         if app.get_tv_ir() {
-            let controls=Controller::new(&app);
-            for repeat in [false,true,false] {
-                controls.physical_input(repeat,||{
-                    window.dispatch_event(WindowEvent::KeyPressed{text:char::from(Key::F23).to_string().into()});
-                    window.dispatch_event(WindowEvent::KeyReleased{text:char::from(Key::F23).to_string().into()});
+            let controls = Controller::new(&app);
+            for repeat in [false, true, false] {
+                controls.physical_input(repeat, || {
+                    window.dispatch_event(WindowEvent::KeyPressed {
+                        text: char::from(Key::F23).to_string().into(),
+                    });
+                    window.dispatch_event(WindowEvent::KeyReleased {
+                        text: char::from(Key::F23).to_string().into(),
+                    });
                 });
             }
             app.invoke_tv_action("commands".into());
-            let queued=controls.input.borrow();
-            assert_eq!(queued.iter().map(|(action,repeat,_)|(action.as_str(),*repeat)).collect::<Vec<_>>(),vec![("volume-up",false),("volume-up",true),("volume-up",false),("commands",false)]);
+            let queued = controls.input.borrow();
+            assert_eq!(
+                queued
+                    .iter()
+                    .map(|(action, repeat, _)| (action.as_str(), *repeat))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("volume-up", false),
+                    ("volume-up", true),
+                    ("volume-up", false),
+                    ("commands", false)
+                ]
+            );
         }
         if let Some(path) = std::env::var_os("COUCH_ANDROID_SCREENSHOT") {
-            app.set_tv_title(if app.get_tv_ir(){"Living room TV"}else{"Android TV"}.into());
-            app.set_tv_source(if app.get_tv_ir(){"Infrared controls"}else{"MiTV-AFMU0"}.into());
-            app.set_tv_status(if app.get_tv_ir(){"Infrared · No device feedback"}else{"TV on · Volume 12"}.into());
+            app.set_tv_title(
+                if app.get_tv_ir() {
+                    "Living room TV"
+                } else {
+                    "Android TV"
+                }
+                .into(),
+            );
+            app.set_tv_source(
+                if app.get_tv_ir() {
+                    "Infrared controls"
+                } else {
+                    "MiTV-AFMU0"
+                }
+                .into(),
+            );
+            app.set_tv_status(
+                if app.get_tv_ir() {
+                    "Infrared · No device feedback"
+                } else {
+                    "TV on · Volume 12"
+                }
+                .into(),
+            );
             window.draw_if_needed(|renderer| {
                 let mut pixels = vec![slint::Rgb8Pixel::default(); 480 * 800];
                 renderer.render(&mut pixels, 480);
