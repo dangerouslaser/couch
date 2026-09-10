@@ -6,8 +6,10 @@ mod windows;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(any(unix, test))]
+use std::fs;
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
