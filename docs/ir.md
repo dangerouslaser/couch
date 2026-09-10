@@ -516,3 +516,19 @@ The corrected kernel was built on Ollie; eight build/boot-health tests and
 the IR completion-guard test passed. Its image SHA256 is
 `214b495b78900c840c0b5aa1eaca8451d17c0a3edf91b2e5b30496d519e74bbf`.
 Do not interpret the first capture's zero counts as a pin held low.
+
+The corrected kernel booted and passed a second coordinated LG Volume Up test
+at the transport level. The user observed **neither an IR flash nor a volume
+change**. GPIO8 now returned valid samples: full frame 71 high / 151 low,
+35 transitions in 501 microseconds; repeat 69 high / 129 low, 31 transitions
+in 500 microseconds, with zero getter errors. The full frame completed at
+68,354 microseconds against 67,629 expected; repeat at 12,535 against 12,067.
+No hardcoded-pin warnings occurred, and telemetry was disabled after the send.
+
+This demonstrates toggling in GPIO8's input feedback during PWM output, not
+LED current or a calibrated carrier measurement. The controller's buffer
+address matched the nonzero waveform allocation and `3DLCM` remained zero.
+Further work should establish the actual board route, LED supply/enable and
+drive polarity, or obtain an optical positive control using the original
+Android stack. Do not call the LED defective or change unrelated GPIOs based
+solely on this result; the GPIO8-to-emitter board connection is still unproven.
