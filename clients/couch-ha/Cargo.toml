@@ -3,7 +3,7 @@ name = "couch-ha"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Home Assistant light discovery and control for Couch"
+description = "Home Assistant light, cover and climate discovery and control for Couch"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

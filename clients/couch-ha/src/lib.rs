@@ -1,6 +1,8 @@
 //! Blocking Home Assistant REST client. Call from a worker, never the render loop.
 //! Commands use services, not POST /states (which only changes HA's state cache).
+mod entities;
 pub mod settings;
+pub use entities::{Climate, ClimateCommand, Cover, CoverCommand, Entities};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -15,6 +17,9 @@ pub enum Error {
     Unavailable,
     UnsupportedBrightness,
     InvalidBrightness,
+    UnsupportedOperation,
+    InvalidPosition,
+    InvalidTemperature,
     Transport,
     Response,
     Status(u16),
@@ -22,12 +27,15 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Configuration => "Check the Home Assistant URL, token and light entity ID",
+            Self::Configuration => "Check the Home Assistant URL, token and entity ID",
             Self::Authentication => "Home Assistant rejected the access token",
-            Self::Missing => "The light no longer exists in Home Assistant",
-            Self::Unavailable => "The light is unavailable or its state is unknown",
+            Self::Missing => "The entity no longer exists in Home Assistant",
+            Self::Unavailable => "The entity is unavailable or its state is unknown",
             Self::UnsupportedBrightness => "This light does not support brightness",
             Self::InvalidBrightness => "Brightness must be between 0 and 100 percent",
+            Self::UnsupportedOperation => "This device does not support that operation in its current mode",
+            Self::InvalidPosition => "Position must be between 0 and 100 percent",
+            Self::InvalidTemperature => "Temperature must be within the thermostat limits and the low target must not exceed the high target",
             Self::Transport => "Could not reach Home Assistant (connection, TLS or timeout)",
             Self::Response => "Home Assistant returned an invalid or oversized response",
             Self::Status(_) => "Home Assistant rejected the request",
@@ -112,6 +120,7 @@ pub struct HomeAssistant {
     base: String,
     token: String,
     agent: ureq::Agent,
+    temperature_unit: std::sync::Mutex<Option<(std::time::Instant, String)>>,
 }
 // Deliberately do not expose the credential through Debug or error messages.
 impl fmt::Debug for HomeAssistant {
@@ -147,6 +156,7 @@ impl HomeAssistant {
             base: parsed.as_str().trim_end_matches('/').into(),
             token: token.into(),
             agent,
+            temperature_unit: std::sync::Mutex::new(None),
         })
     }
     fn get(&self, path: &str) -> Result<Value> {
@@ -209,9 +219,12 @@ impl HomeAssistant {
                 ("turn_on", json!({"entity_id":id,"brightness_pct":p}))
             }
         };
+        self.service("light", service, data)
+    }
+    fn service(&self, domain: &str, service: &str, data: Value) -> Result<()> {
         let mut reply = self
             .agent
-            .post(format!("{}/api/services/light/{service}", self.base))
+            .post(format!("{}/api/services/{domain}/{service}", self.base))
             .header("Authorization", format!("Bearer {}", self.token))
             .send_json(&data)
             .map_err(transport)?;
@@ -237,7 +250,7 @@ mod tests {
     fn state(state: &str, modes: Value) -> Value {
         json!({"entity_id":"light.test","state":state,"attributes":{"friendly_name":"Test light","brightness":128,"supported_color_modes":modes}})
     }
-    fn server(
+    pub(crate) fn server(
         replies: Vec<(u16, Value)>,
     ) -> (
         String,
