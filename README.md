@@ -9,16 +9,21 @@ Couch combines an Alpine userland, a Slint device interface, Rust integration
 clients, and a browser configuration UI. First boot configures Wi-Fi on the
 remote; the hotspot portal remains an explicit recovery option.
 
-**Status, September 9, 2026.** The remote boots from `boot` with our custom
-`3.18.79-couch-normal-ge581fb141386` kernel. Display, keypad, touchscreen,
+**Status, September 10, 2026.** The remote boots from `boot` with our custom
+`3.18.79-couch-normal-gea122a39f434` kernel. Display, keypad, touchscreen,
 Wi-Fi and accelerometer support are present; the user has confirmed touch wake
 and physical lift wake. The independent recovery slot retains a stock-kernel
 Couch rescue image. Android is no longer installed; its images are backed up
 outside this repository.
 
+The built-in IR transmitter is working: LG B4 power off/on, volume up and held
+repeats were confirmed, including commands before and after undocked remote
+sleep. IR commands attach directly to existing devices in the web UI. The side
+power button sleeps/wakes Couch; the keypad power button controls devices.
+
 The GUI supports rooms, devices, scenes, media control screens and activity
 start/stop sequences. Rust clients cover Kodi, Philips Hue, Home Assistant,
-LG webOS, Denon and IR. Setup and subsystem details are under `docs/`; the USB
+LG webOS, Denon, Android/Google TV, experimental Apple TV and IR. Setup and subsystem details are under `docs/`; the USB
 installer is experimental and does not yet flash hardware.
 
 The HA100 is a MediaTek MT6580 (quad Cortex-A7, ARMv7, 1GB RAM, 480x800 touchscreen)

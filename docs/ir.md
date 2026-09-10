@@ -14,8 +14,10 @@ named 3.3 V enable and GPIO14's standby control now remain output-high. Button
 lighting correctly controls GPIO58 without touching touchscreen reset GPIO4.
 See the [board initialization fix](ha100-stock-ir-audit.md#restoring-the-stock-board-controls)
 and [`ha100-board-led-init.patch`](../kernel/patches/ha100-board-led-init.patch).
-IR telemetry is disabled. This validates the tested command/device, not every
-catalog code, repeat/hold behavior, or standby/undocked scenario.
+IR telemetry is disabled. Subsequent user tests confirmed physical-button volume
+up, held repeats, power off/on, and commands before and after side-button sleep
+while undocked. This validates the tested LG B4 commands, not every catalog code
+or appliance. IR volume down remains unverified; its earlier test used webOS.
 
 The remaining entries in this section record earlier bring-up results.
 
@@ -559,5 +561,7 @@ was still using webOS during its successful test, so IR Volume Down remains
 unverified. Remote sleep/wake validation is separate from TV standby.
 
 The undocked check exposed an unrelated GUI idle bug: the room-list
-`light-shown` flag prevented dimming, including underneath a TV screen. Remove
-that ordinary-view hold before continuing sleep/wake IR validation.
+`light-shown` flag prevented dimming, including underneath a TV screen. The hold was
+removed; the live GUI logged dimming after 30 seconds and brightness fell from
+255 to 42. Side-button sleep/wake and IR before/after sleep were subsequently
+confirmed by the user while undocked.

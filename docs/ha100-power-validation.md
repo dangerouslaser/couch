@@ -95,3 +95,11 @@ existing panel standby path, not whole-system suspend or shutdown.
 Device validation: press side power while viewing the TV, confirm a dark screen
 and no TV power change, then press it again to wake. Check that the keypad power
 button still controls the TV. Repeat with a keep-awake activity and while docked.
+
+## Confirmed September 10 device checks
+
+After removing the room-list idle hold, the live GUI logged dimming at 30 seconds
+and the backlight reading dropped from 255 to 42. The user then confirmed side
+power sleep/wake and IR commands before and after sleeping the undocked remote.
+TV IR power off/on and held Volume Up repeats were also confirmed. These checks
+do not validate the docked/full-charge policy; that investigation remains open.

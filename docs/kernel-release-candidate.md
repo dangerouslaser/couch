@@ -33,9 +33,11 @@ Confirmed: LG B4 volume up with one repeat while awake and USB docked; button
 backlight changes affect GPIO58 without changing touch-reset GPIO4 or board
 GPIO17/14/61; advancing GUI heartbeat, recovery BCB clearance and USB serial.
 
-Still required: repeated commands through the normal remote UI, unplugged
-standby/wake followed by IR, charging transitions, and clean installer payload
-boot/recovery validation. Preserve the working boot image and separate recovery
+Subsequent user checks confirmed normal-UI power off/on, Volume Up and held
+repeats, plus IR before and after side-button sleep/wake while undocked.
+
+Still required: charging transitions and clean installer payload boot/recovery
+validation. Preserve the working boot image and separate recovery
 before any further kernel experiments.
 
 Output telemetry remains compiled into this exact tested binary but defaults
