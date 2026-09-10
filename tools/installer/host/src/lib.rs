@@ -1,4 +1,5 @@
 //! Native host input preparation. No commands, device access or filesystem mounts.
+pub mod session;
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use serde_json::json;

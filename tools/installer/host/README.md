@@ -34,3 +34,27 @@ reviewed Linux stage so other hosts do not need native e2fsprogs. The default
 public installation gate remains disabled until those flows and recovery are
 validated. Native input preparation or native terminal builds alone cannot
 establish full macOS/Windows installation support.
+
+## Session journals
+
+`SessionGuard::create(new_directory)` starts a single attempt under an existing
+private state directory outside Git. Unix parents must be owned by the effective
+user and mode0700; macOS parents with extended ACLs are rejected. Windows requires
+a filesystem with persistent ACLs, validates owner/access grants, creates a
+protected user/System DACL and holds directory handles against replacement.
+The caller should use its private per-user application state directory.
+
+`transition(Phase, evidence)` enforces the reviewed forward sequence;
+`checkpoint(evidence)` records per-partition hashes without advancing that phase.
+Persist a checkpoint before sending a corresponding device acknowledgement.
+Evidence is bounded to64KiB per event and must contain hashes/receipt references,
+not credentials. Events are immutable, atomically published and flushed; Windows
+uses write-through rename because it has no Unix directory-fsync contract.
+Actual power-loss durability on host storage remains a physical validation.
+
+A persistence failure disables that guard. Existing directories, including
+interrupted writes, cannot be opened as new sessions. Drop only releases the
+process lock and preserves originals/journals. Explicit recovery is separate.
+The session lock excludes another owner of that run; the USB adapter must also
+enforce device-wide exclusion across different run directories. These primitives
+do not open USB or authorize writes.
