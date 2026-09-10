@@ -127,3 +127,37 @@ to Couch's carrier-scaled register configuration. Separately compare an LG
 candidate frame alone with the same frame followed by an NEC ditto. Repeating
 full commands at one-second intervals does not reproduce the factory fixture.
 Neither difference currently establishes the cause of failed LG reception.
+
+## Does the remote have a usable onboard IR receiver?
+
+The `/dev/ir-learning` reference is executable generic HAL functionality, but
+the original HA100 kernel does **not** enable its corresponding driver. The
+stock ELF's embedded configuration, recovered with `scripts/extract-ikconfig`,
+contains `# CONFIG_MTK_IR_LEARNING_SUPPORT is not set`. None of its 121,470
+recovered symbols or strings identify the learning driver. The backed-up
+vendor `lib/modules` contains connectivity modules only, and this driver's
+Kconfig option is a boolean rather than a loadable-module option.
+
+The HAL installs a Thumb callback at `0x1269` in its device structure at offset
+`0x60`. Its implementation at `0x1268` opens `/dev/ir-learning` read/write,
+queries sample rate using ioctl `0x80016b02`, then captures data using
+`0x80016b01`; a positive capture return becomes the output length. This matches
+the generic MediaTek `drivers/misc/mediatek/ir_learning/mt_irlearning.{c,h}`
+source in the existing kernel checkout. That source:
+
+- Matches device-tree compatible `mediatek,irlearning-spi` and requires
+  `spi_clock`, with optional inversion configuration.
+- Registers SPI bus 0, chip-select 1 and configures approximately 1 MHz sampling.
+- Captures a fixed 256 KiB buffer through `spi_sync`; plain `read()` returns no
+  data. At 1 MHz the capture spans approximately 2.1 seconds.
+- Uses the buffer for both SPI receive and transmit, so its capture ioctl is
+  an active bus transaction, not a passive software-only probe.
+
+No learning call was found in the inspected factory IR activities or launcher.
+There is no verified HA100 receiver pin assignment or populated receiver
+component in this evidence. The HAL callback therefore cannot establish that
+the physical remote can receive IR, and cannot provide an immediate substitute
+for an external optical measurement. Enabling the generic driver or selecting
+SPI pins speculatively would be unjustified. A board schematic, component
+identification or documented factory learning feature is needed before pursuing
+this path. No receiver ioctl, pin change or device operation was attempted.
