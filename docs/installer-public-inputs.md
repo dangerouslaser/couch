@@ -160,3 +160,10 @@ Windows driver/locking/deadline support, macOS filesystem dependency delivery,
 public payload allowlist/corresponding-source review and per-platform execution
 also remain release requirements. Neither a native TUI executable nor these
 read-only fixtures satisfy them.
+
+The native `tools/installer/host` workspace provides the same owner-side input
+preparation without Python, debugfs or subprocesses. It reconstructs the pinned
+filesystems with bounded Rust Brotli streams and reads the 33 allowlisted files
+through a read-only Rust ext4 parser. See its [usage and platform validation](../tools/installer/host/README.md).
+This moves input preparation into the native backend; USB/write orchestration
+and stage-side personalization remain separate work.
