@@ -436,15 +436,6 @@ impl Storage for Disk {
         let path = self.root.join("userdata");
         fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
         self.refresh()?;
-        if let Some(network) = self.network.take() {
-            super::network::configure(&path, &self.root, &network)?;
-            self.refresh()?;
-            let guard = self.file("userdata", false, false)?;
-            guard.sync_all()?;
-            drop(guard);
-            fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
-        }
-        self.refresh()?;
         fs_tool(
             "/usr/sbin/resize2fs",
             &[],

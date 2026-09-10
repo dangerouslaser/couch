@@ -108,20 +108,24 @@ pub(super) fn configure(image: &Path, private_root: &Path, data: &[u8]) -> io::R
         }),
         "invalid private network path",
     )?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&input)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
+    let mut input_created = false;
+    let mut commands_created = false;
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .open(&input)?;
+        input_created = true;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
             .open(&commands)?;
+        commands_created = true;
         writeln!(file,"rm /opt/couch/networks.conf\nwrite {} /opt/couch/networks.conf\nset_inode_field /opt/couch/networks.conf mode 0100600",input.display())?;
         file.sync_all()?;
         drop(file);
@@ -142,8 +146,12 @@ pub(super) fn configure(image: &Path, private_root: &Path, data: &[u8]) -> io::R
         )?;
         Ok(())
     })();
-    let _ = fs::remove_file(input);
-    let _ = fs::remove_file(commands);
+    if input_created {
+        let _ = fs::remove_file(input);
+    }
+    if commands_created {
+        let _ = fs::remove_file(commands);
+    }
     result
 }
 
@@ -186,6 +194,20 @@ mod tests {
                 *expected
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn temporary_secret_is_removed_when_command_creation_fails() {
+        let root =
+            std::env::temp_dir().join(format!("couch-network-cleanup-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("network.commands"), b"preexisting").unwrap();
+        assert!(configure(&root.join("unused.ext4"), &root, b"private test secret").is_err());
+        assert!(!root.join("network.conf").exists());
+        assert_eq!(
+            fs::read(root.join("network.commands")).unwrap(),
+            b"preexisting"
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
