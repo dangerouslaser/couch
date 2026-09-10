@@ -2,6 +2,37 @@ use anyhow::{bail, Result};
 use std::path::PathBuf;
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|value| value == "prepare-dependencies" || value == "--dependency-smoke")
+    {
+        anyhow::ensure!(
+            args.len() == 2,
+            "usage: couch-installer-host prepare-dependencies NEW_PRIVATE_PARENT"
+        );
+        use couch_installer_host::{dependencies, session};
+        let parent = PathBuf::from(&args[1]);
+        session::create_private_parent(&parent)?;
+        let guard = session::SessionGuard::create(&parent.join("run"))?;
+        let mut last = String::new();
+        let prepared =
+            dependencies::prepare(&guard, dependencies::host_platform()?, |label, _, _| {
+                if label != last {
+                    eprintln!("{label}…");
+                    last = label.into();
+                }
+                Ok(())
+            })?;
+        if args[0] == "--dependency-smoke" {
+            println!("{}", dependencies::smoke(&prepared)?);
+        } else {
+            println!(
+                "{}",
+                serde_json::json!({"runtime":prepared.runtime_root,"runtime_receipt_sha256":prepared.runtime_receipt_sha256,"adb":prepared.adb,"owner_da":prepared.owner_da,"usb_opened":false})
+            );
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|value| value == "--ui-smoke") {
         return ui_smoke(&args[1..]);
     }

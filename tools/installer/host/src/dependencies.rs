@@ -91,6 +91,7 @@ pub struct PreparedDependencies {
     pub owner_da_root: PathBuf,
     pub owner_da_receipt_sha256: String,
     pub owner_da: PathBuf,
+    pub owner_da_sha256: String,
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -205,6 +206,15 @@ fn verified_download(
     label: &str,
     progress: &mut Progress<'_>,
 ) -> Result<Vec<u8>> {
+    ensure!(
+        pin.blob.sha256.len() == 64
+            && pin
+                .blob
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "invalid dependency hash pin"
+    );
     ensure!(
         pin.blob.size > 0 && pin.blob.size <= MAX_FILE,
         "dependency download exceeds bound"
@@ -702,6 +712,7 @@ pub fn prepare(
         adb_root,
         adb_receipt_sha256,
         owner_da: owner_da_root.join("loader.bin"),
+        owner_da_sha256: DA_SHA256.into(),
         owner_da_root,
         owner_da_receipt_sha256,
     };
@@ -752,6 +763,38 @@ impl PreparedDependencies {
                 "prepared dependency files changed"
             );
         }
+        let runtime: Value =
+            serde_json::from_reader(crate::regular(&self.runtime_root.join("runtime.json"))?)?;
+        let adb: Value =
+            serde_json::from_reader(crate::regular(&self.adb_root.join("receipt.json"))?)?;
+        ensure!(
+            runtime["platform"] == self.platform
+                && self.python
+                    == self.runtime_root.join(
+                        runtime["executables"]["python"]
+                            .as_str()
+                            .context("missing Python entrypoint")?
+                    )
+                && self.libusb
+                    == self.runtime_root.join(
+                        runtime["native_libraries"]["libusb"]
+                            .as_str()
+                            .context("missing libusb entrypoint")?
+                    )
+                && self.mtk_root == self.runtime_root.join("mtk")
+                && self.adb
+                    == self.adb_root.join(
+                        adb["executables"]["adb"]
+                            .as_str()
+                            .context("missing ADB entrypoint")?
+                    )
+                && self.owner_da == self.owner_da_root.join("loader.bin"),
+            "dependency paths differ from admitted receipts"
+        );
+        ensure!(
+            self.owner_da_sha256 == DA_SHA256 && crate::hash_file(&self.owner_da)? == DA_SHA256,
+            "owner DA differs from approved pin"
+        );
         Ok(())
     }
 }
@@ -765,6 +808,136 @@ pub fn host_platform() -> Result<&'static str> {
         ("windows", "x86_64") => Ok("windows-x86_64"),
         _ => bail!("unsupported installer dependency platform"),
     }
+}
+
+/// Read-only executable/import check. Every invocation is preceded by full receipt
+/// verification; discovery is prohibited and the environment contains no tool PATH.
+pub fn smoke(prepared: &PreparedDependencies) -> Result<Value> {
+    use std::process::{Command, Stdio};
+    use std::{thread, time::Instant};
+    fn run(executable: &Path, args: &[String]) -> Result<String> {
+        let mut command = Command::new(executable);
+        command
+            .args(args)
+            .env_clear()
+            .env("PATH", "")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let mut child = command.spawn()?;
+        let stdout = child.stdout.take().context("smoke stdout absent")?;
+        let stderr = child.stderr.take().context("smoke stderr absent")?;
+        let read = |stream: Box<dyn Read + Send>| {
+            thread::spawn(move || {
+                let mut bytes = Vec::new();
+                stream.take(65537).read_to_end(&mut bytes).map(|_| bytes)
+            })
+        };
+        let out = read(Box::new(stdout));
+        let err = read(Box::new(stderr));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                bail!("dependency smoke deadline exceeded");
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        let output = out
+            .join()
+            .map_err(|_| anyhow::anyhow!("smoke reader panicked"))??;
+        let errors = err
+            .join()
+            .map_err(|_| anyhow::anyhow!("smoke reader panicked"))??;
+        ensure!(
+            output.len() <= 65536 && errors.len() <= 65536,
+            "dependency smoke output exceeds bound"
+        );
+        ensure!(
+            status.success(),
+            "dependency smoke failed: {}",
+            String::from_utf8_lossy(&errors)
+        );
+        Ok(String::from_utf8(output)?)
+    }
+    ensure!(
+        prepared.platform == host_platform()?,
+        "native smoke requires matching platform"
+    );
+    prepared.verify()?;
+    let version = run(
+        &prepared.python,
+        &["-I".into(), "-B".into(), "--version".into()],
+    )?;
+    ensure!(
+        version.trim() == "Python 3.12.14",
+        "unexpected Python version"
+    );
+    prepared.verify()?;
+    let adb = run(&prepared.adb, &["version".into()])?;
+    ensure!(
+        adb.contains("Android Debug Bridge version") && adb.contains("37.0.1"),
+        "unexpected ADB version"
+    );
+    let receipt: Value =
+        serde_json::from_reader(crate::regular(&prepared.runtime_root.join("runtime.json"))?)?;
+    let site = prepared.runtime_root.join(
+        receipt["site_packages"]
+            .as_str()
+            .context("missing site packages")?,
+    );
+    let code = r#"import ctypes,json,pathlib,sys
+sys.path.insert(0,sys.argv[1]);sys.path.insert(0,sys.argv[2])
+import usb.core,serial,colorama,Crypto.Cipher.AES,Cryptodome.Cipher.AES,libusb_package
+library=pathlib.Path(libusb_package.get_library_path()).resolve()
+assert library==pathlib.Path(sys.argv[3]).resolve()
+ctypes.CDLL(str(library))
+def no_usb(*a,**k): raise RuntimeError("USB forbidden during dependency smoke")
+usb.core.find=no_usb
+from mtkclient.Library.mtk_class import Mtk
+from mtkclient.Library.Connection.usblib import UsbClass
+from mtkclient.config.mtk_config import MtkConfig
+config=MtkConfig();config.interface=0;config.stock=True;config.loader=None
+Mtk(config,preinit=False)
+print(json.dumps({"imports":"passed","libusb_load":"passed","usb_opened":False}))
+"#;
+    prepared.verify()?;
+    let result = run(
+        &prepared.python,
+        &[
+            "-I".into(),
+            "-B".into(),
+            "-S".into(),
+            "-c".into(),
+            code.into(),
+            site.to_str().context("non-UTF8 smoke site path")?.into(),
+            prepared
+                .mtk_root
+                .to_str()
+                .context("non-UTF8 MTK path")?
+                .into(),
+            prepared
+                .libusb
+                .to_str()
+                .context("non-UTF8 libusb path")?
+                .into(),
+        ],
+    )?;
+    let imports: Value =
+        serde_json::from_str(result.lines().last().context("smoke result missing")?)?;
+    prepared.verify()?;
+    Ok(
+        json!({"platform":prepared.platform,"python":version.trim(),"adb":adb.lines().next(),"imports":imports,"usb_opened":false,"runtime_receipt_sha256":prepared.runtime_receipt_sha256,"owner_da_sha256":DA_SHA256}),
+    )
 }
 
 #[cfg(test)]
