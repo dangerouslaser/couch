@@ -161,3 +161,64 @@ for an external optical measurement. Enabling the generic driver or selecting
 SPI pins speculatively would be unjustified. A board schematic, component
 identification or documented factory learning feature is needed before pursuing
 this path. No receiver ioctl, pin change or device operation was attempted.
+
+## Current shipping software comparison (September 10, 2026)
+
+The original `system.img` identifies itself as `HAOS_V1.0.3_20260327` in
+`/build.prop`. Sanytron's [IR guide](https://hub.sanytron.com/support/astrion/infrared)
+places the first user-facing IR release at software V1.2.0 on June 6, 2026.
+That warranted checking the shipping software, rather than assuming the earlier
+factory image represented the complete working IR implementation.
+
+The original launcher's `OtaHelper`, `ICloudBusiness` and
+`ServerCallbackAdapter` expose separate anonymous update checks for model codes
+`aiks_ha_remote_ha100.app` and `aiks_ha_remote_ha100.fw`. Querying those exact
+channels returned **app 1.4.2 (version code 73)** and **firmware 2026020212**.
+The latter is an older February build with charging release notes, not a new
+IR kernel release. Sanytron's [firmware guide](https://hub.sanytron.com/support/astrion/firmware)
+also distinguishes software features and underlying firmware versions.
+
+Downloaded artifacts stayed on Ollie, outside Git; neither was installed:
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| App 1.4.2 APK | 44,850,104 | `858fbbf79d864a3434f8ebd132906ad7f2db54c8275e2992436331709a0c80bf` |
+| Firmware 2026020212 ZIP | 518,937,104 | `e9d6cd18a43c9195caac613a6168c43cf9b95758a7348931b17ae3aec0aa863a` |
+
+Each file's MD5 matches the update response's `signature` field (not its separate
+`checkSum` field). This confirms matching downloaded bytes, **not cryptographic
+signer verification**. The model/channel provenance comes from the backed-up
+manufacturer launcher; its metadata endpoint uses HTTP. Treat the artifacts as
+analysis inputs, not newly approved restore images. Private metadata, source,
+and extracted images live under the existing `ir-app-audit/latest-ota` directory
+on Ollie. No device-identity data was sent in the update checks.
+
+### Comparison results
+
+- Firmware's `consumerir.mt6580.so` is byte-identical to the earlier audited HAL
+  (`05658d1c…6ced8c8`). Its IR service still runs the standard executable as
+  system/system, without a separate emitter-enable action.
+- Symbol recovery again found 121,470 kernel symbols. Although the compressed
+  kernel hashes differ, the compared symbol spans are **byte-identical at the
+  same addresses**: `dev_char_ioctl` (452 bytes), `dev_char_write` (984),
+  `irtx_probe` (856), `mt_pwm_power_on_hal` (260), `irtx_pwm_config` (64), and
+  the GPIO mode/output helpers (68/80). This is a targeted comparison, not a
+  claim that every kernel byte is identical.
+- Firmware DT overlay fragment 26 still supplies `pwm_ch = 0` and
+  `pwm_data_invert = 0` for `mt_irtx_pwm`; it supplies no additional IR pinctrl
+  setup.
+- App 1.4.2's recovered `InfraredManagerK` calls Android
+  `ConsumerIrManager.transmit(frequency, durations)`. Its plaintext format
+  explicitly carries frequency followed by durations. Its NEC generator uses
+  67 alternating durations: 9000/4500 leader, 560 marks, 560/1690 spaces,
+  LSB-first address/complement/command/complement, and a final 560 mark.
+  No extra GPIO/JNI/UART enable path or mandatory ditto precedes that call.
+  The older Java IR manager also uses `ConsumerIrManager` directly.
+- JADX reported 93 failures across the APK; the inspected NEC transmit methods
+  recovered successfully. The Broadlink conversion method did not fully
+  decompile, so this audit makes no claim about its complete implementation.
+
+This closes the proposed “new shipping IR implementation” lead without finding
+a missing kernel operation. It supports retaining the existing measured timing
+and focusing the next test on actual optical emission and modulation. No
+transmission, pin change, reboot, restore or flash was performed in this audit.

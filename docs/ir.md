@@ -393,3 +393,38 @@ The read-only GPIO dump reported GPIO8 as mode 2 (PWM_A); no mux writes were
 needed. These checks verify carrier-dependent programming, bounded DMA and
 repeat-transfer completion. They do not measure optical carrier frequency or
 prove reception by a television. Real-device command validation remains pending.
+
+### Next decisive optical test
+
+The September 10 [shipping-software comparison](ha100-stock-ir-audit.md#current-shipping-software-comparison-september-10-2026)
+found the same IR HAL and byte-identical relevant kernel paths in the currently
+served official firmware. The current launcher still calls the standard Android
+IR service with ordinary NEC timing. It provides no evidence for a new GPIO,
+polarity change or alternate transport.
+
+The earlier camera comparison needs a positive control. A functioning hybrid
+Bluetooth/IR remote does not prove the tested button emitted IR. LG documents
+both RF/Bluetooth and IR in its [Magic Remote diagram](https://www.lg.com/us/support/pdf/remotes/2016-Magic-Remote-MR600.pdf);
+that is a reason not to assume the B4's OEM Volume button is an optical control,
+not a claim that this older diagram establishes the B4's exact routing.
+[Sony's camera-test instructions](https://www.sony.com/electronics/support/articles/00223964)
+likewise require a working IR comparison and note that some cameras filter IR.
+
+1. First verify a camera can actually see an emitter using a known IR-only
+   remote, or a specifically verified IR button. Try the front camera if the
+   rear camera is filtered. Do not interpret darkness from both remotes.
+2. Once that control flashes visibly, coordinate one Couch transmission with
+   the emitter at the same camera/distance/angle. A camera can distinguish
+   visible emission from no detected emission; it cannot validate 38 kHz or
+   decode NEC. No automatic repeat loop is needed.
+3. If Couch flashes, use a demodulating IR receiver to capture the leader and
+   data envelope. A photodiode/scope measurement is needed to resolve optical
+   carrier frequency, duty and polarity directly. Compare with a known working
+   LG IR capture before changing code bytes or waveform timing.
+4. If Couch does not flash under the verified camera setup, inspect emitter
+   routing, physical LED supply and transistor polarity with board evidence.
+   A scope trace at PWM_A and then at the emitter distinguishes missing drive
+   from a downstream hardware/output-path issue. Do not guess GPIO changes.
+
+These are proposed coordinated checks; they were not performed during the
+read-only software audit.
