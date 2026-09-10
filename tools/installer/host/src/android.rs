@@ -240,6 +240,48 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn capture_reads_selected_identity_and_reboot_is_never_retried() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let adb = root.path().join("adb");
+        std::fs::write(
+            &adb,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> calls
+case "$*" in
+  'devices -l') printf 'List of devices attached\nremote device model:HA100\n' ;;
+  '-s remote shell getprop ro.product.model') printf HA100 ;;
+  '-s remote shell cat /sys/class/net/wlan0/address') printf 'a0:b1:c2:d3:e4:f5' ;;
+  '-s remote shell settings get secure bluetooth_address') printf null ;;
+  '-s remote shell cat /sys/block/mmcblk0/device/cid') printf 'a1234567890123456789012345678901' ;;
+  '-s remote reboot') exit 1 ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let identity = capture(&adb, "remote").unwrap();
+        assert_eq!(identity.model, "HA100");
+        assert_eq!(identity.wifi_mac.as_deref(), Some("a0:b1:c2:d3:e4:f5"));
+        assert!(identity.device_id.is_none() && identity.bt_mac.is_none());
+        assert!(identity.cid.is_some());
+        assert!(reboot(&adb, "remote").is_err());
+        assert!(reboot(&adb, "unauthorized").is_err());
+        assert!(reboot(&adb, "$(injection)").is_err());
+        let calls = std::fs::read_to_string(root.path().join("calls")).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.ends_with("reboot"))
+                .count(),
+            1
+        );
+        assert!(!calls.contains("unauthorized") && !calls.contains("injection"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn actual_child_timeout_and_excess_output_are_bounded() {
         let started = Instant::now();
         assert!(command(
