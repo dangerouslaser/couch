@@ -93,7 +93,7 @@ fn tracks_active_app_and_merges_partial_updates_without_leaking_previous_item() 
     assert_eq!(state.snapshot(), NowPlaying::default());
 }
 #[test]
-fn position_handles_pause_live_invalid_numbers_and_clock_jumps() {
+fn position_handles_pause_live_invalid_numbers_and_long_playback() {
     let mut now = NowPlaying {
         position: Some(10.0),
         duration: Some(20.0),
@@ -115,7 +115,20 @@ fn position_handles_pause_live_invalid_numbers_and_clock_jumps() {
         Some(10.0)
     );
     now.state = PlaybackState::Playing;
-    assert_eq!(now.position_at(SystemTime::now()), Some(10.0));
+    assert_eq!(now.position_at(SystemTime::now()), Some(20.0));
+    now.duration = None;
+    assert_eq!(
+        now.position_at(UNIX_EPOCH + Duration::from_secs(1301)),
+        Some(311.0)
+    );
+    assert_eq!(
+        now.position_at(UNIX_EPOCH + Duration::from_secs(4600)),
+        Some(3610.0)
+    );
+    assert_eq!(
+        now.position_at(UNIX_EPOCH + Duration::from_secs(900)),
+        Some(10.0)
+    );
     let mut state = state::State::default();
     let mut m = playing("a", "live");
     let meta = m.state.as_mut().unwrap().queue.as_mut().unwrap().items[0]

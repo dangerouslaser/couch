@@ -52,10 +52,7 @@ impl NowPlaying {
                 (self.position_timestamp, now.duration_since(UNIX_EPOCH))
             {
                 let delta = (now.as_secs_f64() - stamp).max(0.0);
-                // Clock discontinuities or stale samples must not jump the timeline.
-                if delta <= 300.0 {
-                    position += delta * f64::from(self.playback_rate.unwrap_or(1.0).max(0.0));
-                }
+                position += delta * f64::from(self.playback_rate.unwrap_or(1.0).max(0.0));
             }
         }
         Some(

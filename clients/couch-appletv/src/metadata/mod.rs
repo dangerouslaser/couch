@@ -69,7 +69,7 @@ impl Pairing {
         if self.started.elapsed() > Duration::from_secs(120) {
             return Err(Error::Timeout);
         }
-        let setup = crypto::Setup::new(pin, &self.salt, &self.public)?;
+        let setup = crypto::Setup::new_airplay(pin, &self.salt, &self.public)?;
         let response = self.http.request(
             "POST",
             "/pair-setup",

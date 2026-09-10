@@ -29,8 +29,9 @@ live status and artwork availability/identifier/HTTP(S) URL/MIME type. Missing
 values remain absent. App/player changes select the matching cached state;
 content-item updates merge optional fields. Queue replacement removes stale
 metadata. Apple epoch timestamps are converted to Unix seconds; `position_at`
-advances only playing state and clamps known duration. Large clock discontinuities
-leave the last sample unchanged.
+advances only playing state and clamps known duration. It uses the supplied wall
+clock; callers should keep clocks synchronized with the TV. A sample in the
+future contributes no negative elapsed time.
 
 Artwork URLs are metadata only. The client does not fetch URLs, decode embedded
 artwork or request artwork-only queue assets. Applications differ in the fields
