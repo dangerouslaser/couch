@@ -9,6 +9,11 @@ from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+import signal
+import re
+import time
+import subprocess
+from types import SimpleNamespace
 
 import couch_install as core
 
@@ -29,6 +34,9 @@ class Plan:
     writes: tuple[str, ...]
     backup_dir: Path
     simulation: bool
+    operation: str = "install"
+    resume: bool = False
+    boot_after: bool = False
 
 
 class CoreAdapter:
@@ -50,7 +58,7 @@ class CoreAdapter:
         return Plan(device.description['storage_id'], str(self.args.manifest),
                     tuple(sorted(core.IDENTITY_PARTITIONS | release['images'].keys())),
                     tuple(name for name in core.WRITE_ORDER if name in release['images']),
-                    self.args.backup_dir, True)
+                    self.args.backup_dir, True, resume=self.args.resume)
 
     def apply(self, plan, confirmation, progress):
         if not plan.simulation or not self.args.simulation or self.prepared is None:
@@ -65,6 +73,170 @@ class CoreAdapter:
     def observe(self, progress):
         with redirect_stdout(progress):
             core.watch_usb(self.args.usb_timeout)
+
+
+class PhaseProgress:
+    """Render only measured per-partition counters; never imply total-run progress."""
+    PATTERN = re.compile(r"^(Backup|Hash readback|Write|Verify image): ([a-zA-Z0-9_]+) (\d+)/(\d+) bytes \(\d+%\)$")
+
+    def __init__(self, output, clock=time.monotonic):
+        self.output, self.clock = output, clock
+        self.key = None
+        self.active = False
+        self.started = self.initial = self.previous = 0
+
+    @staticmethod
+    def duration(seconds):
+        seconds = max(0, int(seconds))
+        return f"{seconds // 3600:02}:{seconds // 60 % 60:02}:{seconds % 60:02}"
+
+    def finish(self):
+        if self.active:
+            self.output.write('\n')
+            self.output.flush()
+            self.active = False
+
+    def line(self, line):
+        # Child logs must not inject terminal control sequences.
+        clean = ''.join(c for c in line.rstrip('\r\n') if ord(c) >= 32 and ord(c) != 127)
+        match = self.PATTERN.fullmatch(clean)
+        if match:
+            phase, name, done, total = match.groups()
+            done, total = int(done), int(total)
+            if total <= 0 or done > total:
+                match = None
+        if not match:
+            # Preserve every error in full; other diagnostics share the status
+            # line, avoiding a terminal full of repetitive USB/library logs.
+            if any(word in clean.lower() for word in ('error', 'failed', 'failure', 'stopped', 'exception', 'traceback', 'mismatch', 'warning')):
+                self.finish()
+                self.output.write(clean + '\n')
+            else:
+                self.output.write('\r\033[2K' + clean[:160])
+                self.active = True
+            self.output.flush()
+            return
+        now = self.clock()
+        key = (phase, name, total)
+        if key != self.key or done < self.previous:
+            self.finish()
+            self.key, self.started, self.initial = key, now, done
+        self.previous = done
+        elapsed = max(0, now - self.started)
+        rate = (done - self.initial) / elapsed if elapsed > 0 else 0
+        eta = self.duration((total - done) / rate) if rate > 0 else '--:--:--'
+        fraction = done / total
+        bar = '#' * int(fraction * 12) + '-' * (12 - int(fraction * 12))
+        self.output.write(f"\r\033[2K{phase}: {name} [{bar}] {fraction:5.1%} "
+                          f"{done}/{total} bytes | {rate / 1048576:.2f} MiB/s | "
+                          f"elapsed {self.duration(elapsed)} ETA {eta}")
+        self.active = True
+        self.output.flush()
+        if done == total:
+            self.finish()
+
+
+class PrivateAdapter:
+    """Explicit developer adapter; the public/default bootstrap never selects it."""
+    private_trial = True
+    PATHS = ('manifest', 'baseline', 'checkout', 'loader', 'preloader', 'backup_dir', 'lock_dir')
+    REQUIRED = ('manifest', 'baseline', 'checkout', 'loader', 'preloader', 'backup_dir',
+                'loader_sha256', 'preloader_sha256', 'confirm_cid_sha256', 'ports', 'bus')
+    FLAGS = ('restore', 'resume', 'boot_after_install')
+
+    def __init__(self, path, *, validate=None, launch=subprocess.Popen):
+        path = core.regular(path)
+        core.require(path.stat().st_mode & 0o077 == 0, "Private trial configuration must have permissions 0600 or stricter")
+        value = core.read_json(path)
+        allowed = set(self.REQUIRED) | set(self.PATHS) | set(self.FLAGS) | {'timeout'}
+        core.require(isinstance(value, dict) and set(value) <= allowed and set(self.REQUIRED) <= set(value),
+                     "Private trial configuration has missing or unknown fields")
+        for key, item in value.items():
+            core.require(not isinstance(item, str) or not any(ord(c)<32 or ord(c)==127 for c in item),
+                         f"Control characters are not allowed in {key}")
+        for key in self.PATHS:
+            if key not in value:
+                continue
+            core.require(isinstance(value[key], str) and Path(value[key]).is_absolute(), f"{key} must be an absolute path")
+            value[key] = Path(value[key])
+        for key in self.FLAGS:
+            core.require(type(value.get(key, False)) is bool, f"{key} must be true or false")
+            value.setdefault(key, False)
+        core.require(type(value['bus']) is int and value['bus'] > 0, "bus must be a positive integer")
+        core.require(type(value.get('timeout',120)) in (int,float), "timeout must be numeric")
+        for key in ('loader_sha256','preloader_sha256','confirm_cid_sha256','ports'):
+            core.require(isinstance(value[key], str), f"{key} must be text")
+        value.setdefault('timeout',120)
+        value.setdefault('lock_dir',Path.home()/'.local/state/couch-installer/locks')
+        value.update(allow_private_flash=True, check_only=False)
+        self.args = SimpleNamespace(**value)
+        self.validate, self.launch = validate, launch
+        self.prepared = None
+
+    def toggle_restore(self):
+        self.args.restore = not self.args.restore
+        self.prepared = None
+
+    def toggle_resume(self):
+        self.args.resume = not self.args.resume
+        self.prepared = None
+
+    def plan(self):
+        import private_install
+        # validate_inputs is metadata/file validation only. Never construct a
+        # session, enumerate USB, or call private_install.run during planning.
+        release, _, _, _ = (self.validate or private_install.validate_inputs)(self.args)
+        order = ('userdata','logo','odmdtbo','boot','recovery') if self.args.restore else core.WRITE_ORDER
+        self.prepared = Plan(self.args.confirm_cid_sha256, str(self.args.manifest),
+            tuple(sorted(core.IDENTITY_PARTITIONS | release['images'].keys())),
+            tuple(name for name in order if name in release['images']), self.args.backup_dir,
+            False, 'restore' if self.args.restore else 'install', self.args.resume, self.args.boot_after_install)
+        return self.prepared
+
+    def command(self):
+        argv = [sys.executable, str(Path(__file__).with_name('private_install.py')), '--allow-private-flash']
+        for key in self.PATHS + ('loader_sha256','preloader_sha256','confirm_cid_sha256','ports','bus','timeout'):
+            argv.extend(('--'+key.replace('_','-'), str(getattr(self.args,key))))
+        argv.extend('--'+key.replace('_','-') for key in self.FLAGS if getattr(self.args,key))
+        return argv
+
+    @staticmethod
+    def stop_process(process):
+        if process.poll() is not None:
+            return
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+    def apply(self, plan, confirmation, progress):
+        core.require(self.prepared is not None and plan == self.prepared and confirmation == plan.target,
+                     "Review the private plan and enter its exact target CID hash before continuing")
+        self.prepared = None  # One confirmation starts at most one process.
+        process = self.launch(self.command(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+        display = PhaseProgress(progress)
+        try:
+            for line in process.stdout:
+                display.line(line)
+            code = process.wait()
+            core.require(code == 0, f"Private {plan.operation} stopped (exit {code}). Keep the originals and journal; review the error above before retrying.")
+        except BaseException:
+            self.stop_process(process)
+            raise
+        finally:
+            display.finish()
+            process.stdout.close()
+
+    def observe(self, progress):
+        with redirect_stdout(progress):
+            core.watch_usb(15)
 
 
 class Terminal:
@@ -86,14 +258,21 @@ class Terminal:
     def run(self, adapter, simulation=False):
         self.line(LOGO)
         self.line("Couch installer · Linux")
-        self.line("SIMULATION — regular files only" if simulation else "Physical installation is not approved yet.")
+        private = getattr(adapter, "private_trial", False)
+        self.line("PRIVATE DEVELOPER TRIAL — not a public installer" if private else "SIMULATION — regular files only" if simulation else "Physical installation is not approved yet.")
         while True:
             self.line()
-            self.line("  1  Review installation plan" if simulation else "  1  Check installation availability")
+            self.line("  1  Review " + ("restore" if adapter.args.restore else "installation") + " trial plan" if private else "  1  Review installation plan" if simulation else "  1  Check installation availability")
             self.line("  2  Observe USB connection (descriptors only)")
+            if private:
+                self.line("  3  Switch install / restore")
+                self.line("  4  Resume existing journal: " + ("YES" if adapter.args.resume else "NO"))
             self.line("  q  Quit")
             try:
-                choice = self.ask("Choose [1/2/q]: ").lower()
+                choice = self.ask("Choose [1/2/3/4/q]: " if private else "Choose [1/2/q]: ").lower()
+                if private and choice in ("3","4"):
+                    (adapter.toggle_restore if choice == "3" else adapter.toggle_resume)()
+                    continue
                 if choice in ('q', 'quit'):
                     return 0
                 if choice == '2':
@@ -103,22 +282,24 @@ class Terminal:
                 if choice != '1':
                     self.line("Choose 1, 2 or q.")
                     continue
+                self.line("Verifying release files and planning inputs; this may take a moment. No USB session is opened.")
                 plan = adapter.plan()
                 self.line("\nReview this plan")
                 self.line("Mode: " + ("SIMULATION — no physical device" if plan.simulation else "PHYSICAL DEVICE"))
-                self.line("Target: " + plan.target)
+                self.line("Operation: " + plan.operation + (" · resume existing journal" if plan.resume else " · start new transaction"))
+                self.line("Target CID SHA-256: " + plan.target if private else "Target: " + plan.target)
                 self.line("Release: " + plan.release)
-                self.line("Back up: " + ', '.join(plan.backups))
+                self.line(("Verify retained originals: " if plan.operation == "restore" else "Back up: ") + ', '.join(plan.backups))
                 self.line("Write and verify: " + ' -> '.join(plan.writes))
                 self.line("Originals and journal: " + str(plan.backup_dir))
-                self.line("Other partitions are preserved. No automatic reboot.")
+                self.line("Other partitions are preserved. " + ("Request boot only after verified readback; side Power may still be needed." if plan.boot_after else "No automatic reboot."))
                 typed = self.ask("Type the exact target ID to continue, or Enter to cancel: ")
                 if typed != plan.target:
                     self.line("Cancelled. Nothing was written.")
                     continue
                 self.line("\nRunning the reviewed plan. Progress below comes from the policy engine.")
                 adapter.apply(plan, typed, self.writer)
-                self.line("Simulation completed. Keep the originals and journal." if plan.simulation else "Installation completed. Keep the originals and journal.")
+                self.line("Simulation completed. Keep the originals and journal." if plan.simulation else f"Private {plan.operation} readback completed. Normal startup remains unverified; keep the originals and journal.")
             except KeyboardInterrupt:
                 self.line("\nInterrupted. Retain any originals and journal; do not delete recovery information.")
                 return 130
@@ -131,6 +312,7 @@ class Terminal:
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument('--private-trial', type=Path, help='Developer-only private trial configuration (0600); public installation stays disabled')
     result.add_argument('--simulation', action='store_true', help='Explicitly use regular-file simulated device')
     result.add_argument('--manifest', type=Path)
     result.add_argument('--device-dir', type=Path)
@@ -143,6 +325,9 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.private_trial and (args.simulation or args.manifest or args.device_dir or args.identity or args.backup_dir or args.resume):
+        print("Use the private configuration file for all private-trial options; do not mix simulation options.", file=sys.stderr)
+        return 2
     if not sys.platform.startswith('linux'):
         print("The installer terminal is currently supported on Linux only.", file=sys.stderr)
         return 2
@@ -154,7 +339,14 @@ def main(argv=None):
             reader = opened
         if not sys.stdout.isatty():
             raise OSError("Interactive output needs a terminal")
-        return Terminal(reader, sys.stdout).run(CoreAdapter(args), args.simulation)
+        try:
+            adapter = PrivateAdapter(args.private_trial) if args.private_trial else CoreAdapter(args)
+        except OSError as error:
+            raise core.InstallError(f'Cannot read private trial configuration: {error}') from error
+        return Terminal(reader, sys.stdout).run(adapter, args.simulation)
+    except (core.InstallError, ValueError, KeyError, TypeError) as error:
+        print("Private trial configuration rejected: " + str(error), file=sys.stderr)
+        return 2
     except OSError:
         print("An interactive terminal is required. Run from a terminal; for automation use couch_install.py plan/simulate.", file=sys.stderr)
         return 2

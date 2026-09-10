@@ -1,8 +1,8 @@
 # Installer terminal and bootstrap
 
 Status: implemented terminal front end and offline simulation; **no approved
-public installer release exists**. Neither the TUI nor bootstrap enables hardware
-writes. The core installer policy and private developer transport remain separate.
+public installer release exists**. The default TUI and bootstrap keep hardware writes disabled. An explicit private
+trial adapter delegates to the guarded developer CLI; it is not a public release.
 
 ## Terminal flow
 
@@ -12,8 +12,8 @@ menu. It supports Linux with Python 3.10+, without a terminal UI dependency.
 1. Review the exact target, release, backup destination, protected identity
    partitions, and ordered write/readback plan.
 2. Type the full target ID to confirm; blank or mismatched input cancels.
-3. Read progress emitted by the existing policy engine. There are no invented
-   percentage bars or optimistic success messages. An error leaves its original
+3. Read progress emitted by the existing policy engine. Per-partition bars use measured byte counters,
+   with throughput, elapsed time and ETA; there is no overall-run percentage. An error leaves its original
    backups and journal available for recovery.
 
 Default mode reports that physical installation is unavailable. The second menu
@@ -40,6 +40,41 @@ presents the adapter's plan and streams its output; it does not implement USB
 writes or weaken checks. A future approved adapter must supply a verified plan
 and execute the reviewed policy, rather than treating terminal confirmation as
 permission to skip release, identity, backup, or readback checks.
+
+## Controlled private trials
+
+On Linux, a developer can run:
+
+```sh
+chmod 600 /private/path/trial.json
+python3 tools/installer/couch_tui.py --private-trial /private/path/trial.json
+```
+
+The private JSON file requires absolute paths for `manifest`, `baseline`,
+`checkout`, `loader`, `preloader`, and `backup_dir`; strings for `loader_sha256`,
+`preloader_sha256`, `confirm_cid_sha256`, and USB `ports` (for example `2.1`);
+and a positive integer USB `bus`. Optional fields are `lock_dir` (absolute path),
+`timeout` (seconds, default 120), and boolean `restore`, `resume`,
+`boot_after_install` (all default false). Unknown fields are rejected. Keep this
+file, device baseline, originals and release payloads outside Git.
+
+The menu switches install/restore and explicitly enables journal resume. Reviewing
+runs the core input validation without opening USB; hashing may take time.
+The complete target CID SHA-256 must be typed before starting a child process.
+The child is the existing `private_install.py`, invoked with an argument list,
+no shell and no stdin; it repeats all release, identity and backup checks.
+Changing operation requires a fresh review. No private configuration changes the
+public release gate. Restore verifies retained originals and does not require the
+candidate OS image bytes to remain available.
+
+Progress updates replace one status line. Only the writer's `Backup`,
+`Hash readback`, `Write` and `Verify image` counters produce a bar. Rate and ETA
+reset for each phase/partition; ETA remains unknown until bytes advance. At slow
+USB rates, userdata backup and its separate hash passes can take hours. Other
+logs use a bounded status line; errors remain visible. Ctrl-C interrupts the child
+and preserves the journal; after a stuck interrupt, the frontend terminates the
+child. Do not disconnect while writing. Completion reports verified readback,
+not successful normal startup; retain originals until physical boot is checked.
 
 ## Bootstrap contract
 
