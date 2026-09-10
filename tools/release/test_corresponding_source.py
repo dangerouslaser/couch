@@ -92,9 +92,18 @@ class Sources(unittest.TestCase):
             self.assertTrue(source.assemble(root, first)['complete'])
             source.assemble(root, second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
+            self.assertEqual(source.verify_archive(first)["project_commit"], "a" * 40)
             with tarfile.open(first) as archive:
                 self.assertNotIn('couch-source/private-unlisted.key', archive.getnames())
                 self.assertIn('couch-source/NOTICES.md', archive.getnames())
+            corrupt = Path(directory) / 'corrupt.tar.gz'
+            with tarfile.open(first) as original, tarfile.open(corrupt, 'w:gz') as altered:
+                for entry in original:
+                    data = original.extractfile(entry).read()
+                    if entry.name.endswith('couch/source.txt'): data = b'changed'
+                    entry.size = len(data); altered.addfile(entry, io.BytesIO(data))
+            with self.assertRaisesRegex(ValueError, 'differs from'):
+                source.verify_archive(corrupt)
             (root / 'couch/source.txt').write_text('changed after receipt')
             with self.assertRaisesRegex(ValueError, 'changed after collection'):
                 source.assemble(root, Path(directory) / 'bad.tar.gz')

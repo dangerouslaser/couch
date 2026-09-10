@@ -435,6 +435,34 @@ def assemble(output, archive_path):
     return result
 
 
+def verify_archive(path):
+    """Verify every published tar member without extracting anything."""
+    hashes, manifest = {}, None
+    with gzip.open(path, 'rb') as compressed, tarfile.open(fileobj=compressed, mode='r|') as archive:
+        for count, entry in enumerate(archive):
+            if count >= 200000 or not entry.isfile() or entry.size > MAX_DOWNLOAD:
+                raise ValueError('Unexpected source archive member')
+            if not entry.name.startswith('couch-source/'):
+                raise ValueError('Unexpected source archive prefix')
+            name = entry.name[len('couch-source/'):]
+            checked_path(name)
+            if name in hashes or (name == 'SOURCE-MANIFEST.json' and manifest is not None):
+                raise ValueError('Duplicate source archive member')
+            stream = archive.extractfile(entry)
+            if name == 'SOURCE-MANIFEST.json':
+                if entry.size > 16 * 1024 * 1024:
+                    raise ValueError('Oversized source manifest')
+                manifest = json.loads(stream.read())
+            else:
+                digest = hashlib.sha256()
+                for block in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(block)
+                hashes[name] = digest.hexdigest()
+    if not manifest or manifest.get('kind') != 'couch-corresponding-source-archive' or manifest.get('schema') != 1 or manifest.get('complete') is not True or hashes != manifest.get('files'):
+        raise ValueError('Source archive differs from its complete manifest')
+    return {'archive': Path(path).name, 'sha256': sha(path), 'project_commit': manifest['project_commit'], 'verified_files': len(hashes)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -443,10 +471,12 @@ def main():
     p = sub.add_parser('alpine'); p.add_argument('--closure', type=Path, required=True); p.add_argument('--metadata', type=Path, required=True); p.add_argument('--aports', type=Path, required=True); p.add_argument('--cache', type=Path, required=True); p.add_argument('--output', type=Path, required=True); p.add_argument('--offline', action='store_true'); p.add_argument('--source-overrides', type=Path)
     p = sub.add_parser('external'); p.add_argument('--directory', type=Path, required=True); p.add_argument('--receipt', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
     p = sub.add_parser('assemble'); p.add_argument('--output', type=Path, required=True); p.add_argument('--archive', type=Path, required=True)
+    p = sub.add_parser('verify-archive'); p.add_argument('--archive', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'project': project(args.repo, args.commit, args.output)
     elif args.command == 'cargo': cargo_sources(args.output, args.offline)
     elif args.command == 'external': external_sources(args.directory, args.receipt, args.output)
+    elif args.command == 'verify-archive': print(json.dumps(verify_archive(args.archive)))
     elif args.command == 'assemble': print(json.dumps(assemble(args.output, args.archive)))
     elif args.command == 'alpine': alpine_sources(args.closure, args.metadata, args.aports, args.cache, args.output, args.offline, json.loads(args.source_overrides.read_text()) if args.source_overrides else None)
 

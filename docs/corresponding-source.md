@@ -89,7 +89,10 @@ python3 tools/release/corresponding_source.py assemble \
 
 The deterministic tar/gzip contains only explicitly verified source files,
 component manifests and notices. Its adjacent JSON records the archive SHA256.
-Assembly does not overwrite an earlier archive. `complete: true` means all
+Assembly does not overwrite an earlier archive. Verify the emitted tar stream
+without extraction using `corresponding_source.py verify-archive --archive FILE`;
+it checks every member against the source manifest and refuses duplicates or
+unsafe member types. `complete: true` means all
 required source components and checksummed bytes were collected; it is not a
 claim of physical-device validation, bit-identical application builds or vendor
 redistribution permission. Bind the archive hash and source commit to the signed
