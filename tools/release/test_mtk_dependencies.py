@@ -36,6 +36,45 @@ class RuntimeDeliveryTests(unittest.TestCase):
             (root / pin['filename']).write_bytes(b'corrupt')
             with self.assertRaisesRegex(ValueError, 'differs'): runtime.fetch(root, pin, offline=True)
 
+    def test_cache_swap_after_fetch_is_rejected_before_any_extraction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); cache = root / 'cached'; cache.write_bytes(b'original')
+            pin = {'filename': 'archive', 'size': 8, 'sha256': hashlib.sha256(b'original').hexdigest()}
+            pins = {'platforms': {'fixture': {'python': pin, 'wheels': [], 'site_packages': 'site'}},
+                    'mtk_source': {**pin, 'inventory_sha256': runtime.sha(runtime.INVENTORY)}}
+            pinfile = root / 'pins.json'; pinfile.write_text(json.dumps(pins))
+            def swapped_fetch(*args):
+                cache.write_bytes(b'modified')
+                return cache
+            with patch.object(runtime, 'PINS', pinfile), patch.object(runtime, 'fetch', side_effect=swapped_fetch), patch.object(runtime, 'unpack_python') as extract:
+                with self.assertRaisesRegex(ValueError, 'changed before extraction'):
+                    runtime.prepare('fixture', root / 'cache', root / 'output')
+                extract.assert_not_called()
+            self.assertFalse((root / 'output/runtime.json').exists())
+            self.assertFalse((root / 'output').exists())
+
+    def test_output_inside_git_checkout_is_refused_before_download(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); (root / '.git').write_text('gitdir: fixture')
+            with patch.object(runtime, 'fetch') as fetch:
+                with self.assertRaisesRegex(ValueError, 'outside Git'):
+                    runtime.prepare('linux-x86_64', root / 'cache', root / 'output')
+                fetch.assert_not_called()
+
+    def test_download_uses_bounded_reads_and_total_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); pin = {'filename': 'source', 'url': 'https://example.invalid/source', 'size': 7, 'sha256': hashlib.sha256(b'fixture').hexdigest()}
+            class Response:
+                url = pin['url']
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+                def read(self, *args): raise AssertionError('Unbounded read must not run')
+                def read1(self, size): return b'fixture'
+            with patch.object(runtime, 'urlopen', return_value=Response()), patch.object(runtime.time, 'monotonic', side_effect=[0, 0, 181]):
+                with self.assertRaisesRegex(ValueError, 'deadline exceeded'): runtime.fetch(root, pin)
+            self.assertFalse((root / 'source').exists())
+            self.assertFalse((root / 'source.download').exists())
+
     def test_python_aliases_flatten_safely_and_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -47,11 +86,11 @@ class RuntimeDeliveryTests(unittest.TestCase):
                     alias = tarfile.TarInfo('python/bin/python3'); alias.type = tarfile.SYMTYPE; alias.linkname = target
                     archive.addfile(alias)
                 return path
-            runtime.unpack_python(create('python3.12'), root / 'safe')
+            runtime.unpack_python(create('python3.12').read_bytes(), root / 'safe')
             alias = root / 'safe/python/bin/python3'
             self.assertFalse(alias.is_symlink()); self.assertEqual(alias.read_bytes(), b'fixture')
             for target in ('../../../outside', '/outside', 'python3'):
-                with self.assertRaises(ValueError): runtime.unpack_python(create(target), root / target.replace('/', '_'))
+                with self.assertRaises(ValueError): runtime.unpack_python(create(target).read_bytes(), root / target.replace('/', '_'))
 
     def test_wheel_traversal_and_unreviewed_install_hooks_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -59,8 +98,13 @@ class RuntimeDeliveryTests(unittest.TestCase):
             for name in ('../escape', 'drive:/escape', 'module.data/scripts/run'):
                 path = root / 'wheel.whl'
                 with zipfile.ZipFile(path, 'w') as wheel: wheel.writestr(name, b'fixture')
-                with self.assertRaises(ValueError): runtime.unpack_wheel(path, root / 'out', 'site')
+                with self.assertRaises(ValueError): runtime.unpack_wheel(path.read_bytes(), root / 'out', 'site')
             self.assertFalse((root / 'escape').exists())
+            raw = io.BytesIO()
+            with zipfile.ZipFile(raw, 'w') as wheel: wheel.writestr('pkgXfile', b'fixture')
+            # ZipInfo.filename truncates NUL while orig_filename retains it.
+            with self.assertRaisesRegex(ValueError, 'Unsafe runtime archive path'):
+                runtime.unpack_wheel(raw.getvalue().replace(b'pkgXfile', b'pkg\x00file'), root / 'nul', 'site')
 
     def test_mtk_extraction_selects_only_exact_reviewed_sources_not_bundled_da(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -69,10 +113,10 @@ class RuntimeDeliveryTests(unittest.TestCase):
             with tarfile.open(path, 'w:gz') as archive:
                 for name, value in [('mtkclient/__init__.py', data), ('mtkclient/Loader/private.bin', b'never ship')]:
                     member = tarfile.TarInfo('mtkclient-' + revision + '/' + name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
-            runtime.unpack_mtk(path, root / 'out', inventory)
+            runtime.unpack_mtk(path.read_bytes(), root / 'out', inventory)
             self.assertEqual(list(runtime.file_inventory(root / 'out')), ['mtk/mtkclient/__init__.py'])
             inventory['files']['mtkclient/__init__.py']['sha256'] = '0' * 64
-            with self.assertRaisesRegex(ValueError, 'hash differs'): runtime.unpack_mtk(path, root / 'bad', inventory)
+            with self.assertRaisesRegex(ValueError, 'hash differs'): runtime.unpack_mtk(path.read_bytes(), root / 'bad', inventory)
 
     def test_untrusted_receipt_or_modified_executable_cannot_be_smoked(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,6 +2,7 @@
 """Build a pinned, owner-local Python/MTK runtime; never open USB or include a DA."""
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -10,6 +11,7 @@ import posixpath
 import stat
 import subprocess
 import tarfile
+import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 import zipfile
@@ -66,11 +68,17 @@ def fetch(cache, pin, offline=False):
     cache.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + '.download')
     stream = temporary.open('xb')
+    deadline = time.monotonic() + 180
     try:
         with stream, urlopen(Request(pin['url'], headers={'User-Agent': 'Couch-installer-runtime/1'}), timeout=45) as response:
             require(urlsplit(response.url).scheme == 'https', 'Dependency redirected away from HTTPS')
             size = 0
-            while chunk := response.read(1024 * 1024):
+            while True:
+                require(time.monotonic() < deadline, 'Dependency download deadline exceeded')
+                chunk = response.read1(1024 * 1024)
+                require(time.monotonic() < deadline, 'Dependency download deadline exceeded')
+                if not chunk:
+                    break
                 size += len(chunk)
                 require(size <= pin['size'], 'Dependency exceeds pinned size')
                 stream.write(chunk)
@@ -81,9 +89,20 @@ def fetch(cache, pin, offline=False):
     return target
 
 
+def verified_snapshot(path, pin):
+    """Parse only the exact pinned bytes, never reopen a previously checked path."""
+    require(not path.is_symlink() and path.is_file(), 'Dependency snapshot must be a regular file')
+    with path.open('rb') as stream:
+        data = stream.read(MAX_FILE + 1)
+    require(len(data) == pin['size'] and len(data) <= MAX_FILE
+            and hashlib.sha256(data).hexdigest() == pin['sha256'],
+            'Dependency changed before extraction')
+    return data
+
+
 def unpack_python(archive, output):
     """Flatten safe in-archive aliases, avoiding privileged Windows symlink creation."""
-    with tarfile.open(archive) as source:
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
         members = {}
         total = 0
         for member in source:
@@ -111,11 +130,12 @@ def unpack_python(archive, output):
 
 
 def unpack_wheel(archive, output, site_packages):
-    with zipfile.ZipFile(archive) as source:
+    with zipfile.ZipFile(io.BytesIO(archive)) as source:
         total = 0
         for item in source.infolist():
             if item.is_dir():
                 continue
+            safe_name(item.orig_filename)
             name = safe_name(item.filename)
             mode = item.external_attr >> 16
             require(not stat.S_ISLNK(mode), 'Wheel symlink refused')
@@ -131,7 +151,7 @@ def unpack_wheel(archive, output, site_packages):
 def unpack_mtk(archive, output, inventory):
     prefix = 'mtkclient-' + inventory['revision'] + '/'
     selected = set()
-    with tarfile.open(archive) as source:
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
         for item in source:
             if not item.name.startswith(prefix):
                 continue
@@ -162,17 +182,22 @@ def file_inventory(root):
 def prepare(platform_name, cache, output, offline=False):
     pins = json.loads(PINS.read_text()); pin = pins['platforms'][platform_name]
     require(not output.exists() and not output.is_symlink(), 'Use a new runtime output directory')
+    require(not any((parent / '.git').exists() for parent in (output.resolve(), *output.resolve().parents)),
+            'Runtime output must be outside Git checkouts')
     require(sha(INVENTORY) == pins['mtk_source']['inventory_sha256'], 'Reviewed MTK source inventory differs')
     inventory = json.loads(INVENTORY.read_text())
     # Verify every download before extracting or running an interpreter.
     python = fetch(cache, pin['python'], offline)
     wheels = [fetch(cache, wheel, offline) for wheel in pin['wheels']]
     mtk = fetch(cache, pins['mtk_source'], offline)
+    python_bytes = verified_snapshot(python, pin['python'])
+    wheel_bytes = [verified_snapshot(path, expected) for path, expected in zip(wheels, pin['wheels'])]
+    mtk_bytes = verified_snapshot(mtk, pins['mtk_source'])
     output.mkdir(parents=True, mode=0o700)
-    unpack_python(python, output)
-    for wheel in wheels:
+    unpack_python(python_bytes, output)
+    for wheel in wheel_bytes:
         unpack_wheel(wheel, output, pin['site_packages'])
-    unpack_mtk(mtk, output, inventory)
+    unpack_mtk(mtk_bytes, output, inventory)
     libraries = [p for p in (output / pin['site_packages'] / 'libusb_package').rglob('*')
                  if p.is_file() and ('libusb' in p.name.lower()) and p.suffix.lower() in ('.dll', '.so', '.dylib')]
     require(len(libraries) == 1, 'Pinned libusb wheel does not contain exactly one native library')

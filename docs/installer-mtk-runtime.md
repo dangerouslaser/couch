@@ -23,7 +23,9 @@ python3 tools/release/mtk_dependencies.py smoke \
 ```
 
 Preparation verifies every archive's pinned size and SHA256 before extraction or
-interpreter execution. It extracts wheels directly, without pip resolution,
+interpreter execution, then snapshots and rechecks its bytes immediately before
+parsing from memory. A changed cache path cannot substitute a different archive.
+Downloads use bounded reads and a total deadline; output must be outside Git. It extracts wheels directly, without pip resolution,
 setup.py or install hooks. Safe Python archive aliases become ordinary files;
 archive traversal, unexpected file types and cache collisions fail closed.
 `--offline` requires every pinned input already in the verified cache. Use a new
