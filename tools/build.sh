@@ -11,11 +11,7 @@ mkdir -p build
     python3 tools/bootimg.py unpack "$BACKUP_DIR/boot.img" build
 }
 
-[ -f build/busybox-armv7l ] || {
-    echo "fetching static armv7 busybox..."
-    curl -sL -o build/busybox-armv7l \
-      https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv7l
-}
+python3 tools/build-busybox.py verify "${BUSYBOX_BUILD_DIR:-build/busybox-source}" --install build/busybox-armv7l
 
 # On-screen console. This kernel has no CONFIG_VT, so without this a boot is silent.
 tools/build-fbcon.sh
