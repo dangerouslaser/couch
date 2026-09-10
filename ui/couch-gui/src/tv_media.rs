@@ -305,7 +305,11 @@ fn decode(data: &[u8]) -> Option<Pixels> {
     limits.max_image_height = Some(8192);
     limits.max_alloc = Some(32 * 1024 * 1024);
     reader.limits(limits);
-    let decoded = reader.decode().ok()?.thumbnail(480, 320).to_rgba8();
+    let decoded = reader
+        .decode()
+        .ok()?
+        .resize_to_fill(480, 800, image::imageops::FilterType::Triangle)
+        .to_rgba8();
     Some(Pixels {
         width: decoded.width(),
         height: decoded.height(),
