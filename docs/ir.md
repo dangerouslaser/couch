@@ -20,7 +20,16 @@ responsive. The command was NEC address `0x04`, command `0x02`, with zero repeat
 from the bundled LG C1 record; C9, OLED65C8PUA and MR21GC records agree. The user
 confirmed the original remote works from the same position. This is a failed
 end-to-end test, not evidence of working optical output; emitter routing, carrier
-timing and target compatibility remain under investigation. No retry was sent.
+timing and target compatibility remain under investigation.
+
+After correcting the first NEC repeat gap, a later user-observed test sent one
+LG Volume Up frame plus one ditto, followed by three separately requested presses
+with the same repeat pattern. The user reported **no TV response**. All writes
+completed and the GUI heartbeat continued advancing. Full-frame first-completion
+times were about 68 ms and ditto times about 13 ms. The corrected repeat path is
+therefore tested at the controller but has not resolved appliance reception.
+Further command retries alone cannot distinguish missing optical emission from
+an invalid emitted signal; use a known-sensitive IR receiver/camera or scope.
 
 The driver requests `/dev/irtx` mode 0600; runtime mdev sets 0660 (observed 10:61).
 The effective DT selects PWM channel 0, inversion 0. Read-only GPIO inspection
