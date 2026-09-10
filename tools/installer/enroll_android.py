@@ -69,6 +69,13 @@ def check_layout(observed, offsets):
     require(set(partitions) == set(offsets) | {'flashinfo'}, 'Unexpected stock partition inventory')
     require(all(partitions[name]['offset'] == offset for name, offset in offsets.items()),
             'Stock partition offsets differ from official HA100 profile')
+    # The pinned official scatter defines contiguous fixed partitions through
+    # userdata. Matching starts alone could admit a truncated calibration range.
+    ordered = sorted(offsets, key=offsets.__getitem__)
+    require(ordered and ordered[-1] == 'userdata', 'Unexpected official partition ordering')
+    require(all(partitions[name]['size'] == offsets[next_name] - offsets[name]
+                for name, next_name in zip(ordered, ordered[1:])),
+            'Stock partition sizes differ from official HA100 boundaries')
     require(all(r['offset'] + r['size'] <= observed['capacity'] for r in partitions.values()),
             'Partition exceeds observed storage')
     require(partitions['userdata']['offset'] + partitions['userdata']['size'] == partitions['flashinfo']['offset'],
@@ -150,7 +157,7 @@ def enroll(args, *, session=read_session, android=android_identity):
                   'partitions': partitions, 'identity_sha256': report['backups'],
                   'source': 'first-stock-android-enrollment', 'prior_baseline': False,
                   'identity_decoded': False, 'normal_os_verified': False,
-                  'model_evidence': 'official-stock-boot-and-odmdtbo-prefixes-and-partition-offsets',
+                  'model_evidence': 'official-stock-boot-and-odmdtbo-prefixes-and-fixed-partition-boundaries',
                   'android_serial_sha256': binding['android_serial_sha256'],
                   'official_archive_sha256': json.loads(PIN.read_text())['sha256']}
         save_json(destination/'enrollment-journal.json', {'schema': 1, 'complete': False,
