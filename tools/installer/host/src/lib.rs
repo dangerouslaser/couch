@@ -3,6 +3,7 @@ pub mod adapter;
 pub mod assembly;
 pub mod dependencies;
 pub mod frontend;
+pub mod public_inputs;
 pub mod session;
 pub mod stage;
 pub mod stage_files;

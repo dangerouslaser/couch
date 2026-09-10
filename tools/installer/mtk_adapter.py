@@ -24,7 +24,7 @@ from mtk_writer import ConnectedMtkWriter
 from stage_usb import StageUsb
 
 MAX = 1024 * 1024
-READABLE = IDENTITY_PARTITIONS | {'boot', 'recovery', 'odmdtbo'}
+READABLE = IDENTITY_PARTITIONS | {'boot', 'recovery', 'odmdtbo', 'logo'}
 
 
 class Wire:
@@ -118,7 +118,7 @@ class Adapter:
         hashes = command['identity_sha256']
         originals = command['original_sha256']
         require(isinstance(hashes, dict) and set(hashes) == IDENTITY_PARTITIONS
-                and isinstance(originals, dict) and set(originals) == {'boot', 'recovery', 'odmdtbo'}, 'Incomplete original identity evidence')
+                and isinstance(originals, dict) and set(originals) == {'boot', 'recovery', 'odmdtbo', 'logo'}, 'Incomplete original identity evidence')
         for name, checksum in {**hashes, **originals}.items():
             require(self.reader.hash(name) == checksum, 'Device changed after original capture')
         stage = regular(command['stage']).resolve()
