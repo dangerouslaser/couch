@@ -90,3 +90,61 @@ Stock boot from the newly formatted userdata is still unvalidated. The public
 trial must eventually discover/capture an original Android device through USB
 without SSH or a previously prepared Couch runtime baseline. Preparation alone
 does not complete that test or change public release gates.
+
+## Current-partition comparison before restoration
+
+Root's September 10 read-only runtime checks found current system and vendor
+**exactly match** the original full-image hashes above. Current metadata hash
+`f66a65a702b4ef31832f64bdacec9d34db012b8148845d88ef4b7248c4b76943`
+matches 40894464 zero bytes. These are current observations, not assumptions
+from the old backup.
+
+Current odmdtbo hash is
+`93fb7a17ed374b56006087945b1b2fb1c61845ad03554a953f29bec02a37c39f`.
+A complete verified 16 MiB capture differs from the original by **one byte** at
+offset 13339: `/fragment@22/__overlay__/debounce-delay-ms` changes **50 to 8**.
+The fragment targets `mt_gpio_kpd`, the physical matrix keypad. Every other byte,
+including headers and padding, matches. No panel, touch, IR or supply mapping
+changed. Commit `6f7f1c4` documents the original 50 ms rapid-tap problem and adds
+a property-aware DT patch tool, though it does not establish the particular
+shared-partition write's provenance.
+
+This is an intentional-looking input-latency adjustment, not an unexplained
+large overlay change. A strictly stock baseline should restore the original
+overlay after root review; retaining it would retain Couch's 8 ms debounce.
+The shared overlay affects both boot slots. Current system/vendor need no
+restoration based on their matching hashes.
+
+## Obtaining a stable complete Couch backup
+
+A running GUI filesystem mounted read-write is not a stable raw snapshot.
+Recovery is a better starting point, but `recovery/init` also mounts userdata
+read-write and invokes stage2 networking. `COUCH_NO_UI=1` returns **before** the
+GUI, configuration daemon and setup watcher start. Normal station DHCP uses
+`-n -q` and exits after obtaining a lease. Confirm the actual process/mount state
+rather than assuming that the recovery screen alone means no writers exist.
+
+Preferred network-copy sequence, controlled by root through USB serial:
+
+1. Let recovery networking settle and retain the serial fallback. Check for
+   unexpected configuration/portal/application writers; do not blindly kill
+   networking or the SSH transport needed for the copy.
+2. Run `sync`, then remount the actual userdata ext4 filesystem read-only from
+   the initramfs namespace, for example
+   `/bin/busybox mount -o remount,ro /mnt/alpine`. Treat failure as a stop.
+   Inspect `/proc/mounts` and `/proc/self/mountinfo`: the backing filesystem
+   must be read-only, not merely one read-only bind mount. Check aliases too.
+3. Hash the block partition, stream its complete raw bytes through a non-PTY
+   SSH session into a new private file on Ollie, and hash it again. Require
+   source-before = destination = source-after, and the exact observed size.
+   Write logs separately from the binary stream and use restrictive permissions.
+4. Keep the verified original backup immutable. Offline filesystem checks should
+   not repair that evidence in place; use a separate copy for any journal replay
+   or repair assessment. Preserve boot/recovery and settings backups alongside it.
+
+Avoid a long filesystem freeze while ordinary GUI/supervisor processes continue:
+their writes can block and undermine the recovery path. Do not use lazy/forced
+unmount to obtain a misleading success. If clean read-only remount cannot be
+established, quiesce identified writers or return to the already validated DA
+backup path, where userdata is unmounted. These instructions were reviewed
+offline; this agent did not freeze, remount, reboot or access live USB.
