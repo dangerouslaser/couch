@@ -117,6 +117,13 @@ restoration based on their matching hashes.
 
 ## Obtaining a stable complete Couch backup
 
+For the September 10 stock-baseline trial, the operator explicitly waived a
+complete Couch backup: the existing installation and configuration are disposable
+test data. The private stock-restore path may therefore replace userdata without
+saving it. Existing calibration/identity backups, exact target checks and full
+write readback remain required. This exception does not change the public
+installer's backup policy or claim that an incomplete Couch backup is restorable.
+
 A running GUI filesystem mounted read-write is not a stable raw snapshot.
 Recovery is a better starting point, but `recovery/init` also mounts userdata
 read-write and invokes stage2 networking. `COUCH_NO_UI=1` returns **before** the
