@@ -499,3 +499,20 @@ Fresh full p8/p9 backups are retained on the device and Ollie under
 `irtx-output-20260910`. Telemetry remains disabled (`N`) pending the coordinated
 camera test. No transmission or optical validation has occurred on this kernel
 yet; successful boot does not establish that IR output works.
+
+The first coordinated send on this kernel completed, but the user again saw
+no IR flash. PWM0 was enabled with its 26 MHz clock selected, nonzero DMA
+waveform data, a matching buffer address, and `3DLCM=0`. These register values
+do not establish physical emission. GPIO capture was **invalid**: all sample
+counts were zero because bare pin `8` triggered the vendor wrapper's
+`HARDCODE` stack dumps before the sampling loop. Those warnings consumed
+roughly 51–53 ms and distorted the diagnostic repeat timing.
+
+Correction `ce7c9ee7` supplies `8 | 0x80000000` to the four GPIO getter calls;
+`mt_gpio_pin_decrypt()` strips that required API flag before accessing GPIO8.
+It changes no hardware configuration. See
+[`ha100-irtx-pad-api.patch`](../kernel/patches/ha100-irtx-pad-api.patch).
+The corrected kernel was built on Ollie; eight build/boot-health tests and
+the IR completion-guard test passed. Its image SHA256 is
+`214b495b78900c840c0b5aa1eaca8451d17c0a3edf91b2e5b30496d519e74bbf`.
+Do not interpret the first capture's zero counts as a pin held low.
