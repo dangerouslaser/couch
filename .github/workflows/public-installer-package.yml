@@ -1,0 +1,24 @@
+name: Public installer package
+on:
+  pull_request:
+    paths:
+      - 'tools/release/package_public_installer.py'
+      - 'tools/release/test_package_public_installer.py'
+      - 'tools/release/prepare_public_*.py'
+      - 'tools/release/ha100_official_runtime.json'
+      - 'kernel/release-pin.json'
+      - '.github/workflows/public-installer-package.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m unittest discover -s tools/release -p test_package_public_installer.py
