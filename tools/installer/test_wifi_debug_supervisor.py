@@ -14,11 +14,22 @@ STAGE = Path(__file__).resolve().parent / 'wifi-stage'
 
 def extract(text, name):
     start = text.index(f'{name}() {{')
-    depth, index = 0, start
+    depth, index, quote = 0, start, None
     while index < len(text):
-        if text[index] == '{':
+        char = text[index]
+        if quote:
+            if quote == "'":
+                if char == quote:
+                    quote = None
+            elif char == '\\\\':
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == '{':
             depth += 1
-        elif text[index] == '}':
+        elif char == '}':
             depth -= 1
             if depth == 0:
                 return text[start:index + 1]
@@ -145,7 +156,10 @@ class DebugSupervisorTests(unittest.TestCase):
         marker = self.root / 'debug-mode'
         marker.touch()
         startup = self.root / 'couch-wpa-startup.log'
-        startup.write_text('wpa -dd startup evidence\\nquote " slash \\\\ newline\\n')
+        startup.write_text('x' * 3000 + 'wpa -dd source-end\\nquote " slash \\\\ newline\\n')
+        (self.root / 'couch-wifi-debug.wait').write_text(
+            'WiFi wait snapshot: 2s\\n' + ('"\\\\\\t' * 300) +
+            '\\nWiFi wait snapshot: 8s\\n')
         (self.root / 'couch-wpa').mkdir()
         debug = extract(self.wifi_init, 'debug_startup_evidence').replace('/tmp', str(self.root))
         fail = extract(self.wifi_init, 'fail').replace('/tmp', str(self.root))
@@ -161,10 +175,114 @@ class DebugSupervisorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         evidence = (self.root / 'couch-wifi-debug.log').read_text()
         self.assertLessEqual(len(evidence.encode()), 4096)
-        self.assertIn('wpa -dd startup evidence', evidence)
+        self.assertIn('wpa -dd source-end', evidence)
+        self.assertIn('WiFi wait snapshot: 8s', evidence)
         self.assertIn('no longer running at failure', evidence)
         self.assertIn('WiFi control directory:', evidence)
         self.assertIn('[debug kernel tail]', evidence)
+
+    def debug_snapshot_functions(self, proc, marker):
+        names = ('debug_print_proc_field', 'debug_fd_snapshot',
+                 'debug_wait_snapshot')
+        text = '\n'.join(extract(self.wifi_init, name) for name in names)
+        return (text.replace('/proc', '__PROC_ROOT__')
+                    .replace('/tmp', str(self.root))
+                    .replace('__PROC_ROOT__', str(proc))
+                    .replace('/etc/couch-wifi-debug-mode', str(marker)))
+
+    def fake_proc(self, *, starttime='4242', command=b'/sbin/wpa_supplicant\0-dd\0'):
+        proc = self.root / 'proc'
+        task = proc / '42'
+        (task / 'fd').mkdir(parents=True)
+        fields = ['42', '(wpa_supplicant)', 'S'] + ['0'] * 18 + [starttime]
+        (task / 'stat').write_text(' '.join(fields) + '\n')
+        (task / 'cmdline').write_bytes(command)
+        (task / 'wchan').write_bytes(b'wait-state\x01\n')
+        (task / 'syscall').write_text('123 1 2 3\n')
+        (task / 'stack').write_text('[<0>] fixture_stack\n')
+        os.symlink('/dev/null', task / 'fd' / '0')
+        os.symlink('/dev/zero', task / 'fd' / '1')
+        (proc / 'net').mkdir()
+        (proc / 'net' / 'unix').write_text(
+            f'00000000: 00000002 00000000 00010000 0001 01 {self.root}/couch-wpa/wlan0\n')
+        return proc
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
+    def test_debug_wait_snapshots_bind_child_and_sanitize_bounded_proc_data(self):
+        marker = self.root / 'debug-mode'
+        marker.touch()
+        proc = self.fake_proc()
+        functions = self.debug_snapshot_functions(proc, marker)
+        body = (f'BB={self.harness.wrapper}\n'
+                'supplicant=42\nsupplicant_start=4242\n'
+                f'{functions}\n'
+                'debug_wait_snapshot 2\ndebug_wait_snapshot 8\n')
+        result = self.harness.run(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wait = (self.root / 'couch-wifi-debug.wait').read_bytes()
+        self.assertLessEqual(len(wait), 1280)
+        self.assertIn(b'WiFi wait snapshot: 2s', wait)
+        self.assertIn(b'WiFi wait snapshot: 8s', wait)
+        self.assertIn(b'identity: pid=42 starttime=4242', wait)
+        self.assertIn(b'wchan: wait-state?', wait)
+        self.assertIn(b'fd-count: 2', wait)
+        self.assertIn(b'unix:', wait)
+        self.assertFalse(any(byte < 9 or 13 < byte < 32 or byte > 126
+                             for byte in wait))
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
+    def test_debug_wait_snapshot_rejects_exited_or_reused_child_before_proc_reads(self):
+        marker = self.root / 'debug-mode'
+        marker.touch()
+        proc = self.fake_proc(starttime='9999')
+        functions = self.debug_snapshot_functions(proc, marker)
+        body = (f'BB={self.harness.wrapper}\n'
+                'supplicant=42\nsupplicant_start=4242\n'
+                f'{functions}\n'
+                'debug_wait_snapshot 2\n')
+        result = self.harness.run(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wait = (self.root / 'couch-wifi-debug.wait').read_text()
+        self.assertIn('identity: starttime-mismatch', wait)
+        self.assertNotIn('wchan:', wait)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
+    def test_debug_wait_snapshot_marks_missing_and_denied_proc_files(self):
+        marker = self.root / 'debug-mode'
+        marker.touch()
+        proc = self.fake_proc()
+        (proc / '42' / 'syscall').unlink()
+        (proc / '42' / 'stack').chmod(0)
+        functions = self.debug_snapshot_functions(proc, marker)
+        body = (f'BB={self.harness.wrapper}\n'
+                'supplicant=42\nsupplicant_start=4242\n'
+                f'{functions}\n'
+                'debug_wait_snapshot 2\n')
+        result = self.harness.run(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wait = (self.root / 'couch-wifi-debug.wait').read_text()
+        self.assertIn('syscall: unavailable', wait)
+        self.assertRegex(wait, r'stack: (permission-denied|unavailable-or-empty)')
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
+    def test_normal_mode_never_creates_debug_wait_snapshot(self):
+        proc = self.fake_proc()
+        marker = self.root / 'debug-mode'
+        functions = self.debug_snapshot_functions(proc, marker)
+        body = (f'BB={self.harness.wrapper}\n'
+                'supplicant=42\nsupplicant_start=4242\n'
+                f'{functions}\n'
+                'debug_wait_snapshot 2\n')
+        result = self.harness.run(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / 'couch-wifi-debug.wait').exists())
+
+    def test_wait_snapshots_are_fixed_precredential_debug_only(self):
+        self.assertIn('case "$n" in 2|8)', self.wifi_init)
+        self.assertLess(self.wifi_init.index('case "$n" in 2|8)'),
+                        self.wifi_init.rindex('starting_supplicant=0'))
+        credentials = self.wifi_init[self.wifi_init.index('step credentials'):]
+        self.assertNotIn('debug_wait_snapshot', credentials)
 
     @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
     def test_only_debug_mode_adds_detailed_supplicant_verbosity(self):

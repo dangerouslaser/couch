@@ -15,7 +15,11 @@ debug_startup_evidence() {
     # record over noisy kernel history, while retaining a small kernel tail.
     {
         echo "WiFi failed: $1"
-        $BB tail -c 2048 /tmp/couch-wpa-startup.log 2>/dev/null
+        # Keep the last source-emitted startup markers first. The wait-state
+        # snapshots below are fixed, pre-credential observations, not a host
+        # supplied process inspection interface.
+        $BB tail -c 1800 /tmp/couch-wpa-startup.log 2>/dev/null
+        $BB tail -c 1280 /tmp/couch-wifi-debug.wait 2>/dev/null
         if $BB kill -0 "$supplicant" 2>/dev/null; then
             echo "WiFi supplicant pid $supplicant still running at failure"
         else
@@ -23,9 +27,106 @@ debug_startup_evidence() {
         fi
         echo "WiFi control directory:"
         { $BB ls -la /tmp/couch-wpa 2>&1 || \
-            echo 'WiFi control directory absent'; } | $BB head -c 512
-        $BB dmesg | $BB tail -c 512 2>/dev/null
+            echo 'WiFi control directory absent'; } | $BB head -c 256
+        $BB dmesg | $BB tail -c 256 2>/dev/null
     } | $BB tail -c 4096 > /tmp/couch-wifi-debug.log
+}
+
+debug_print_proc_field() {
+    # The caller has already bound this PID to the child it created. Read only
+    # small, textual kernel status files; never read process memory, environ,
+    # or the supplicant configuration.
+    label=$1
+    path=$2
+    limit=$3
+    if [ ! -e "$path" ]; then
+        echo "WiFi wait $label: unavailable"
+        return
+    fi
+    if [ ! -r "$path" ]; then
+        echo "WiFi wait $label: permission-denied"
+        return
+    fi
+    value=$($BB head -c "$limit" "$path" 2>/dev/null | \
+        $BB tr -c '\011\012\015\040-\176' '?')
+    if [ -n "$value" ]; then
+        printf 'WiFi wait %s: %s\n' "$label" "$value"
+    else
+        echo "WiFi wait $label: unavailable-or-empty"
+    fi
+}
+
+debug_fd_snapshot() {
+    fd_dir=/proc/$supplicant/fd
+    if [ ! -d "$fd_dir" ]; then
+        echo 'WiFi wait fds: unavailable'
+        return
+    fi
+    if [ ! -r "$fd_dir" ]; then
+        echo 'WiFi wait fds: permission-denied'
+        return
+    fi
+    # Limit both enumeration and each target. Numeric entries are kernel
+    # supplied, so word splitting cannot introduce a path from the host.
+    entries=$($BB ls -1 "$fd_dir" 2>/dev/null | $BB head -n 17)
+    count=0
+    for fd in $entries; do count=$((count + 1)); done
+    if [ "$count" -gt 16 ]; then
+        echo 'WiFi wait fd-count: 16+'
+        entries=$($BB printf '%s\n' "$entries" | $BB head -n 16)
+    else
+        echo "WiFi wait fd-count: $count"
+    fi
+    for fd in $entries; do
+        case "$fd" in *[!0-9]*|'') continue;; esac
+        target=$($BB readlink "$fd_dir/$fd" 2>/dev/null | \
+            $BB head -c 96 | $BB tr -c '\011\012\015\040-\176' '?')
+        [ -n "$target" ] || target=unavailable
+        printf 'WiFi wait fd-%s: %s\n' "$fd" "$target"
+    done
+}
+
+debug_wait_snapshot() {
+    checkpoint=$1
+    [ -f /etc/couch-wifi-debug-mode ] || return 0
+    {
+        echo "WiFi wait snapshot: $checkpoint"s
+        current_start=$($BB awk '{print $22}' "/proc/$supplicant/stat" 2>/dev/null)
+        case "$supplicant_start:$current_start" in
+            *[!0-9:]*|:*)
+                echo 'WiFi wait identity: unavailable'
+                exit 0
+                ;;
+        esac
+        if [ "$current_start" != "$supplicant_start" ]; then
+            echo 'WiFi wait identity: starttime-mismatch'
+            exit 0
+        fi
+        command=$($BB head -c 192 "/proc/$supplicant/cmdline" 2>/dev/null | \
+            $BB tr '\000' ' ' | $BB tr -c '\011\012\015\040-\176' '?')
+        case "$command" in
+            /sbin/wpa_supplicant\ *)
+                printf 'WiFi wait identity: pid=%s starttime=%s\n' \
+                    "$supplicant" "$current_start"
+                ;;
+            *)
+                echo 'WiFi wait identity: command-mismatch'
+                exit 0
+                ;;
+        esac
+        debug_print_proc_field wchan "/proc/$supplicant/wchan" 128
+        debug_print_proc_field syscall "/proc/$supplicant/syscall" 192
+        debug_print_proc_field stack "/proc/$supplicant/stack" 256
+        debug_fd_snapshot
+        if [ ! -r /proc/net/unix ]; then
+            echo 'WiFi wait unix: unavailable-or-permission-denied'
+        else
+            unix=$($BB grep -F /tmp/couch-wpa /proc/net/unix 2>/dev/null | \
+                $BB head -c 192 | $BB tr -c '\011\012\015\040-\176' '?')
+            [ -n "$unix" ] || unix=none
+            printf 'WiFi wait unix: %s\n' "$unix"
+        fi
+    } | $BB head -c 640 >> /tmp/couch-wifi-debug.wait
 }
 
 start_supplicant() {
@@ -128,12 +229,17 @@ $BB mkdir -p -m 700 /tmp/couch-wpa || fail control-directory
 $BB chmod 700 /tmp/couch-wpa || fail control-directory
 printf 'ctrl_interface=/tmp/couch-wpa\nupdate_config=0\n' > /tmp/couch-wpa_supplicant.conf
 starting_supplicant=1
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    : > /tmp/couch-wifi-debug.wait
+fi
 start_supplicant >/tmp/couch-wpa-startup.log 2>&1 &
 supplicant=$!
+supplicant_start=$($BB awk '{print $22}' "/proc/$supplicant/stat" 2>/dev/null)
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
     # These two outcomes are different faults and must not share a reason.
     $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
+    case "$n" in 2|8) debug_wait_snapshot "$n";; esac
     [ "$n" -lt 10 ] || fail supplicant-socket-timeout
     $BB sleep 1; n=$((n+1))
 done
