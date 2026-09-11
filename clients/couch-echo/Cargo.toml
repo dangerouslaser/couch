@@ -1,0 +1,17 @@
+[package]
+name = "couch-echo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A worked example integration for couch-sdk: copy this crate to start a new client"
+
+# The template a new client starts from, and the only crate here that talks to a
+# device that does not exist. Its "TV" is couch_sdk::testing::MockHost, so this
+# builds, runs and passes its tests on any machine - no remote, no TV, no
+# credentials, no network beyond loopback.
+[dependencies]
+couch-sdk = { path = "../couch-sdk" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+couch-sdk = { path = "../couch-sdk", features = ["testing"] }
