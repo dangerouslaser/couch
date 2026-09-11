@@ -25,15 +25,16 @@ class AdmissionTests(unittest.TestCase):
                     prepare.prepare(Path('.'), Path('.'), Path('unused'))
 
     @unittest.skipUnless(os.name == 'nt', 'Windows ConPTY fixture')
-    def test_actual_console_receives_only_four_cancel_keys(self):
+    def test_actual_console_cancels_then_closes_completion(self):
         import windows_console
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root/'console.ps1'
-            script.write_text('[Console]::WriteLine("Reinstall existing Couch / Cancel"); 1..4 | ForEach-Object { $null = [Console]::ReadKey($true) }; exit 0')
+            script.write_text('[Console]::WriteLine("Reinstall existing Couch / Cancel"); 1..4 | ForEach-Object { $null = [Console]::ReadKey($true) }; [Console]::WriteLine("SESSION ENDED Enter / Esc close"); $null = [Console]::ReadKey($true); exit 0')
             with patch.dict(os.environ, {'LOCALAPPDATA':str(root/'owner')}):
                 result = windows_console.run(script, root/'console.txt')
             self.assertTrue(result['cancel_selected'])
+            self.assertTrue(result['completion_closed'])
             self.assertFalse(result['session_created'])
 
     @unittest.skipUnless(os.name == 'nt' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted', 'Ephemeral hosted Windows HTTPS fixture')

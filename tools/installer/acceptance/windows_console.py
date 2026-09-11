@@ -3,6 +3,7 @@ import ctypes as C
 from ctypes import wintypes as W
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -71,23 +72,28 @@ def run(launcher, output):
                 else:
                     transcript.extend(buffer.raw[:count.value])
         threading.Thread(target=drain, daemon=True).start()
-        deadline = time.monotonic()+120; sent = False
+        deadline = time.monotonic()+120; sent = False; closed = False
         state = Path(os.environ['LOCALAPPDATA'])/'CouchInstaller'
         while wait(process.process, 50) == 258:
             if state.exists(): raise RuntimeError('Cancel smoke unexpectedly created an installer session')
             if overflow.is_set() or time.monotonic() > deadline:
                 raise RuntimeError('Launcher output/deadline bound exceeded')
-            if not sent and b'Reinstall existing Couch' in transcript and b'Cancel' in transcript:
+            visible = re.sub(rb'\s+', b' ', re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b' ', bytes(transcript)))
+            if not sent and b'Reinstall existing Couch' in visible and b'Cancel' in visible:
                 time.sleep(0.2)
                 for key in (b'\x1b[B', b'\x1b[B', b'\x1b[B', b'\r'):
                     count = W.DWORD(); checked(write(writer, key, len(key), C.byref(count), None))
                     if count.value != len(key): raise RuntimeError('Short console input')
                     time.sleep(0.1)
                 sent = True
+            if sent and not closed and b'ENDED' in visible and b'close' in visible:
+                count = W.DWORD(); checked(write(writer, b'\r', 1, C.byref(count), None))
+                if count.value != 1: raise RuntimeError('Short completion input')
+                closed = True
         status = W.DWORD(); checked(exit_code(process.process, C.byref(status)))
         if not sent or status.value != 0 or state.exists():
             raise RuntimeError(f'Launcher did not safely cancel: sent={sent}, exit={status.value}')
-        return {'cancel_selected': True, 'exit_code': status.value, 'session_created': False,
+        return {'completion_closed': closed, 'cancel_selected': True, 'exit_code': status.value, 'session_created': False,
                 'device_access': False, 'transport': 'ConPTY', 'launcher_modified': False}
     finally:
         if process.process and wait(process.process, 0) == 258:
