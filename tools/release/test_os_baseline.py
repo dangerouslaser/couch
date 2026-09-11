@@ -37,6 +37,31 @@ class OsBaselineTests(unittest.TestCase):
             self.assertEqual(json.load(archive.extractfile(entry)), marker)
             self.assertEqual(marker, dict(schema=1, model='sanytron-ha100', id='baseline-fixture'))
 
+    def prefixed(self, data, duplicate=False):
+        output = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(data)) as source:
+            with tarfile.open(fileobj=output, mode='w') as target:
+                for member in source:
+                    member.name = './' + member.name
+                    target.addfile(member, source.extractfile(member) if member.isreg() else None)
+                    if duplicate and member.name == './usr/bin/ffmpeg':
+                        member.name = 'usr/bin/ffmpeg'
+                        target.addfile(member, source.extractfile(member))
+        return output.getvalue()
+
+    def test_real_assembler_dot_prefixes_seed_and_normalize(self):
+        data, marker = seed(self.prefixed(self.fixture()), 'a'*64, pin=self.pin())
+        normalized, _ = normalize(data, 1234)
+        with tarfile.open(fileobj=io.BytesIO(normalized)) as archive:
+            self.assertEqual(json.load(archive.extractfile(MARKER)), marker)
+            self.assertTrue(archive.getmember('usr/bin/ffmpeg').isreg())
+
+    def test_alias_duplicates_and_prefixed_existing_marker_are_rejected(self):
+        for data in [self.prefixed(self.fixture(), duplicate=True),
+                     self.prefixed(self.fixture(marker=True))]:
+            with self.assertRaises(StageError):
+                seed(data, 'a'*64, pin=self.pin())
+
     def test_wrong_package_boot_architecture_or_existing_marker_are_refused(self):
         for data, digest in [(self.fixture(), 'b'*64), (self.fixture(boot=b'old boot'), 'a'*64),
                              (self.fixture(ffmpeg=b'wrong architecture'), 'a'*64),
