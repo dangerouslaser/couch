@@ -112,6 +112,7 @@ fn inventory(m: &Manifest) -> Result<BTreeMap<String, &File>> {
     Ok(files)
 }
 pub(crate) fn stage(root: &Path, m: &Manifest, phase: impl Fn(&str)) -> Result<()> {
+    crate::baseline::check(root, m)?;
     inventory(m)?;
     let bytes = release::fetch(&m.url, m.size)?;
     if bytes.len() as u64 != m.size || release::digest(&bytes) != m.sha256 {
@@ -122,6 +123,7 @@ pub(crate) fn stage(root: &Path, m: &Manifest, phase: impl Fn(&str)) -> Result<(
     atomic(&root.join("runtime/staged"), m.sha256.as_bytes())
 }
 fn unpack(root: &Path, m: &Manifest, bytes: &[u8]) -> Result<()> {
+    crate::baseline::check(root, m)?;
     let files = inventory(m)?;
     let slots = root.join("runtime/slots");
     fs::create_dir_all(&slots).map_err(|_| "Could not create runtime slots")?;
@@ -258,6 +260,7 @@ pub fn activate(root: &Path) -> Result<()> {
     if m.sha256 != selected {
         return Err("Staged manifest changed".into());
     }
+    crate::baseline::check(root, &m)?;
     verify_files(&slot, &m)?;
     let previous = match fs::read_link(runtime.join("current")) {
         Ok(path) => {
@@ -336,8 +339,93 @@ mod tests {
             });
         }
         let bytes = archive.into_inner().unwrap().finish().unwrap();
-        let manifest=Manifest{schema:1,model:"sanytron-ha100".into(),version:"v1.2.3".into(),kind:"runtime".into(),installable:true,notes:String::new(),url:"https://github.com/dangerouslaser/couch/releases/download/v1.2.3/couch-v1.2.3-ha100-runtime.tar.gz".into(),size:bytes.len() as u64,sha256:release::digest(&bytes),files};
+        let manifest=Manifest{schema:1,model:"sanytron-ha100".into(),version:"v1.2.3".into(),kind:"runtime".into(),installable:true,notes:String::new(),url:"https://github.com/dangerouslaser/couch/releases/download/v1.2.3/couch-v1.2.3-ha100-runtime.tar.gz".into(),size:bytes.len() as u64,sha256:release::digest(&bytes),files,required_os_baseline:None};
         (root, manifest, bytes)
+    }
+    fn marker(root: &Path, id: &str) {
+        fs::write(
+            root.join("os-baseline.json"),
+            serde_json::to_vec(&serde_json::json!({"schema":1,"model":"sanytron-ha100","id":id}))
+                .unwrap(),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn publisher_requires_baseline_and_signs_it_without_shipping_marker() {
+        let (root, m, bytes) = fixture();
+        unpack(&root, &m, &bytes).unwrap();
+        let source = root.join("runtime/slots").join(&m.sha256);
+        let output = root.join("published");
+        assert!(crate::bundle(&source, "v1.2.4", &[42; 32], &output)
+            .unwrap_err()
+            .contains("compatibility marker missing"));
+        assert!(!output.exists());
+        marker(&source, "baseline-a");
+        crate::bundle(&source, "v1.2.4", &[42; 32], &output).unwrap();
+        let signed: crate::release::SignedManifest = serde_json::from_slice(
+            &fs::read(output.join("couch-v1.2.4-ha100-update.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            signed.signed.required_os_baseline.as_deref(),
+            Some("baseline-a")
+        );
+        assert!(!signed
+            .signed
+            .files
+            .iter()
+            .any(|file| file.path == "os-baseline.json"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn baseline_is_checked_before_download_or_staging_and_again_on_activation() {
+        let (root, mut m, bytes) = fixture();
+        m.required_os_baseline = Some("baseline-a".into());
+        // This URL cannot be downloaded. Baseline failure must happen first.
+        m.url = "https://invalid.example/never".into();
+        let error = stage(&root, &m, |_| panic!("must not stage")).unwrap_err();
+        assert!(error.contains("compatibility marker missing"));
+        assert!(!root.join("runtime").exists());
+        marker(&root, "baseline-b");
+        assert!(stage(&root, &m, |_| panic!("must not stage"))
+            .unwrap_err()
+            .contains("different full OS"));
+        assert!(unpack(&root, &m, &bytes).is_err());
+        assert!(!root.join("runtime").exists());
+        marker(&root, "baseline-a");
+        unpack(&root, &m, &bytes).unwrap();
+        atomic(&root.join("runtime/staged"), m.sha256.as_bytes()).unwrap();
+        marker(&root, "baseline-b");
+        assert!(activate(&root).unwrap_err().contains("different full OS"));
+        assert!(!root.join("runtime/current").exists());
+        assert!(!root.join("runtime/pending").exists());
+        fs::remove_file(root.join("os-baseline.json")).unwrap();
+        assert!(activate(&root).is_err());
+        marker(&root, "baseline-a");
+        activate(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn invalid_symlink_and_oversized_baseline_markers_are_refused() {
+        let (root, mut m, _) = fixture();
+        m.required_os_baseline = Some("baseline-a".into());
+        for bytes in [
+            b"{}".to_vec(),
+            vec![b' '; 1025],
+            br#"{"schema":1,"model":"other","id":"baseline-a"}"#.to_vec(),
+        ] {
+            fs::write(root.join("os-baseline.json"), bytes).unwrap();
+            assert!(crate::baseline::check(&root, &m).is_err());
+        }
+        fs::remove_file(root.join("os-baseline.json")).unwrap();
+        fs::write(
+            root.join("outside"),
+            br#"{"schema":1,"model":"sanytron-ha100","id":"baseline-a"}"#,
+        )
+        .unwrap();
+        symlink("outside", root.join("os-baseline.json")).unwrap();
+        assert!(crate::baseline::check(&root, &m).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn staged_update_does_not_replace_current_or_configuration() {
@@ -409,6 +497,7 @@ mod tests {
             "networks.conf",
             "config.json",
             "runtime/current",
+            "os-baseline.json",
             "www/../../etc/shadow",
         ] {
             assert!(!allowed(path), "{path}");
