@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -23,6 +26,69 @@ class AdmissionTests(unittest.TestCase):
             with patch.dict(os.environ, {'BINARY_RUN_ID':'123', 'CONFIG_SHA256':'1'*64, 'LAUNCHER_SHA256':'2'*64}), patch.object(prepare.subprocess,'check_output',return_value=data):
                 with self.assertRaisesRegex(ValueError, 'source/status'):
                     prepare.prepare(Path('.'), Path('.'), Path('unused'))
+
+    def test_independent_payload_and_host_pins_with_verified_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloads = root/'downloads'
+            records = {}
+            for platform in ('linux-x64', 'macos-x64', 'macos-arm64', 'macos-universal', 'windows-x64'):
+                record = {'schema': 1, 'kind': 'couch-installer-native-build',
+                          'source_commit': prepare.SOURCE, 'platform': platform, 'binaries': {}}
+                for component in ('host', 'tui'):
+                    name = f'couch-installer-{component}'
+                    artifact = downloads/f'{name}-{platform}'/(name+('.exe' if platform == 'windows-x64' else ''))
+                    artifact.parent.mkdir(parents=True)
+                    artifact.write_bytes(f'{platform}-{component}'.encode())
+                    record['binaries'][component] = prepare.digest(artifact)
+                if platform == 'macos-universal':
+                    record.update(kind='couch-installer-universal-build', architectures=['x86_64', 'arm64'],
+                                  inputs={name: {'receipt': prepare.digest(downloads/f'couch-installer-build-{name}'/'build.json'),
+                                                 'build': records[name]} for name in ('macos-x64', 'macos-arm64')})
+                receipt = downloads/f'couch-installer-build-{platform}'/'build.json'
+                receipt.parent.mkdir()
+                receipt.write_text(json.dumps(record))
+                records[platform] = record
+            launcher = b'fixture launcher'
+            metadata = {'source_commit': prepare.PAYLOAD_SOURCE, 'version': prepare.VERSION,
+                        'payload': {'url': 'https://example.invalid/payload', 'size': 1, 'sha256': 'a'*64}}
+            def invoke(output, config_source=prepare.PAYLOAD_SOURCE, run_source=prepare.SOURCE,
+                       generator_source=prepare.SOURCE, launcher_hash=None):
+                config = json.dumps(dict(metadata, source_commit=config_source)).encode()
+                env = {'BINARY_RUN_ID': '123', 'CONFIG_BASE64': base64.b64encode(config).decode(),
+                       'CONFIG_SHA256': hashlib.sha256(config).hexdigest(),
+                       'LAUNCHER_SHA256': launcher_hash or hashlib.sha256(launcher).hexdigest()}
+                def generate(*args, **kwargs):
+                    (output/'launchers').mkdir()
+                    (output/'launchers/install.ps1').write_bytes(launcher)
+                run = json.dumps({'head_sha': run_source, 'conclusion': 'success', 'name': 'Build installer binaries'})
+                with patch.dict(os.environ, env), patch.object(prepare.subprocess, 'check_output', side_effect=[run, generator_source+'\n']), patch.object(prepare.subprocess, 'run', side_effect=generate):
+                    prepare.prepare(downloads, root/'frozen', output)
+            self.assertNotEqual(prepare.SOURCE, prepare.PAYLOAD_SOURCE)
+            invoke(root/'accepted')
+            admission = json.loads((root/'accepted/admission.json').read_text())
+            self.assertEqual(admission['source_commit'], prepare.SOURCE)
+            self.assertEqual(admission['payload_source_commit'], prepare.PAYLOAD_SOURCE)
+            for name, kwargs, message in (
+                ('payload', {'config_source': prepare.SOURCE}, 'descriptor source'),
+                ('host', {'run_source': prepare.PAYLOAD_SOURCE}, 'source/status'),
+                ('generator', {'generator_source': prepare.PAYLOAD_SOURCE}, 'Launcher source'),
+                ('launcher', {'launcher_hash': '0'*64}, 'pinned launcher'),
+            ):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                    invoke(root/name, **kwargs)
+            receipt = downloads/'couch-installer-build-linux-x64/build.json'
+            record = json.loads(receipt.read_text())
+            record['source_commit'] = prepare.PAYLOAD_SOURCE
+            receipt.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, 'receipt source'):
+                invoke(root/'receipt')
+
+    def test_invalid_payload_pin_rejected_before_external_access(self):
+        with patch.object(prepare, 'PAYLOAD_SOURCE', '../untrusted'), patch.object(prepare.subprocess, 'check_output') as external:
+            with self.assertRaisesRegex(ValueError, 'payload source'):
+                prepare.prepare(Path('.'), Path('.'), Path('unused'))
+            external.assert_not_called()
 
     @unittest.skipUnless(os.name == 'nt', 'Windows ConPTY fixture')
     def test_actual_console_cancels_then_closes_completion(self):

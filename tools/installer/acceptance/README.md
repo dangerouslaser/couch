@@ -5,10 +5,16 @@ binaries in a Windows ConPTY, selects Cancel, and requires exit 0 without an
 installer session. It does not install an OS or contact a device.
 
 The manual workflow requires an independently recorded binary run ID, public
-configuration bytes/hash, and final launcher hash. Build receipts, the workflow run, the generator checkout and configuration must
-all match the independently supplied forty-digit `source_commit` pin (initial
-freeze: `c09bb5a26cd22fbfa6425e8ec20872e37d673345`). The fixed release version is
-`v0.1.0-alpha.20260910.24`. The frozen generator must reproduce the supplied launcher hash.
+configuration bytes/hash, and final launcher hash. Build receipts, the workflow run,
+and generator checkout must match the independently supplied forty-digit
+`source_commit` host pin (current host:
+`57a3e22b4e86d8d6620dbaedbf30847e26b9bbd4`). The configuration must instead match
+an independently supplied `payload_source_commit` OS pin (current payload:
+`271704728c77c13add1763aea7d1f9bd629c63ca`). Both pins are required workflow inputs;
+neither is inferred from downloaded artifacts. This permits rebuilding the installer
+without rebuilding an unchanged OS payload. The fixed release version is
+`v0.1.0-alpha.20260910.24`. The frozen host-source generator must reproduce the
+independently supplied launcher hash. The admission receipt records both source pins.
 No executable or launcher is patched for the test.
 
 Before publication, only network routing is substituted: an ephemeral hosted

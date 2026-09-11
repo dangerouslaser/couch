@@ -5,9 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Independently recorded frozen source SHA (must match run, receipts and config)
+        description: Independently recorded host source SHA (must match run, receipts and generator)
         required: true
-        default: c09bb5a26cd22fbfa6425e8ec20872e37d673345
+        default: 57a3e22b4e86d8d6620dbaedbf30847e26b9bbd4
+      payload_source_commit:
+        description: Independently recorded OS payload source SHA (must match config)
+        required: true
+        default: 271704728c77c13add1763aea7d1f9bd629c63ca
       binary_run_id:
         description: Successful frozen Build installer binaries run ID
         required: true
@@ -52,6 +56,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PAYLOAD_SOURCE_COMMIT: ${{ inputs.payload_source_commit }}
       BINARY_RUN_ID: ${{ inputs.binary_run_id }}
       CONFIG_BASE64: ${{ inputs.config_base64 }}
       CONFIG_SHA256: ${{ inputs.config_sha256 }}

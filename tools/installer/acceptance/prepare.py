@@ -9,7 +9,8 @@ import shutil
 import subprocess
 import sys
 
-SOURCE = os.environ.get('SOURCE_COMMIT', 'c09bb5a26cd22fbfa6425e8ec20872e37d673345')
+SOURCE = os.environ.get('SOURCE_COMMIT', '57a3e22b4e86d8d6620dbaedbf30847e26b9bbd4')
+PAYLOAD_SOURCE = os.environ.get('PAYLOAD_SOURCE_COMMIT', '271704728c77c13add1763aea7d1f9bd629c63ca')
 VERSION = 'v0.1.0-alpha.20260910.24'
 PLATFORMS = ('linux-x64', 'macos-universal', 'windows-x64')
 
@@ -22,7 +23,8 @@ def digest(path):
 
 
 def prepare(downloads, frozen, output):
-    if not re.fullmatch('[0-9a-f]{40}', SOURCE): raise ValueError('Invalid independently pinned source')
+    for name, value in (('host', SOURCE), ('payload', PAYLOAD_SOURCE)):
+        if not re.fullmatch('[0-9a-f]{40}', value): raise ValueError(f'Invalid independently pinned {name} source')
     if not re.fullmatch('[0-9]{1,20}', os.environ['BINARY_RUN_ID']): raise ValueError('Invalid build run ID')
     for name in ('CONFIG_SHA256', 'LAUNCHER_SHA256'):
         if not re.fullmatch('[0-9a-f]{64}', os.environ[name]): raise ValueError('Invalid trusted hash')
@@ -35,7 +37,7 @@ def prepare(downloads, frozen, output):
     if not 0 < len(config) <= 65536 or hashlib.sha256(config).hexdigest() != os.environ['CONFIG_SHA256']:
         raise ValueError('Public descriptor hash differs')
     metadata = json.loads(config)
-    if metadata['source_commit'] != SOURCE or metadata['version'] != VERSION:
+    if metadata['source_commit'] != PAYLOAD_SOURCE or metadata['version'] != VERSION:
         raise ValueError('Public descriptor source/version differs')
     output.mkdir(mode=0o700)
     assets = output/'assets'; assets.mkdir()
@@ -68,7 +70,7 @@ def prepare(downloads, frozen, output):
     launcher = output/'launchers/install.ps1'
     if digest(launcher)['sha256'] != os.environ['LAUNCHER_SHA256']:
         raise ValueError('Generated final launcher differs from independently pinned launcher')
-    (output/'admission.json').write_text(json.dumps({'schema':1, 'source_commit':SOURCE,
+    (output/'admission.json').write_text(json.dumps({'schema':1, 'source_commit':SOURCE, 'payload_source_commit':PAYLOAD_SOURCE,
         'binary_run_id':int(os.environ['BINARY_RUN_ID']), 'config':digest(assets/'installer.json'),
         'payload':metadata['payload'], 'launcher':digest(launcher), 'builds':records}, indent=2)+'\n')
 
