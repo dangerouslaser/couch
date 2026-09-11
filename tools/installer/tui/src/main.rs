@@ -36,6 +36,15 @@ const MUTED: Color = Color::Rgb(141, 158, 182);
 const GREEN: Color = Color::Rgb(123, 225, 169);
 const RED: Color = Color::Rgb(255, 133, 149);
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProgressUnit {
+    #[default]
+    Bytes,
+    Items,
+    Seconds,
+}
+
 #[derive(Clone, Deserialize)]
 struct Choice {
     value: String,
@@ -54,6 +63,8 @@ enum Message {
         result: String,
         log_path: String,
         measurement: Option<(u64, u64, f64)>,
+        #[serde(default)]
+        measurement_unit: ProgressUnit,
     },
     Prompt {
         id: u64,
@@ -135,6 +146,8 @@ struct App {
     result: String,
     log_path: String,
     measurement: Option<(u64, u64, f64)>,
+    measurement_unit: ProgressUnit,
+    measured_at: Instant,
     prompt: Option<Prompt>,
     started: Instant,
     finished: Option<i32>,
@@ -160,6 +173,8 @@ impl App {
             result: "active".into(),
             log_path: String::new(),
             measurement: None,
+            measurement_unit: ProgressUnit::Bytes,
+            measured_at: Instant::now(),
             prompt: None,
             started: Instant::now(),
             finished: None,
@@ -177,6 +192,7 @@ impl App {
                 result,
                 log_path,
                 measurement,
+                measurement_unit,
             } => {
                 self.step = step.min(steps.len().saturating_sub(1));
                 self.steps = steps;
@@ -184,6 +200,8 @@ impl App {
                 self.action = clean(&action);
                 self.result = result;
                 self.log_path = clean(&log_path);
+                self.measurement_unit = measurement_unit;
+                self.measured_at = Instant::now();
                 self.measurement = measurement.filter(|(done, total, rate)| {
                     *total > 0 && done <= total && rate.is_finite() && *rate >= 0.0
                 });
@@ -296,6 +314,39 @@ fn elapsed(app: &App) -> String {
     let s = app.started.elapsed().as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
 }
+fn measurement_text(done: u64, total: u64, rate: f64, unit: ProgressUnit, age: Duration) -> String {
+    match unit {
+        ProgressUnit::Items => format!("{done} / {total} items"),
+        ProgressUnit::Seconds => format!("{done}s elapsed · waiting (up to {total}s)"),
+        ProgressUnit::Bytes => {
+            let size = format!(
+                "{:.1} / {:.1} MiB",
+                done as f64 / 1048576.0,
+                total as f64 / 1048576.0
+            );
+            if done < total && age >= Duration::from_secs(2) {
+                return format!("{size} · waiting for progress");
+            }
+            if rate <= 0.0 {
+                return if done == total {
+                    format!("{size} · complete")
+                } else {
+                    format!("{size} · measuring speed…")
+                };
+            }
+            let eta = if done < total {
+                format!(
+                    " · ~{}s remaining",
+                    ((total - done) as f64 / rate).ceil() as u64
+                )
+            } else {
+                String::new()
+            };
+            format!("{size} · {:.1} MiB/s{eta}", rate / 1048576.0)
+        }
+    }
+}
+
 fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(
@@ -476,23 +527,17 @@ fn status(frame: &mut Frame, app: &App, area: Rect, compact: bool) {
                 .use_unicode(true),
             rows[1],
         );
-        let eta = if rate > 0.0 {
-            format!(
-                " · ~{}s remaining",
-                ((total - done) as f64 / rate).ceil() as u64
-            )
-        } else {
-            String::new()
-        };
+        let summary = measurement_text(
+            done,
+            total,
+            rate,
+            app.measurement_unit,
+            app.measured_at.elapsed(),
+        );
         frame.render_widget(
-            Paragraph::new(format!(
-                "{:.1} / {:.1} MiB   ·   {:.1} MiB/s{eta}",
-                done as f64 / 1048576.0,
-                total as f64 / 1048576.0,
-                rate / 1048576.0
-            ))
-            .style(Style::default().fg(MUTED))
-            .wrap(Wrap { trim: false }),
+            Paragraph::new(summary)
+                .style(Style::default().fg(MUTED))
+                .wrap(Wrap { trim: false }),
             rows[2],
         );
     } else {
@@ -1189,6 +1234,41 @@ mod tests {
         assert!(frame.contains("•••"));
     }
     #[test]
+    fn progress_units_rates_and_stale_samples_render_truthfully() {
+        let mut app = App::new(false);
+        app.measurement = Some((3, 4, 0.0));
+        app.measurement_unit = ProgressUnit::Items;
+        app.detail = "Preparing ADB".into();
+        let frame = text(&app, 80, 24);
+        assert!(frame.contains("3 / 4 items"));
+        assert!(!frame.contains("MiB"));
+        app.measurement_unit = ProgressUnit::Seconds;
+        assert!(text(&app, 80, 24).contains("3s elapsed"));
+        let mib = 1048576;
+        app.measurement = Some((2 * mib, 10 * mib, mib as f64));
+        app.measurement_unit = ProgressUnit::Bytes;
+        let frame = text(&app, 80, 24);
+        assert!(frame.contains("1.0 MiB/s"));
+        assert!(frame.contains("~8s remaining"));
+        let stale = measurement_text(
+            2 * mib,
+            10 * mib,
+            mib as f64,
+            ProgressUnit::Bytes,
+            Duration::from_secs(2),
+        );
+        assert!(stale.contains("waiting for progress"));
+        assert!(!stale.contains("MiB/s") && !stale.contains("remaining"));
+        assert!(
+            measurement_text(0, mib, 0.0, ProgressUnit::Bytes, Duration::ZERO)
+                .contains("measuring speed")
+        );
+        assert!(
+            !measurement_text(mib, mib, mib as f64, ProgressUnit::Bytes, Duration::ZERO)
+                .contains("remaining")
+        );
+    }
+    #[test]
     fn invalid_measurement_cannot_become_fake_progress() {
         let mut app = App::new(false);
         app.receive(Message::State {
@@ -1199,6 +1279,7 @@ mod tests {
             result: "active".into(),
             log_path: String::new(),
             measurement: Some((11, 10, 1.0)),
+            measurement_unit: ProgressUnit::Bytes,
         });
         assert!(app.measurement.is_none());
     }

@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         let guard = session::SessionGuard::create(&parent.join("run"))?;
         let mut last = String::new();
         let prepared =
-            dependencies::prepare(&guard, dependencies::host_platform()?, |label, _, _| {
+            dependencies::prepare(&guard, dependencies::host_platform()?, |label, _, _, _| {
                 if label != last {
                     eprintln!("{label}…");
                     last = label.into();

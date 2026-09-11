@@ -59,3 +59,19 @@ mismatch, bad chunks, truncated/extra streams, journal failure and refusal to
 retry. Non-Linux hosts can compile the policy crate, but its Linux direct-I/O
 tests are gated out; a zero-test host run does not validate readback behavior.
 HA100 kernel/eMMC direct I/O and real block integration require physical testing.
+
+### Reusing verified native bootstrap capture
+
+The native MTK worker retains an in-memory proof only after a complete streamed
+partition backup and a second, independently matching device hash. The host still
+syncs and reads back each saved file. Boot authorization compares all nine submitted
+original hashes to that worker proof instead of reading those partitions a third
+time. Proof is bound to the exact worker, reader, USB device, MTK connection, selected
+port, CID and observed layout. It cannot be imported from a host map or reused after
+a reconnect, changed binding, failed command, repeated unverified capture or close.
+Authorization is single-use and consumes the proof.
+
+The boot write still receives independent full boot readback and hash checks of
+the eight untouched originals. Writer construction continues to validate the
+observed CID/GPT and the full local stage image. This optimization removes only
+the redundant pre-write partition pass, not backup durability or post-write checks.
