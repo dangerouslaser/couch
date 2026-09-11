@@ -122,6 +122,19 @@ Building for the device, and the kernel, are documented in `README.md` and
 - Say plainly what you did not verify. An unverified assumption named in the
   description is useful; one discovered later is not.
 
+### Completion and merge ownership
+
+If you open or take ownership of a change, carry it through the ordinary
+repository workflow: make the focused commit, open or update its pull request,
+run the relevant validation, address review and CI feedback, and merge it once
+the repository's normal requirements are satisfied. Do not leave a completed,
+green change only on a branch for somebody else to discover.
+
+If a required review, CI check, permission, or external dependency prevents
+that final step, report the exact blocker and the change's current PR/commit.
+Do not bypass branch protection, required checks, or review requirements to
+call work complete.
+
 ## Hardware validation
 
 Host tests prove protocol handling, configuration validation and error paths.
