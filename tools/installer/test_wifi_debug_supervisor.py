@@ -140,6 +140,7 @@ class DebugSupervisorTests(unittest.TestCase):
                          ['killall wpa_supplicant wmt_launcher wmt_loader'])
         self.assertNotIn('couch-installer-probe', self.supervisor)
 
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
     def test_debug_startup_evidence_prioritizes_wpa_and_liveness(self):
         marker = self.root / 'debug-mode'
         marker.touch()
@@ -165,6 +166,7 @@ class DebugSupervisorTests(unittest.TestCase):
         self.assertIn('WiFi control directory:', evidence)
         self.assertIn('[debug kernel tail]', evidence)
 
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX shell startup semantics')
     def test_only_debug_mode_adds_detailed_supplicant_verbosity(self):
         marker = self.root / 'debug-mode'
         binary = self.root / 'wpa_supplicant'
