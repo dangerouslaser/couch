@@ -13,8 +13,12 @@ permissions:
   contents: read
 jobs:
   package:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m unittest discover -s tools/release -p test_package_public_installer.py
+      - run: python -m unittest discover -s tools/release -p test_package_public_installer.py

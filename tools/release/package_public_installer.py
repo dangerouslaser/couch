@@ -40,7 +40,7 @@ def pin(value):
 
 def open_regular(path, stack, limit):
     require(stat.S_ISREG(path.lstat().st_mode), 'Public input must be a regular non-symlink file')
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
     source = stack.enter_context(os.fdopen(fd, 'rb'))
     meta = os.fstat(source.fileno())
     require(stat.S_ISREG(meta.st_mode) and 0 < meta.st_size <= limit, 'Invalid public input size/type')
@@ -80,6 +80,35 @@ def verify_input(source, expected):
     source.seek(0)
 
 
+def verify_source_commit(source, expected):
+    # git archive records the committed tree ID in a global PAX comment. Read
+    # only bounded metadata here; the whole compressed file was already hashed.
+    # This distinguishes the exact Couch build input from a corresponding-source
+    # collection, whose commit is stored in SOURCE-MANIFEST.json instead.
+    try:
+        with gzip.GzipFile(fileobj=source, mode='rb') as compressed:
+            header = tarfile.TarInfo.frombuf(compressed.read(512), 'utf-8', 'strict')
+            # Inspect the fixed header before reading any declared PAX payload.
+            # This SHA-1 Git repository emits one 52-byte global comment record.
+            require(header.type == tarfile.XGLTYPE and header.size == 52,
+                    'Expected bounded Git archive global commit metadata')
+            metadata = compressed.read(header.size)
+            require(metadata == f'52 comment={expected}\n'.encode('ascii'),
+                    'Source archive Git commit differs from build attestation')
+
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise ValueError('Expected a gzip Git archive with bounded commit metadata') from error
+    finally:
+        source.seek(0)
+
+
+def durable_write(path, data):
+    with path.open('xb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 class BoundedWriter:
     def __init__(self, target):
         self.target, self.count = target, 0
@@ -106,6 +135,7 @@ def prepare(attestation, source_archive, userdata, ramdisk, boot, logo, output, 
                 'Expected exact-source public build attestation')
         source, source_size = open_regular(source_archive, stack, MAX_TOTAL)
         verify_input(source, {'size': source_size, 'sha256': build['source_archive_sha256']})
+        verify_source_commit(source, build['source_commit'])
         require(set(build['files']) == set(FILES), 'Attestation must contain exactly six public files')
         require(set(build['builder_receipts']) == {'userdata', 'ramdisk', 'boot', 'logo'},
                 'Missing or extra builder receipt pins')
@@ -158,16 +188,19 @@ def prepare(attestation, source_archive, userdata, ramdisk, boot, logo, output, 
         partial = output / (filename + '.partial')
         target = partial.open('xb')  # Acquire before finally: never unlink another process's file.
         try:
-            with target, gzip.GzipFile(fileobj=BoundedWriter(target), mode='wb', filename='', mtime=0) as compressed:
-                with tarfile.open(fileobj=compressed, mode='w|', format=tarfile.USTAR_FORMAT) as archive:
-                    for name in sorted([*FILES, 'manifest.json']):
-                        item = tarfile.TarInfo(name)
-                        item.mode, item.uid, item.gid, item.mtime = 0o644, 0, 0, 0
-                        item.size = len(manifest) if name == 'manifest.json' else expected[name]['size']
-                        reader = io.BytesIO(manifest) if name == 'manifest.json' else CheckedReader(sources[name], expected[name])
-                        archive.addfile(item, reader)
-                        if name != 'manifest.json':
-                            reader.finish()
+            with target:
+                with gzip.GzipFile(fileobj=BoundedWriter(target), mode='wb', filename='', mtime=0) as compressed:
+                    with tarfile.open(fileobj=compressed, mode='w|', format=tarfile.USTAR_FORMAT) as archive:
+                        for name in sorted([*FILES, 'manifest.json']):
+                            item = tarfile.TarInfo(name)
+                            item.mode, item.uid, item.gid, item.mtime = 0o644, 0, 0, 0
+                            item.size = len(manifest) if name == 'manifest.json' else expected[name]['size']
+                            reader = io.BytesIO(manifest) if name == 'manifest.json' else CheckedReader(sources[name], expected[name])
+                            archive.addfile(item, reader)
+                            if name != 'manifest.json':
+                                reader.finish()
+                target.flush()
+                os.fsync(target.fileno())
             # Publish exclusively even if another process inserts a destination.
             os.link(partial, output / filename)
         finally:
@@ -179,15 +212,13 @@ def prepare(attestation, source_archive, userdata, ramdisk, boot, logo, output, 
                       'version': version, 'source_commit': build['source_commit'],
                       'payload': {'url': f'https://github.com/dangerouslaser/couch/releases/download/{version}/{filename}',
                                   'size': asset.stat().st_size, 'sha256': digest, 'format': 'tar.gz'}}
-        with (output / 'installer.json').open('xb') as stream:
-            stream.write(encoded(descriptor))
+        durable_write(output / 'installer.json', encoded(descriptor))
         receipt = {'schema': 1, 'kind': 'couch-public-installer-package', 'source_commit': build['source_commit'],
                    'source_archive_sha256': build['source_archive_sha256'], 'source_kernel_commit': b['source_kernel_commit'],
                    'build_attestation_sha256': build_hash, 'builder_receipts': build['builder_receipts'],
                    'files': expected, 'payload': descriptor['payload'],
                    'installer_json_sha256': hashlib.sha256(encoded(descriptor)).hexdigest(), 'published': False}
-        with (output / 'package.json').open('xb') as stream:
-            stream.write(encoded(receipt))
+        durable_write(output / 'package.json', encoded(receipt))
         return receipt
 
 

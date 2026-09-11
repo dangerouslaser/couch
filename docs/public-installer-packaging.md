@@ -43,6 +43,13 @@ checkout's HEAD or by relabeling old candidate outputs.
 }
 ```
 
+`--source-archive` is the exact Couch Git archive used as build input:
+`git archive --format=tar.gz COMMIT`. Its fixed-size global PAX commit comment must
+match `source_commit`; the packager validates the 512-byte header and bounds the
+metadata length before reading it. This is distinct from the complete
+corresponding-source bundle, which also contains Cargo, Alpine, kernel, BusyBox
+and compiler sources and is separately assembled and verified before publication.
+
 The component kernel source commit remains separate from the Couch source commit.
 The boot receipt must match the reviewed kernel source and zImage pin. The logo
 receipt must match Couch's canonical artwork, and the userdata/RAM receipts must
@@ -50,7 +57,9 @@ identify vendor-free inputs targeting the compiled owner-OTA inventory. Actual
 source archive, receipt and payload bytes are independently rehashed; input files
 stay open through packaging and are rehashed while being written to the tar.
 Links, special files, mixed receipts, extra inventory names and private builder
-kinds are rejected. Existing output directories/files are preserved on collisions.
+kinds are rejected. Existing output directories/files are preserved on collisions. Binary-mode input
+reads work on Windows; the compressed archive is flushed to disk before its
+exclusive final link, and descriptor/receipt files are flushed before return.
 
 ```sh
 python3 tools/release/package_public_installer.py \
