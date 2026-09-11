@@ -2,9 +2,9 @@
 
 The integrated native installer prepares the host dependencies, enrolls the
 remote over USB, and uses authenticated Wi-Fi for backups and OS transfer.
-Release `v0.1.0-alpha.20260910.24` is assembled for testing but is **not yet
-published**. Its final launchers passed download, checksum and safe-Cancel tests
-on Linux, macOS and Windows; physical installation acceptance remains pending.
+Release `v0.1.0-alpha.20260910.24` is published as a prerelease. Its final
+launchers passed download, checksum and safe-Cancel tests on Linux, macOS and
+Windows; physical installation acceptance remains pending.
 
 ## Before starting
 
@@ -37,11 +37,10 @@ not install or replace USB drivers automatically and stops if it cannot claim
 the selected interface. Platform fixture success is not physical Windows driver
 validation.
 
-## Planned release commands
+## Release commands
 
-These commands are reserved for the release named below. They will work only
-after its reviewed assets are published; do not substitute an unverified script
-or a different release's configuration while publication is pending.
+These commands download the published release named below. Do not substitute an
+unverified script or a different release's configuration.
 
 Linux x64 and macOS, from an interactive terminal:
 
