@@ -17,6 +17,19 @@ fail() {
         # Only startup output from the empty-network configuration is exposed.
         # Once ready, provisioning may include secrets and logs stay RAM-private.
         $BB tail -c 4096 /tmp/couch-wpa-startup.log >> /tmp/probe.log 2>/dev/null
+        # A live supplicant with no control socket and a dead one both used to
+        # report supplicant-exit. Record which actually happened, plus the
+        # control directory and kernel tail, which init stops emitting once the
+        # configuration file exists and so cannot show a supplicant crash.
+        if $BB kill -0 "$supplicant" 2>/dev/null; then
+            echo "WiFi supplicant pid $supplicant still running at failure" >> /tmp/probe.log
+        else
+            echo "WiFi supplicant pid $supplicant no longer running at failure" >> /tmp/probe.log
+        fi
+        echo "WiFi control directory:" >> /tmp/probe.log
+        { $BB ls -la /tmp/couch-wpa 2>&1 || \
+            echo 'WiFi control directory absent'; } | $BB head -c 1024 >> /tmp/probe.log
+        $BB dmesg | $BB tail -c 4096 >> /tmp/probe.log 2>/dev/null
     fi
     exit 1
 }
@@ -78,8 +91,9 @@ starting_supplicant=1
 supplicant=$!
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
+    # These two outcomes are different faults and must not share a reason.
     $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
-    [ "$n" -lt 10 ] || fail supplicant-exit
+    [ "$n" -lt 10 ] || fail supplicant-socket-timeout
     $BB sleep 1; n=$((n+1))
 done
 starting_supplicant=0

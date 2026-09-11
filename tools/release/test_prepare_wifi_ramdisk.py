@@ -18,6 +18,7 @@ class WifiRamdiskTests(unittest.TestCase):
             with self.subTest(starting=starting), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / 'couch-wpa-startup.log').write_text('x' * 5000)
+                (root / 'couch-wpa').mkdir()
                 # Do not execute a temporary fake busybox here: hardened CI
                 # runners may mount temporary directories noexec, which would
                 # suppress tail's output through fail()'s stderr redirection.
@@ -28,7 +29,25 @@ class WifiRamdiskTests(unittest.TestCase):
                 result = subprocess.run(['sh'], input=fixture, text=True, capture_output=True, timeout=5)
                 self.assertEqual(result.returncode, 1)
                 log = (root / 'probe.log').read_text()
-                self.assertEqual(log, 'WiFi failed: supplicant-exit\n' + ('x' * 4096 if starting else ''))
+                self.assertTrue(log.startswith('WiFi failed: supplicant-exit\n'))
+                if not starting:
+                    # Credential cutoff: once credentials are possible the log
+                    # may carry secrets, so nothing beyond the reason is exposed.
+                    self.assertEqual(log, 'WiFi failed: supplicant-exit\n')
+                    continue
+                # Pre-credential diagnostics, each individually bounded.
+                # The startup tail is the run of fixture bytes directly after
+                # the reason line; later diagnostics may contain 'x' too, so
+                # measure that run rather than counting across the whole log.
+                tail = log[len('WiFi failed: supplicant-exit\n'):]
+                captured = len(tail) - len(tail.lstrip('x'))
+                self.assertEqual(captured, 4096, 'startup capture must stay at 4096 bytes')
+                self.assertIn('at failure', log)
+                self.assertIn('WiFi control directory', log)
+                # Everything after the heading is the capped listing plus the
+                # capped kernel tail, so the whole remainder has a hard ceiling.
+                remainder = log.split('WiFi control directory:\n', 1)[1]
+                self.assertLessEqual(len(remainder.encode()), 1024 + 4096)
 
     def test_loader_android_exit_requires_detected_transport(self):
         for detected in (False, True):

@@ -48,6 +48,7 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
                             | "interface-up"
                             | "dhcp-exit"
                             | "supplicant-exit"
+                            | "supplicant-socket-timeout"
                     )
                 })
                 .unwrap_or("unknown");

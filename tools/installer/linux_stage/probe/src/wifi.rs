@@ -190,20 +190,24 @@ fn error_label(error: &str) -> &str {
     match error.trim() {
         "detect-node" | "loader-exit" | "transport-node" | "wifi-node" | "launcher-exit"
         | "transport-timeout" | "power-on" | "interface-timeout" | "interface-up" | "dhcp-exit"
-        | "supplicant-exit" => error.trim(),
+        | "supplicant-exit" | "supplicant-socket-timeout" => error.trim(),
         _ => "unknown",
     }
 }
 pub fn status() -> Vec<u8> {
-    let ip = fs::read_to_string("/tmp/couch-wifi.ip").unwrap_or_default();
-    let status = fs::read_to_string("/tmp/couch-wifi.status").unwrap_or_else(|_| "waiting".into());
+    status_from(std::path::Path::new("/tmp"))
+}
+fn status_from(root: &std::path::Path) -> Vec<u8> {
+    let ip = fs::read_to_string(root.join("couch-wifi.ip")).unwrap_or_default();
+    let status =
+        fs::read_to_string(root.join("couch-wifi.status")).unwrap_or_else(|_| "waiting".into());
     let ip = ip
         .trim()
         .parse::<std::net::Ipv4Addr>()
         .map(|v| v.to_string())
         .unwrap_or_default();
     let status = status_label(&status);
-    let error = fs::read_to_string("/tmp/couch-wifi.error").unwrap_or_default();
+    let error = fs::read_to_string(root.join("couch-wifi.error")).unwrap_or_default();
     let error = if status == "failed" {
         error_label(&error)
     } else {
@@ -232,6 +236,60 @@ mod tests {
         assert_eq!(status_label("untrusted status"), "waiting");
         assert_eq!(error_label("loader-exit\n"), "loader-exit");
         assert_eq!(error_label("private network text"), "unknown");
+    }
+    #[test]
+    fn every_reason_the_stage_can_write_survives_the_status_wire() {
+        // The stage and the host each carry this list. A reason missing here is
+        // silently flattened to "unknown", which is how a distinct failure can
+        // reach the operator looking exactly like the one it was split from.
+        // Read the reasons the stage actually writes, then drive them through
+        // error_label rather than asserting on the source text.
+        let stage = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../wifi-stage/wifi-init"),
+        )
+        .expect("stage script");
+        let mut written: Vec<&str> = stage
+            .split("fail ")
+            .skip(1)
+            .filter_map(|rest| rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').next())
+            .filter(|token| !token.is_empty() && *token != "reason")
+            .collect();
+        written.sort_unstable();
+        written.dedup();
+        assert!(
+            written.contains(&"supplicant-socket-timeout") && written.contains(&"supplicant-exit"),
+            "stage no longer writes the reasons under test: {written:?}"
+        );
+        for reason in written {
+            assert_eq!(
+                error_label(reason),
+                reason,
+                "{reason} is flattened to unknown on the status wire"
+            );
+        }
+    }
+    #[test]
+    fn a_stalled_supplicant_reaches_status_without_being_flattened() {
+        // End to end through the real status(): stage files in, JSON out.
+        let root = std::env::temp_dir().join(format!("couch-probe-status-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("couch-wifi.status"), "failed\n").unwrap();
+        fs::write(root.join("couch-wifi.error"), "supplicant-socket-timeout\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
+        assert_eq!(parsed["status"], "failed");
+        assert_eq!(parsed["error"], "supplicant-socket-timeout");
+        assert_eq!(parsed["ip"], "");
+        // An unrecognised reason must still be bounded to unknown.
+        fs::write(root.join("couch-wifi.error"), "private network text\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
+        assert_eq!(parsed["error"], "unknown");
+        // A reason is only surfaced while the status is failed.
+        fs::write(root.join("couch-wifi.status"), "connected\n").unwrap();
+        fs::write(root.join("couch-wifi.error"), "supplicant-socket-timeout\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
+        assert_eq!(parsed["error"], "none");
+        fs::remove_dir_all(&root).unwrap();
     }
     #[test]
     fn credentials_are_hex_bounded_and_injection_is_rejected() {

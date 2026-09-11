@@ -76,6 +76,7 @@ FAILURES = {
     'interface-up': 'Wi-Fi interface could not be enabled',
     'dhcp-exit': 'Address acquisition stopped; association or DHCP may have failed',
     'supplicant-exit': 'Wi-Fi authentication process stopped',
+    'supplicant-socket-timeout': 'Wi-Fi authentication process started but never became controllable',
 }
 
 
