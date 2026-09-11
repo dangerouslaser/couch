@@ -122,6 +122,15 @@ def _open_image(path):
         raise
 
 
+def _read_at(fd, count, offset):
+    if hasattr(os, "pread"):
+        return os.pread(fd, count, offset)
+    # The Windows private adapter executes one synchronous command at a time and
+    # owns these descriptors exclusively. No other thread shares their offsets.
+    os.lseek(fd, offset, os.SEEK_SET)
+    return os.read(fd, count)
+
+
 def _sha(value):
     return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
 
@@ -234,7 +243,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         self._report("Verify image", name, 0, total)
         for offset in range(0, source["stamp"][2], CHUNK):
             count = min(CHUNK, source["stamp"][2] - offset)
-            data = os.pread(source["fd"], count, offset)
+            data = _read_at(source["fd"], count, offset)
             require(len(data) == count, f"Short verified image: {name}")
             full.update(data)
             chunks.append(hashlib.sha256(data).digest())
@@ -287,7 +296,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
             for index, offset in enumerate(range(0, region["size"], CHUNK)):
                 self._unchanged(name)
                 count = min(CHUNK, region["size"] - offset)
-                data = os.pread(image["fd"], count, offset)
+                data = _read_at(image["fd"], count, offset)
                 require(len(data) == count and hashlib.sha256(data).digest() == image["chunks"][index],
                         f"Image changed during transfer: {name}")
                 with bounded_operation(10):

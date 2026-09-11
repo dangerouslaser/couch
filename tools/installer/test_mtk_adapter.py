@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from couch_install import InstallError, IDENTITY_PARTITIONS
 from mtk_adapter import Adapter, Wire, serve, MAX
 from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
-from mtk_writer import _open_image, _fd_stamp, ConnectedMtkWriter
+from mtk_writer import _open_image, _fd_stamp, _read_at, ConnectedMtkWriter
 
 
 class MemoryWire:
@@ -160,6 +160,20 @@ class AdapterTests(unittest.TestCase):
                 writer._sources = {"boot": {"path": path, "fd": fd, "stamp": _fd_stamp(fd)}}
                 writer._unchanged("boot")
                 self.assertFalse(os.get_inheritable(fd))
+            finally:
+                os.close(fd)
+
+    def test_windows_read_at_fallback_keeps_exact_binary_offsets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "image"
+            path.write_bytes(b"012\r\n\x1a\xff789")
+            fd = _open_image(path)
+            try:
+                without_pread = SimpleNamespace(lseek=os.lseek, read=os.read, SEEK_SET=os.SEEK_SET)
+                with patch("mtk_writer.os", without_pread):
+                    self.assertEqual(_read_at(fd, 4, 3), b"\r\n\x1a\xff")
+                    self.assertEqual(_read_at(fd, 3, 0), b"012")
+                    self.assertEqual(_read_at(fd, 8, 9), b"9")
             finally:
                 os.close(fd)
 
