@@ -297,7 +297,7 @@ fn install(
     let dependencies = dependencies::prepare(
         session,
         dependencies::host_platform()?,
-        |label, done, total| ui.progress(0, label, done, total),
+        |label, done, total, unit| ui.progress_with_unit(0, label, done, total, unit),
     )?;
     let ota = session.path().join("official-ota.zip");
     public_inputs::official(&ota, |done, total| {
@@ -520,11 +520,12 @@ fn install(
         if let Some(device) = found.first() {
             break (*device).clone();
         }
-        ui.progress(
+        ui.progress_with_unit(
             3,
             "Waiting for the selected remote on USB",
             start.elapsed().as_secs(),
             120,
+            crate::frontend::ProgressUnit::Seconds,
         )?;
         thread::sleep(Duration::from_millis(20));
     };
@@ -684,11 +685,12 @@ fn install(
         {
             break;
         }
-        ui.progress(
+        ui.progress_with_unit(
             3,
             "Waiting for the installer USB stage",
             start.elapsed().as_secs(),
             120,
+            crate::frontend::ProgressUnit::Seconds,
         )?;
         thread::sleep(Duration::from_millis(250));
     }
@@ -736,11 +738,12 @@ fn install(
                 .context("missing Wi-Fi address")?
                 .parse::<std::net::Ipv4Addr>()?;
         }
-        ui.progress(
+        ui.progress_with_unit(
             4,
             "Connecting the remote to Wi-Fi",
             start.elapsed().as_secs(),
             120,
+            crate::frontend::ProgressUnit::Seconds,
         )?;
         thread::sleep(Duration::from_millis(500));
     };
@@ -798,8 +801,8 @@ fn install(
     ui.progress(
         7,
         "Installation verified. First normal boot still needs to be checked on the remote.",
-        1,
-        1,
+        0,
+        0,
     )?;
     Ok(())
 }
