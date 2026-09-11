@@ -9,11 +9,12 @@ use rustls::{
 };
 #[cfg(not(feature = "wifi-debug"))]
 use serde::Deserialize;
+#[cfg(feature = "wifi-debug")]
+use std::time::Duration;
 use std::{
     fs::{self, OpenOptions},
     io::{self},
     os::unix::fs::OpenOptionsExt,
-    time::Duration,
 };
 #[cfg(not(feature = "wifi-debug"))]
 use std::{
@@ -446,9 +447,9 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
     } else {
         "none"
     };
-    let mut value = serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")});
     #[cfg(feature = "wifi-debug")]
     {
+        let mut value = serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")});
         value["stage_kind"] = serde_json::json!("private-ram-wifi-debug-stage");
         value["capability"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         value["wifi_debug"] = serde_json::json!(true);
@@ -456,8 +457,10 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
         value["debug_protocol"] = serde_json::json!(1);
         value["debug_generation_limit"] = serde_json::json!(DEBUG_GENERATION_LIMIT);
         value["scan"] = serde_json::json!(false);
+        return value.to_string().into_bytes();
     }
-    value.to_string().into_bytes()
+    #[cfg(not(feature = "wifi-debug"))]
+    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")}).to_string().into_bytes()
 }
 #[cfg(test)]
 mod tests {
