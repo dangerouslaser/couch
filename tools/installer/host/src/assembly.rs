@@ -135,8 +135,14 @@ fn parse(bytes: &[u8]) -> Result<BTreeMap<String, Entry>> {
             *field = u32::from_str_radix(std::str::from_utf8(&header[6 + i * 8..14 + i * 8])?, 16)?;
         }
         ensure!(
-            fields[11] > 0 && fields[11] <= 4096 && fields[4] <= 1 && fields[12] == 0,
+            fields[11] > 0 && fields[11] <= 4096 && fields[12] == 0,
             "invalid cpio metadata"
+        );
+        // Directory link counts include dot/subdirectories; they are not hardlink
+        // aliases. Other entry kinds still cannot request shared inode contents.
+        ensure!(
+            fields[4] <= 1 || fields[1] & 0o170000 == 0o040000,
+            "cpio hardlinks are unsupported"
         );
         let name_end = offset + 110 + fields[11] as usize;
         let name = bytes
@@ -385,6 +391,24 @@ mod tests {
         assert!(parse(&encode(&entries).unwrap()).is_err());
         for end in [0, 109, 111, bytes.len() / 2] {
             assert!(parse(&bytes[..end]).is_err());
+        }
+    }
+    #[test]
+    fn directory_links_do_not_admit_regular_or_symlink_hardlinks() {
+        for mode in [0o040755, 0o100755, 0o120777, 0o020666] {
+            let mut entries = BTreeMap::new();
+            entries.insert("entry".into(), Entry::new(mode, Vec::new()));
+            let original = encode(&entries).unwrap();
+            for count in [2u32, 7, u32::MAX] {
+                let mut bytes = original.clone();
+                bytes[38..46].copy_from_slice(format!("{count:08x}").as_bytes());
+                assert_eq!(parse(&bytes).is_ok(), mode == 0o040755);
+                if mode == 0o040755 {
+                    let parsed = parse(&bytes).unwrap();
+                    assert_eq!(parsed["entry"].mode, mode);
+                    assert!(parse(&encode(&parsed).unwrap()).is_ok());
+                }
+            }
         }
     }
     #[test]
