@@ -6,9 +6,9 @@ Import is read-only with respect to the remote and old directory. It creates a
 new private session copy and never resumes an old installation journal.
 
 The library entry points are `saved_enrollment::import` for native records and
-`import_legacy` for retained Python trial evidence. The native orchestrator must
-connect these entry points to the reinstall selection; this module alone is not
-a standalone installer command.
+`import_legacy` for retained Python trial evidence. The native orchestrator connects
+these entry points to **Reinstall existing Couch** in the terminal. The import
+module alone is not a standalone installer command.
 
 ## Native records
 
@@ -21,8 +21,9 @@ failed installation does not turn these verified original snapshots into a new
 capture or authorize resuming its write session.
 
 The importer verifies exact HA100 partition boundaries, canonical CID, complete
-calibration inventory, file sizes and hashes, and pinned official Android
-boot/odmdtbo prefixes. Vendor Device ID and original MAC records remain private.
+calibration inventory, file sizes and hashes, and either the pinned official Android
+boot/odmdtbo prefixes or the explicitly reviewed retained-stock full-image pair.
+Mixed or unknown stock pairs are rejected. Vendor Device ID and original MAC records remain private.
 The new host receives a `SavedEnrollment`; it does not receive write authority.
 
 ## Existing private Python trials

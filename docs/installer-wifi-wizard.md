@@ -1,10 +1,10 @@
-# Private Wi-Fi installer wizard
+# Python reference Wi-Fi installer wizard
 
-The native Ratatui terminal can run the guarded Wi-Fi workflow through
-`tools/installer/ratatui_backend.py`. The backend owns prompts and orchestration;
-the existing USB policy and private RAM-stage protocol own device access. The
-public terminal's default installation gate remains unchanged. This source does
-not enroll an unknown device or supply a redistributable OS package.
+The released-source [native installer flow](installer.md) owns current user
+onboarding and orchestration. This guide preserves the guarded Python reference
+workflow through `tools/installer/ratatui_backend.py` for development and
+regression work; its private-trial commands are not public launch commands.
+Network scanning and hidden-network behavior below also inform the native flow.
 
 ## Entry point and prerequisites
 

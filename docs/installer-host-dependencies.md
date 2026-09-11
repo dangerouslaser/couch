@@ -35,7 +35,8 @@ notices remain beside ADB. ADB source is maintained in
 [AOSP packages/modules/adb](https://android.googlesource.com/platform/packages/modules/adb/).
 
 This receipt deliberately marks `complete_mtk_runtime: false`: pinned Python,
-MTK adapter wheels and native libusb delivery are separate work. No download
+MTK adapter wheels and native libusb are supplied by the separate, integrated
+[native dependency bootstrap](installer-native-dependencies.md). No download
 agent, device backup, calibration or vendor runtime is included. Windows USB
 driver binding and actual HA100 operation still require separate validation.
 Linux ARM and Windows ARM are not covered by these ADB pins.

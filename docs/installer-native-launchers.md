@@ -2,8 +2,10 @@
 
 `tools/release/installer_launchers.py` generates an `install.sh` and `install.ps1`
 for one exact release. Generation does not publish a release or establish device
-acceptance. The old public bootstrap remains disabled until a complete installer
-is ready.
+acceptance. The `.24` native launchers and payload are assembled and passed
+desktop download-and-Cancel acceptance; publication and physical installation
+status are tracked in the [installer guide](installer.md). The older Python
+bootstrap is not the native release entry point.
 
 The asset directory must contain these flat, regular files:
 
