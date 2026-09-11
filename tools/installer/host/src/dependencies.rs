@@ -459,16 +459,26 @@ fn unpack_wheel(
     progress: &mut Progress<'_>,
 ) -> Result<()> {
     safe_name(site_packages)?;
+    // Count actual files, excluding directory entries, before emitting a bounded
+    // measurement. The frontend correctly rejects nonzero counts with total=0.
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    ensure!(archive.len() <= MAX_MEMBERS, "too many zip members");
+    let mut total = 0;
+    for index in 0..archive.len() {
+        if !archive.by_index(index)?.is_dir() {
+            total += 1;
+        }
+    }
     let mut count = 0;
+    progress("Preparing Python packages", count, total)?;
     zip_files(bytes, |name, data, executable| {
         ensure!(
             !name.split('/').any(|part| part.ends_with(".data")),
             "wheel requires unreviewed install scheme"
         );
-        progress("Preparing Python packages", count, 0)?;
         create(root, &format!("{site_packages}/{name}"), data, executable)?;
         count += 1;
-        Ok(())
+        progress("Preparing Python packages", count, total)
     })
 }
 fn unpack_mtk(
@@ -1015,6 +1025,43 @@ mod tests {
     }
     fn no_progress(_: &str, _: u64, _: u64) -> Result<()> {
         Ok(())
+    }
+    #[test]
+    fn multi_file_wheel_progress_works_with_real_frontend() {
+        let mut wheel = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        wheel.add_directory("package/", options).unwrap();
+        for name in ["package/first.py", "package/second.py"] {
+            wheel.start_file(name, options).unwrap();
+            wheel.write_all(b"fixture").unwrap();
+        }
+        let bytes = wheel.finish().unwrap().into_inner();
+        let root = tempfile::tempdir().unwrap();
+        let mut ui = crate::frontend::Ui::new(
+            Box::new(Cursor::new(Vec::<u8>::new())),
+            Box::new(std::io::sink()),
+        );
+        let mut measurements = Vec::new();
+        unpack_wheel(&bytes, root.path(), "site", &mut |label, done, total| {
+            ui.progress(0, label, done, total)?;
+            measurements.push((done, total));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(measurements, [(0, 2), (1, 2), (2, 2)]);
+        assert_eq!(
+            fs::read(root.path().join("site/package/second.py")).unwrap(),
+            b"fixture"
+        );
+
+        let stopped = tempfile::tempdir().unwrap();
+        let error = unpack_wheel(&bytes, stopped.path(), "site", &mut |_, done, _| {
+            ensure!(done == 0, "frontend disconnected");
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("frontend disconnected"));
+        assert!(!stopped.path().join("site/package/second.py").exists());
     }
     #[test]
     fn python_windows_paths_allow_package_parent_joins_without_verbatim_semantics() {
