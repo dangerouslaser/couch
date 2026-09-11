@@ -17,6 +17,8 @@ use std::{
     time::Duration,
 };
 
+const MAX_COMPLETED_CHAIN_DEPTH: usize = 4;
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -66,7 +68,7 @@ impl Config {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChainedConfig {
-    parent: ReceiptConfig,
+    parent: Box<CompletedTransitionConfig>,
     candidate_receipt: PathBuf,
     candidate_receipt_sha256: String,
     source_commit: String,
@@ -79,7 +81,14 @@ pub struct ChainedConfig {
 }
 impl ChainedConfig {
     fn validate(&self) -> Result<()> {
-        self.parent.validate()?;
+        self.validate_at(0)
+    }
+    fn validate_at(&self, depth: usize) -> Result<()> {
+        ensure!(
+            depth < MAX_COMPLETED_CHAIN_DEPTH,
+            "completed debug receipt chain exceeds bounded depth"
+        );
+        self.parent.validate_at(depth + 1)?;
         ensure!(
             [&self.candidate_receipt, &self.image, &self.metadata]
                 .iter()
@@ -112,7 +121,7 @@ impl ChainedConfig {
         Ok(())
     }
     fn current_boot(&self) -> &str {
-        &self.parent.inputs.image_sha256
+        self.parent.current_boot()
     }
 }
 
@@ -158,7 +167,7 @@ impl TransitionConfig {
                 chain: true,
                 receipt,
                 sha256,
-                inputs: config.clone(),
+                inputs: Box::new(config.clone()),
             }),
         }
     }
@@ -192,10 +201,10 @@ pub struct ChainedReceiptConfig {
     chain: bool,
     receipt: PathBuf,
     sha256: String,
-    inputs: ChainedConfig,
+    inputs: Box<ChainedConfig>,
 }
 impl ChainedReceiptConfig {
-    fn validate(&self) -> Result<()> {
+    fn validate_at(&self, depth: usize) -> Result<()> {
         ensure!(self.chain, "chained completed receipt marker required");
         ensure!(
             self.receipt.is_absolute()
@@ -206,7 +215,7 @@ impl ChainedReceiptConfig {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "chained completed transition requires absolute receipt and SHA-256 pin"
         );
-        self.inputs.validate()
+        self.inputs.validate_at(depth)
     }
 }
 
@@ -218,9 +227,18 @@ pub enum CompletedTransitionConfig {
 }
 impl CompletedTransitionConfig {
     pub fn validate(&self) -> Result<()> {
+        self.validate_at(0)
+    }
+    fn validate_at(&self, depth: usize) -> Result<()> {
         match self {
             Self::Legacy(config) => config.validate(),
-            Self::Chained(config) => config.validate(),
+            Self::Chained(config) => config.validate_at(depth),
+        }
+    }
+    fn current_boot(&self) -> &str {
+        match self {
+            Self::Legacy(config) => &config.inputs.image_sha256,
+            Self::Chained(config) => &config.inputs.image_sha256,
         }
     }
     fn payload(&self) -> Result<Value> {
@@ -359,7 +377,7 @@ pub fn run(
     );
     session.checkpoint(&json!({"event":"debug_transition_inputs_verified","pins":config}))?;
     let choice = ui.choose("Start the dedicated Wi-Fi debug stage", &format!(
-        "Verified retained originals and failed-session journal.\nUSB bus {bus}, ports {ports:?}.\nCurrent temporary boot: {}\nDebug boot: {}\nOnly boot will be written and independently verified. Existing originals remain the baseline.",
+        "Verified retained originals and failed-session journal.\nUSB bus {bus}, ports {ports:?}.\nCurrent debug boot: {}\nDebug boot: {}\nOnly boot will be written and independently verified. Existing originals remain the baseline.",
         config.current_boot(), config.target_boot()), &[
         Choice {label:"Cancel".into(),detail:"No USB transition".into()},
         Choice {label:"Perform one debug boot transition".into(),detail:"Wait up to 180 seconds for this remote in preloader mode".into()},
@@ -480,6 +498,48 @@ mod tests {
         let mut value = valid;
         value["capture_originals"] = json!(true);
         assert!(serde_json::from_value::<Config>(value).is_err());
+    }
+    #[test]
+    fn chained_configuration_keeps_completed_parent_shape_and_bounds_depth() {
+        let legacy = json!({"receipt":"/legacy/completed.json", "sha256":"a".repeat(64),
+            "inputs":{"source":"/retained", "temporary_boot_sha256":"b".repeat(64),
+            "original_boot_sha256":"c".repeat(64), "snapshot_sha256":"d".repeat(64),
+            "image":"/b13.img", "image_sha256":"e".repeat(64),
+            "metadata":"/b13.json", "metadata_sha256":"f".repeat(64)}});
+        let first = json!({"parent":legacy, "candidate_receipt":"/first/receipt.json",
+            "candidate_receipt_sha256":"1".repeat(64), "source_commit":"a".repeat(40),
+            "stage_base_commit":"b".repeat(40), "probe_sha256":"2".repeat(64),
+            "image":"/first.img", "image_sha256":"3".repeat(64),
+            "metadata":"/first.json", "metadata_sha256":"4".repeat(64)});
+        let completed_first = json!({"chain":true, "receipt":"/first/completed.json",
+            "sha256":"5".repeat(64), "inputs":first});
+        let second = json!({"parent":completed_first, "candidate_receipt":"/second/receipt.json",
+            "candidate_receipt_sha256":"6".repeat(64), "source_commit":"c".repeat(40),
+            "stage_base_commit":"d".repeat(40), "probe_sha256":"7".repeat(64),
+            "image":"/second.img", "image_sha256":"8".repeat(64),
+            "metadata":"/second.json", "metadata_sha256":"9".repeat(64)});
+        let parsed = serde_json::from_value::<TransitionConfig>(second.clone()).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert_eq!(parsed.current_boot(), "3".repeat(64));
+        let payload = parsed.admission_payload(1, &[1]).unwrap();
+        assert_eq!(payload["chain"]["parent"]["chain"], true);
+        assert_eq!(
+            payload["chain"]["parent"]["inputs"]["image_sha256"],
+            "3".repeat(64)
+        );
+
+        let mut too_deep = second;
+        for number in 0..MAX_COMPLETED_CHAIN_DEPTH {
+            too_deep = json!({"parent":{"chain":true, "receipt":format!("/nested-{number}.json"),
+                "sha256":"a".repeat(64), "inputs":too_deep},
+                "candidate_receipt":format!("/candidate-{number}.json"),
+                "candidate_receipt_sha256":"b".repeat(64), "source_commit":"c".repeat(40),
+                "stage_base_commit":"d".repeat(40), "probe_sha256":"e".repeat(64),
+                "image":format!("/image-{number}.img"), "image_sha256":"f".repeat(64),
+                "metadata":format!("/metadata-{number}.json"), "metadata_sha256":"0".repeat(64)});
+        }
+        let parsed = serde_json::from_value::<TransitionConfig>(too_deep).unwrap();
+        assert!(parsed.validate().is_err());
     }
     #[test]
     fn embedded_transition_worker_imports_and_checks_without_usb() {

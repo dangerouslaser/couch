@@ -11,6 +11,12 @@ from pathlib import Path
 from couch_install import MODEL, fingerprint, require
 import recover_native_bootstrap as recovery
 
+MAX_COMPLETED_CHAIN_DEPTH = 4
+LEGACY_INPUT_KEYS = {
+    'source', 'temporary_boot_sha256', 'original_boot_sha256', 'snapshot_sha256',
+    'image', 'image_sha256', 'metadata', 'metadata_sha256',
+}
+
 
 @dataclass(frozen=True)
 class TransitionProof:
@@ -44,6 +50,15 @@ class ChainedTransitionProof:
     stage_base_commit: str
     probe_sha256: str
     config: dict
+
+
+@dataclass(frozen=True)
+class CompletedTransitionProof:
+    """A verified receipt link ending at one concrete current debug boot."""
+    parent: TransitionProof
+    receipt_sha256: str
+    boot_sha256: str
+    chained: bool
 
 
 def admit_target(*, image, image_sha256, metadata, metadata_sha256):
@@ -110,6 +125,8 @@ def _validated_legacy_receipt(config, bus, ports):
     require(isinstance(config, dict) and set(config) == {'receipt', 'sha256', 'inputs'},
             'Pinned completed transition receipt required')
     require(recovery.valid_hash(config['sha256']), 'Explicit completed receipt SHA-256 required')
+    require(isinstance(config['inputs'], dict) and set(config['inputs']) == LEGACY_INPUT_KEYS,
+            'Legacy completed receipt inputs differ from the retained admission shape')
     path = Path(config['receipt'])
     require(path.is_absolute(), 'Receipt path must be absolute')
     recovery.private_directory(path.parent)
@@ -136,6 +153,56 @@ def _validated_legacy_receipt(config, bus, ports):
                 and json.loads(raw_ack) == {'requested': True, 'acknowledged': expected_ack},
                 'Restart evidence missing or changed')
     return proof, value, verified
+
+
+def _completed_identity(config, chain, depth, seen):
+    """Open exactly one pinned receipt and reject recursive/path cycles early."""
+    expected = {'chain', 'receipt', 'sha256', 'inputs'} if chain else {'receipt', 'sha256', 'inputs'}
+    require(isinstance(config, dict), 'Pinned completed transition receipt required')
+    require(set(config) == expected and (config.get('chain') is True if chain else True),
+            'Pinned completed transition receipt required')
+    require(recovery.valid_hash(config['sha256']), 'Explicit completed receipt SHA-256 required')
+    require(depth < MAX_COMPLETED_CHAIN_DEPTH, 'Completed debug receipt chain exceeds bounded depth')
+    path = Path(config['receipt'])
+    require(path.is_absolute(), 'Receipt path must be absolute')
+    recovery.private_directory(path.parent)
+    raw = recovery.read(path, 256*1024)
+    require(recovery.sha(raw) == config['sha256'], 'Completed receipt differs from pin')
+    identity = (str(path.resolve()), config['sha256'])
+    require(identity not in seen, 'Completed debug receipt chain contains a cycle')
+    return path, raw, seen | {identity}
+
+
+def _validated_completed_receipt(config, bus, ports, *, depth=0, seen=frozenset()):
+    """Validate a schema-2 root or bounded schema-3 chain without flattening it."""
+    if isinstance(config, dict) and set(config) == {'receipt', 'sha256', 'inputs'}:
+        _completed_identity(config, False, depth, seen)
+        proof, _, verified = _validated_legacy_receipt(config, bus, ports)
+        return CompletedTransitionProof(proof, config['sha256'], verified['debug_boot_sha256'], False)
+
+    path, raw, next_seen = _completed_identity(config, True, depth, seen)
+    value = json.loads(raw)
+    require(isinstance(config['inputs'], dict), 'Chained completed receipt inputs must be an object')
+    proof = admit_chained(config['inputs'], bus, ports, _depth=depth + 1, _seen=next_seen)
+    require(value.get('schema') == 3 and value.get('kind') == 'couch-wifi-debug-chained-transition-completed'
+            and value.get('complete') is True and value.get('restart_acknowledged') is True,
+            'Incomplete chained debug transition')
+    verified_raw = recovery.read(path.parent/'verified.json', 256*1024)
+    require(recovery.sha(verified_raw) == value.get('verified_receipt_sha256'), 'Chained readback receipt changed')
+    verified = json.loads(verified_raw)
+    retained = {n: item['sha256'] for n, item in proof.parent.retained.record['originals'].items() if n != 'boot'}
+    expected = {'schema': 3, 'kind': 'couch-wifi-debug-chained-transition', 'complete': True,
+        **chained_receipt_evidence(proof, bus, ports), 'written': ['boot'],
+        'boot_sha256': proof.image_sha256, 'boot_readback_sha256': proof.image_sha256,
+        'retained_before_sha256': retained, 'retained_sha256': retained, 'restart_requested': False}
+    require(verified == expected and value.get('verification') == verified,
+            'Chained transition identity, parent, pins or retained checks differ')
+    for name, expected_ack in [('restart-requested.json', False), ('restart-acknowledged.json', True)]:
+        raw_ack = recovery.read(path.parent/name, 4096)
+        require(recovery.sha(raw_ack) == value.get(name + '_sha256')
+                and json.loads(raw_ack) == {'requested': True, 'acknowledged': expected_ack},
+                'Chained restart evidence missing or changed')
+    return CompletedTransitionProof(proof.parent, config['sha256'], proof.image_sha256, True)
 
 
 def validate_receipt(config, bus, ports):
@@ -185,13 +252,13 @@ def _candidate_receipt(config):
     return path, value
 
 
-def admit_chained(config, bus, ports):
-    """Admit b13-to-new-debug without redefining the failed-session proof."""
-    parent, completed, verified = _validated_legacy_receipt(config['parent'], bus, ports)
+def admit_chained(config, bus, ports, *, _depth=0, _seen=frozenset()):
+    """Admit a bounded debug-to-debug update without redefining failed-session proof."""
     candidate_path, _ = _candidate_receipt(config)
-    previous = verified['debug_boot_sha256']
-    require(previous == completed['verification']['debug_boot_sha256']
-            and previous != parent.retained.temporary_boot_sha256
+    completed = _validated_completed_receipt(config['parent'], bus, ports,
+                                              depth=_depth, seen=_seen)
+    parent, previous = completed.parent, completed.boot_sha256
+    require(previous != parent.retained.temporary_boot_sha256
             and previous != parent.original_boot_sha256,
             'Parent receipt does not establish a distinct current debug boot')
     image, metadata, manifest = admit_target(image=config['image'], image_sha256=config['image_sha256'],
@@ -200,7 +267,7 @@ def admit_chained(config, bus, ports):
             and config['image_sha256'] not in (previous, parent.original_boot_sha256,
                                                 parent.retained.temporary_boot_sha256),
             'Chained debug image is not a distinct boot-sized target')
-    return ChainedTransitionProof(parent, config['parent']['sha256'], previous, image,
+    return ChainedTransitionProof(parent, completed.receipt_sha256, previous, image,
                                   config['image_sha256'], metadata, config['metadata_sha256'],
                                   candidate_path, config['candidate_receipt_sha256'],
                                   config['source_commit'], config['stage_base_commit'],
@@ -222,35 +289,9 @@ def chained_receipt_evidence(proof, bus, ports):
 
 
 def validate_chained_receipt(config, bus, ports):
-    require(isinstance(config, dict) and set(config) == {'chain', 'receipt', 'sha256', 'inputs'}
-            and config['chain'] is True, 'Pinned chained completed receipt required')
-    require(recovery.valid_hash(config['sha256']), 'Explicit chained completed receipt SHA-256 required')
-    path = Path(config['receipt'])
-    require(path.is_absolute(), 'Chained receipt path must be absolute')
-    recovery.private_directory(path.parent)
-    raw = recovery.read(path, 256*1024)
-    require(recovery.sha(raw) == config['sha256'], 'Chained completed receipt differs from pin')
-    proof = admit_chained(config['inputs'], bus, ports)
-    value = json.loads(raw)
-    require(value.get('schema') == 3 and value.get('kind') == 'couch-wifi-debug-chained-transition-completed'
-            and value.get('complete') is True and value.get('restart_acknowledged') is True,
-            'Incomplete chained debug transition')
-    verified_raw = recovery.read(path.parent/'verified.json', 256*1024)
-    require(recovery.sha(verified_raw) == value.get('verified_receipt_sha256'), 'Chained readback receipt changed')
-    verified = json.loads(verified_raw)
-    retained = {n: item['sha256'] for n, item in proof.parent.retained.record['originals'].items() if n != 'boot'}
-    expected = {'schema': 3, 'kind': 'couch-wifi-debug-chained-transition', 'complete': True,
-        **chained_receipt_evidence(proof, bus, ports), 'written': ['boot'],
-        'boot_sha256': proof.image_sha256, 'boot_readback_sha256': proof.image_sha256,
-        'retained_before_sha256': retained, 'retained_sha256': retained, 'restart_requested': False}
-    require(verified == expected and value.get('verification') == verified,
-            'Chained transition identity, parent, pins or retained checks differ')
-    for name, expected_ack in [('restart-requested.json', False), ('restart-acknowledged.json', True)]:
-        raw_ack = recovery.read(path.parent/name, 4096)
-        require(recovery.sha(raw_ack) == value.get(name + '_sha256')
-                and json.loads(raw_ack) == {'requested': True, 'acknowledged': expected_ack},
-                'Chained restart evidence missing or changed')
-    return {'validated': True, 'device_access': False, 'receipt_sha256': config['sha256']}
+    completed = _validated_completed_receipt(config, bus, ports)
+    require(completed.chained, 'Pinned chained completed receipt required')
+    return {'validated': True, 'device_access': False, 'receipt_sha256': completed.receipt_sha256}
 
 
 def complete_receipt(output):
