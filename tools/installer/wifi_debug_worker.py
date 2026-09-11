@@ -15,6 +15,8 @@ from couch_install import require
 from stage_usb import StageUsb
 
 MAX = 32768
+MAX_DIAGNOSTIC = 4608
+MAX_LOG = 4096
 CAPABILITY = 'COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1'
 
 
@@ -32,7 +34,7 @@ class DebugStageUsb(StageUsb):
         header = struct.pack('<4sIQ', b'CBP1', opcode, 0)
         require(self.outgoing.write(header, timeout=30000) == 16, 'Short debug request')
         magic, status, size = struct.unpack('<4sIQ', self.read(16))
-        require(magic == b'CBR1' and status == 0 and size <= (32768 if opcode == 8 else 0),
+        require(magic == b'CBR1' and status == 0 and size <= (MAX_DIAGNOSTIC if opcode == 8 else 0),
                 'Invalid debug response')
         return self.read(size)
 
@@ -91,6 +93,9 @@ class DebugWorker:
                         and value.get('precredential') is True
                         and debug_identity(value.get('status')),
                         'Expected versioned pre-credential debug diagnostic record')
+                require(isinstance(value.get('log'), str)
+                        and len(value['log'].encode('utf-8')) <= MAX_LOG,
+                        'Diagnostic log exceeds UTF-8 byte bound')
                 return value
             return self.stage.dispatch(op, payload)
         except BaseException:

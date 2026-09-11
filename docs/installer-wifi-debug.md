@@ -53,6 +53,10 @@ Opcode 8 must identify `stage_kind: "private-ram-wifi-debug-stage"`,
 `precredential: true`, with a nested status satisfying the same debug identity
 gate. Generic status, scan flags and USB descriptor text do not grant debug
 capability. Missing or mismatched identity/version fields close the attachment.
+The opcode 8 wire payload is capped at 4,608 bytes before reading its body, and
+the decoded log at 4,096 UTF-8 bytes before display sanitization. Opcode 9 must
+acknowledge with an empty body; it creates the stage's fixed RAM retry marker
+idempotently, not an arbitrary command or shell request.
 
 Each run creates a new private `wifi-debug-*` session beneath the usual native
 installer state root, retaining the same USB lease until it closes. Status,

@@ -17,8 +17,12 @@ class DebugTests(unittest.TestCase):
         for opcode in (3, 4, 6, 10):
             with self.assertRaises(InstallError): stage.debug_request(opcode)
         self.assertEqual(len(writes), 1)
-        stage.read = lambda size: struct.pack('<4sIQ', b'CBR1', 0, 32769)
+        stage.read = lambda size: struct.pack('<4sIQ', b'CBR1', 0, 4609)
         with self.assertRaises(InstallError): stage.debug_request(8)
+        stage.read = lambda size: struct.pack('<4sIQ', b'CBR1', 0, 4608) if size == 16 else b'x' * size
+        self.assertEqual(len(stage.debug_request(8)), 4608)
+        stage.read = lambda size: struct.pack('<4sIQ', b'CBR1', 0, 1)
+        with self.assertRaises(InstallError): stage.debug_request(9)
 
     def fixture(self):
         calls = []
@@ -86,7 +90,7 @@ class DebugTests(unittest.TestCase):
     def test_diagnostics_require_exact_versioned_debug_schema(self):
         status = {'status': 'ready', 'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
         valid = {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
-                 'debug_protocol': 1, 'precredential': True, 'status': status}
+                 'debug_protocol': 1, 'precredential': True, 'status': status, 'log': ''}
         cases = [(valid, True)]
         for key in ('stage_kind', 'capability', 'debug_protocol', 'precredential'):
             cases.append(({k: v for k, v in valid.items() if k != key}, False))
@@ -101,6 +105,20 @@ class DebugTests(unittest.TestCase):
             worker.stage.debug_request = lambda opcode: json.dumps(response).encode()
             if accepted:
                 self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None}), valid)
+            else:
+                with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
+
+    def test_diagnostic_log_bound_counts_utf8_bytes(self):
+        status = {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
+        for log, accepted in (('é' * 2048, True), ('é' * 2048 + 'x', False), ('x' * 4097, False)):
+            worker, calls = self.fixture()
+            self.open(worker)
+            worker.stage.dispatch = lambda *args: status
+            response = {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
+                'debug_protocol': 1, 'precredential': True, 'status': status, 'log': log}
+            worker.stage.debug_request = lambda opcode: json.dumps(response).encode()
+            if accepted:
+                self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None})['log'], log)
             else:
                 with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
 

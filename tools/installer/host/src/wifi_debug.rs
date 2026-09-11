@@ -166,7 +166,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
         "invalid diagnostic step"
     );
     let log = value["log"].as_str().context("missing diagnostic log")?;
-    ensure!(log.len() <= 12288, "diagnostic log exceeds bound");
+    ensure!(log.len() <= 4096, "diagnostic log exceeds bound");
     let log: String = log
         .chars()
         .filter(|c| {
@@ -341,7 +341,9 @@ mod tests {
             diagnostic_summary(&diagnostic).unwrap()["log"],
             "message\nnext"
         );
-        diagnostic["log"] = json!("x".repeat(12289));
+        diagnostic["log"] = json!("é".repeat(2048));
+        assert!(diagnostic_summary(&diagnostic).is_ok());
+        diagnostic["log"] = json!(format!("{}x", "é".repeat(2048)));
         assert!(diagnostic_summary(&diagnostic).is_err());
         status["provisioned"] = json!(true);
         assert!(require_debug_identity(&status).is_err());
