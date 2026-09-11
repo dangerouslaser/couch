@@ -362,8 +362,6 @@ class UsbBackendTests(unittest.TestCase):
             self.assertNotIn("mtkclient", sys.modules)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PermissionSettleTests(unittest.TestCase):
@@ -405,3 +403,7 @@ class PermissionSettleTests(unittest.TestCase):
                 self.assertLessEqual(clock[0], 1.0)
             else:
                 self.assertEqual(len(calls), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
