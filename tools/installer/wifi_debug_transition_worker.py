@@ -32,6 +32,12 @@ class TransitionWorker:
         if op == 'transition_check':
             require(payload is None and self.proof is None and not self.consumed, 'Invalid offline check')
             self.wire.send({'event': op, 'result': {'device_access': False, 'ready': True}})
+        elif op == 'transition_validate_receipt':
+            require(self.proof is None and self.backend is None and not self.consumed,
+                    'Receipt validation must be offline')
+            require(isinstance(payload, dict) and set(payload) == {'config', 'bus', 'ports'},
+                    'Invalid receipt validation fields')
+            self.wire.send({'event': op, 'result': transition.validate_receipt(**payload)})
         elif op == 'transition_admit':
             require(self.proof is None and not self.consumed and isinstance(payload, dict), 'Transition already admitted')
             require(set(payload) == {'source', 'temporary_boot_sha256', 'original_boot_sha256',
@@ -84,7 +90,8 @@ class TransitionWorker:
                 return ConnectedMtkWriter(mtk, REVIEWED_REVISION, release=release, bundle=bundle, binding=binding,
                     progress=lambda phase, target, done, total: self.wire.send({'event': 'progress',
                         'phase': phase, 'target': target, 'done': done, 'total': total}))
-            result = transition.transition(self.proof, reader, factory, payload['output'])
+            result = transition.transition(self.proof, reader, factory, payload['output'],
+                                           bus=payload['bus'], ports=payload['ports'])
             self.output = Path(payload['output'])
             self.verified = True
             self.wire.send({'event': op, 'result': result})
@@ -95,7 +102,8 @@ class TransitionWorker:
             recovery.publish(self.output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
             self.backend.boot_after_capture()
             recovery.publish(self.output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
-            self.wire.send({'event': op, 'result': {'acknowledged': True}})
+            pin = transition.complete_receipt(self.output)
+            self.wire.send({'event': op, 'result': {'acknowledged': True, 'receipt_sha256': pin}})
             return False
         elif op == 'transition_close':
             require(payload is None, 'Unexpected close payload')

@@ -29,6 +29,15 @@ class TransitionWorkerTests(unittest.TestCase):
             self.assertEqual(worker.backend.method_calls, [])
             worker.wire.send.assert_not_called()
 
+    def test_missing_or_tampered_receipt_never_constructs_backend(self):
+        with patch('wifi_debug_transition_worker.ExactUsbBackend') as backend:
+            worker = self.worker()
+            with self.assertRaises(InstallError):
+                worker.dispatch({'op':'transition_validate_receipt',
+                    'payload':{'config':{}, 'bus':1, 'ports':[2]}})
+            backend.assert_not_called()
+            worker.wire.send.assert_not_called()
+
     def test_changed_evidence_fails_before_backend_and_consumes_attempt(self):
         worker = self.worker()
         worker.proof = SimpleNamespace(retained=SimpleNamespace(source='/retained',

@@ -4,6 +4,11 @@ from types import SimpleNamespace
 from couch_install import InstallError
 from wifi_debug_worker import DebugWorker, DebugStageUsb, CAPABILITY
 
+def diagnostic(status, **extra):
+    return {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
+        'debug_protocol': 1, 'precredential': True, 'status': status, 'log': '',
+        'generation': 1, 'debug_generation_limit': 8, **extra}
+
 
 class DebugTests(unittest.TestCase):
     def test_debug_frames_are_bounded_and_retry_has_no_body(self):
@@ -72,8 +77,9 @@ class DebugTests(unittest.TestCase):
     def test_retry_uses_only_empty_debug_opcode_after_identity(self):
         worker, calls = self.fixture()
         self.open(worker)
-        worker.stage.dispatch = lambda *args: {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
-        worker.stage.debug_request = lambda opcode: calls.append(('opcode', opcode)) or b''
+        status = {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False, 'debug_generation_limit': 8}
+        worker.stage.dispatch = lambda *args: status
+        worker.stage.debug_request = lambda opcode: calls.append(('opcode', opcode)) or (json.dumps(diagnostic(status)).encode() if opcode == 8 else b'')
         self.assertEqual(worker.dispatch({'op': 'debug_retry', 'payload': None}), {'accepted': True})
         self.assertEqual(calls[-1], ('opcode', 9))
         with self.assertRaises(InstallError):
@@ -82,15 +88,14 @@ class DebugTests(unittest.TestCase):
     def test_diagnostics_reject_non_precredential_record(self):
         worker, calls = self.fixture()
         self.open(worker)
-        worker.stage.dispatch = lambda *args: {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
+        worker.stage.dispatch = lambda *args: {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False, 'debug_generation_limit': 8}
         worker.stage.debug_request = lambda opcode: json.dumps({'precredential': False}).encode()
         with self.assertRaises(InstallError):
             worker.dispatch({'op': 'debug_status', 'payload': None})
 
     def test_diagnostics_require_exact_versioned_debug_schema(self):
-        status = {'status': 'ready', 'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
-        valid = {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
-                 'debug_protocol': 1, 'precredential': True, 'status': status, 'log': ''}
+        status = {'status': 'ready', 'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False, 'debug_generation_limit': 8}
+        valid = diagnostic(status)
         cases = [(valid, True)]
         for key in ('stage_kind', 'capability', 'debug_protocol', 'precredential'):
             cases.append(({k: v for k, v in valid.items() if k != key}, False))
@@ -109,18 +114,30 @@ class DebugTests(unittest.TestCase):
                 with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
 
     def test_diagnostic_log_bound_counts_utf8_bytes(self):
-        status = {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
+        status = {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False, 'debug_generation_limit': 8}
         for log, accepted in (('é' * 2048, True), ('é' * 2048 + 'x', False), ('x' * 4097, False)):
             worker, calls = self.fixture()
             self.open(worker)
             worker.stage.dispatch = lambda *args: status
-            response = {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
-                'debug_protocol': 1, 'precredential': True, 'status': status, 'log': log}
+            response = diagnostic(status, log=log)
             worker.stage.debug_request = lambda opcode: json.dumps(response).encode()
             if accepted:
                 self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None})['log'], log)
             else:
                 with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
+
+    def test_eighth_generation_never_sends_retry(self):
+        for generation, error in ((8, 'none'), (7, 'debug-retry-limit'), (9, 'none')):
+            worker, calls = self.fixture()
+            self.open(worker)
+            status = {'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False,
+                'debug_generation_limit': 8, 'error': error}
+            worker.stage.dispatch = lambda *args: status
+            def request(opcode):
+                self.assertEqual(opcode, 8)
+                return json.dumps(diagnostic(status, generation=generation)).encode()
+            worker.stage.debug_request = request
+            with self.assertRaises(InstallError): worker.dispatch({'op':'debug_retry', 'payload':None})
 
 
 if __name__ == '__main__':

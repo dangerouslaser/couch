@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     source: PathBuf,
@@ -35,6 +35,9 @@ impl Config {
             cfg!(target_os = "linux"),
             "debug boot transitions currently require Linux"
         );
+        self.validate_inputs()
+    }
+    fn validate_inputs(&self) -> Result<()> {
         ensure!(
             [&self.source, &self.image, &self.metadata]
                 .iter()
@@ -60,7 +63,29 @@ impl Config {
     }
 }
 
-fn materialize(session: &SessionGuard) -> Result<PathBuf> {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptConfig {
+    receipt: PathBuf,
+    sha256: String,
+    inputs: Config,
+}
+impl ReceiptConfig {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.receipt.is_absolute()
+                && self.sha256.len() == 64
+                && self
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "completed transition requires absolute receipt and independent SHA-256 pin"
+        );
+        self.inputs.validate_inputs()
+    }
+}
+
+pub fn materialize(session: &SessionGuard) -> Result<PathBuf> {
     let adapter = adapter::materialize(session)?;
     let directory = adapter.parent().context("missing worker directory")?;
     let release = session.path().join("release");
@@ -138,22 +163,32 @@ fn rpc(
     })
 }
 
+pub struct Environment<'a> {
+    pub python: &'a Path,
+    pub runtime: &'a Path,
+    pub libusb: &'a Path,
+    pub script: &'a Path,
+}
+
 pub fn run(
     ui: &mut Ui,
     session: &mut SessionGuard,
     config: &Config,
-    python: &Path,
-    runtime: &Path,
-    libusb: &Path,
+    environment: Environment<'_>,
     bus: u8,
     ports: &[u8],
-) -> Result<bool> {
+) -> Result<Option<ReceiptConfig>> {
+    let Environment {
+        python,
+        runtime,
+        libusb,
+        script,
+    } = environment;
     config.validate()?;
-    let script = materialize(session)?;
     let mut command = Command::new(python);
     command
         .args(["-I", "-B"])
-        .arg(dependencies::python_path(&script)?)
+        .arg(dependencies::python_path(script)?)
         .arg("--events-stdio")
         .current_dir(session.path());
     let mut worker = Worker::spawn(&mut command)?;
@@ -182,7 +217,7 @@ pub fn run(
     ])?;
     if choice == 0 {
         rpc(&mut worker, ui, "transition_close", Value::Null, 10)?;
-        return Ok(false);
+        return Ok(None);
     }
     ui.progress(
         1,
@@ -209,11 +244,56 @@ pub fn run(
     session.checkpoint(&json!({"event":"debug_boot_readback_verified","result":result}))?;
     let boot = rpc(&mut worker, ui, "transition_boot", Value::Null, 30)?;
     ensure!(
-        boot == json!({"acknowledged":true}),
+        boot["acknowledged"] == true,
         "debug boot request was not acknowledged"
     );
-    session.checkpoint(&json!({"event":"debug_boot_acknowledged"}))?;
-    Ok(true)
+    let receipt = ReceiptConfig {
+        receipt: session.path().join("transition/completed.json"),
+        sha256: boot["receipt_sha256"]
+            .as_str()
+            .context("missing completed receipt pin")?
+            .into(),
+        inputs: config.clone(),
+    };
+    receipt.validate()?;
+    session
+        .checkpoint(&json!({"event":"debug_boot_acknowledged", "completed_transition":receipt}))?;
+    Ok(Some(receipt))
+}
+
+pub fn validate_receipt(
+    ui: &mut Ui,
+    session: &mut SessionGuard,
+    config: &ReceiptConfig,
+    python: &Path,
+    script: &Path,
+    bus: u8,
+    ports: &[u8],
+) -> Result<()> {
+    config.validate()?;
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-B"])
+        .arg(dependencies::python_path(script)?)
+        .arg("--events-stdio")
+        .current_dir(session.path());
+    let mut worker = Worker::spawn(&mut command)?;
+    let result = rpc(
+        &mut worker,
+        ui,
+        "transition_validate_receipt",
+        json!({"config":config,"bus":bus,"ports":ports}),
+        120,
+    )?;
+    ensure!(
+        result == json!({"validated":true,"device_access":false,"receipt_sha256":config.sha256}),
+        "completed transition receipt was not verified"
+    );
+    rpc(&mut worker, ui, "transition_close", Value::Null, 10)?;
+    session.checkpoint(
+        &json!({"event":"debug_completed_transition_verified", "completed_transition":config}),
+    )?;
+    Ok(())
 }
 
 #[cfg(all(test, unix))]

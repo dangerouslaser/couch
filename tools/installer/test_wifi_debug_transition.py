@@ -67,7 +67,7 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual(set(release['images']), {'boot'})
             self.assertEqual(release['images']['boot']['sha256'], self.image_hash)
             return writer
-        result = debug.transition(proof, device, factory, self.root/'transition')
+        result = debug.transition(proof, device, factory, self.root/'transition', bus=1, ports=[2])
         self.assertEqual(writer.writes, ['boot'])
         self.assertTrue(result['verified'])
         self.assertFalse(result['restart_requested'])
@@ -93,7 +93,7 @@ class TransitionTests(unittest.TestCase):
             if name == 'cid': device.description['runtime_cid_sha256'] = '0'*64
             else: device.hashes[name] = '0'*64
             with self.assertRaises(InstallError):
-                debug.transition(proof, device, lambda *args: self.fail('writer constructed'), self.root/name)
+                debug.transition(proof, device, lambda *args: self.fail('writer constructed'), self.root/name, bus=1, ports=[2])
             self.assertEqual(device.writes, [])
 
     def test_bad_readback_has_no_success_receipt_or_retry(self):
@@ -101,7 +101,7 @@ class TransitionTests(unittest.TestCase):
         device = self.device()
         device.write = lambda name, path: device.writes.append(name)
         with self.assertRaises(InstallError):
-            debug.transition(proof, device, lambda *args: device, self.root/'failed-transition')
+            debug.transition(proof, device, lambda *args: device, self.root/'failed-transition', bus=1, ports=[2])
         self.assertEqual(device.writes, ['boot'])
         self.assertFalse((self.root/'failed-transition/verified.json').exists())
 
@@ -111,12 +111,61 @@ class TransitionTests(unittest.TestCase):
         writer = self.device()
         writer.description['storage_id'] = '0'*64
         with self.assertRaises(InstallError):
-            debug.transition(proof, device, lambda *args: writer, self.root/'changed-connection')
+            debug.transition(proof, device, lambda *args: writer, self.root/'changed-connection', bus=1, ports=[2])
         self.assertEqual(writer.writes, [])
         self.image.write_bytes(b'changed')
         with self.assertRaises(InstallError):
-            debug.transition(proof, device, lambda *args: self.fail('writer constructed'), self.root/'changed-image')
+            debug.transition(proof, device, lambda *args: self.fail('writer constructed'), self.root/'changed-image', bus=1, ports=[2])
         self.assertEqual(device.writes, [])
+
+    def completed(self):
+        proof = debug.admit(self.source, **self.args)
+        device = self.device()
+        output = self.root/'completed'
+        debug.transition(proof, device, lambda *args: device, output, bus=1, ports=[2])
+        recovery.publish(output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
+        recovery.publish(output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
+        pin = debug.complete_receipt(output)
+        inputs = {'source': str(self.source), **{k: str(v) if isinstance(v, Path) else v for k,v in self.args.items()}}
+        return {'receipt': str(output/'completed.json'), 'sha256': pin, 'inputs': inputs}
+
+    def test_completed_receipt_required_and_topology_pinned(self):
+        config = self.completed()
+        self.assertEqual(debug.validate_receipt(config, 1, [2]),
+            {'validated': True, 'device_access': False, 'receipt_sha256': config['sha256']})
+        for bad in ({}, {**config, 'sha256': '0'*64}):
+            with self.assertRaises(InstallError): debug.validate_receipt(bad, 1, [2])
+        for bus, ports in ((2, [2]), (1, [3])):
+            with self.assertRaises(InstallError): debug.validate_receipt(config, bus, ports)
+        Path(config['receipt']).write_text('{}')
+        with self.assertRaises(InstallError): debug.validate_receipt(config, 1, [2])
+
+    def test_repinned_identity_or_readback_forgery_is_rejected(self):
+        config = self.completed()
+        path = Path(config['receipt'])
+        original = json.loads(path.read_text())
+        verified_path = path.parent/'verified.json'
+        for field, value in (('source_session', '/elsewhere'), ('cid', '0'*32), ('capacity', 1),
+            ('partitions', {}), ('topology', {'bus': 3, 'ports': [2]}),
+            ('original_boot_sha256', '0'*64), ('previous_boot_sha256', '0'*64),
+            ('debug_boot_sha256', '0'*64), ('debug_metadata_sha256', '0'*64),
+            ('snapshot_sha256', '0'*64), ('boot_readback_sha256', '0'*64),
+            ('retained_sha256', {}), ('retained_before_sha256', {}), ('source_evidence_sha256', {})):
+            forged = copy.deepcopy(original)
+            forged['verification'][field] = value
+            raw = json.dumps(forged['verification']).encode()
+            verified_path.write_bytes(raw)
+            forged['verified_receipt_sha256'] = recovery.sha(raw)
+            path.write_text(json.dumps(forged))
+            repinned = {**config, 'sha256': recovery.sha(path.read_bytes())}
+            with self.assertRaises(InstallError, msg=field): debug.validate_receipt(repinned, 1, [2])
+
+    def test_incomplete_ack_or_changed_originals_cannot_validate(self):
+        config = self.completed()
+        with patch.object(recovery, 'admit', side_effect=InstallError('original changed')):
+            with self.assertRaises(InstallError): debug.validate_receipt(config, 1, [2])
+        (Path(config['receipt']).parent/'restart-acknowledged.json').write_text('{}')
+        with self.assertRaises(InstallError): debug.validate_receipt(config, 1, [2])
 
 
 if __name__ == '__main__': unittest.main()

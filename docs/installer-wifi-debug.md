@@ -14,7 +14,7 @@ configuration outside Git:
   "schema": 1,
   "bus": 1,
   "ports": [1],
-  "expected_stage": "wifi-debug-v1",
+  "expected_stage": "legacy-status",
   "runtime_root": "/absolute/path/to/prepared/runtime",
   "runtime_receipt_sha256": "INDEPENDENTLY_RECORDED_64_HEX_SHA256"
 }
@@ -41,9 +41,11 @@ performed.
 an existing installer/probe. A failed legacy stage cannot restart Wi-Fi through
 its current protocol. This mode cannot be combined with a boot transition.
 
-`expected_stage: "wifi-debug-v1"` requires opcode 5 to advertise
+`expected_stage: "wifi-debug-v1"` requires exactly one `transition` (below) or
+`completed_transition` configuration. A capability-only attachment is refused
+before USB access. It also requires opcode 5 to advertise
 `wifi_debug: true`, `capabilities: "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"`, and
-`provisioned: false`. Only then can the host request bounded pre-credential
+`provisioned: false` and `debug_generation_limit: 8`. Only then can the host request bounded pre-credential
 diagnostics (opcode 8) or an explicit startup retry (opcode 9). Both requests
 have empty payloads. The worker repeats the identity check for each operation.
 The dedicated debug stage must reject provisioning: this host never prompts
@@ -57,6 +59,10 @@ The opcode 8 wire payload is capped at 4,608 bytes before reading its body, and
 the decoded log at 4,096 UTF-8 bytes before display sanitization. Opcode 9 must
 acknowledge with an empty body; it creates the stage's fixed RAM retry marker
 idempotently, not an arbitrary command or shell request.
+The diagnostic generation must be in 0–8 and advertise the same limit of 8.
+At generation 8 or `debug-retry-limit`, the menu offers only refresh/close.
+The worker refreshes diagnostics before every retry and refuses to send opcode
+9 at the limit. A retry acknowledgement is not proof of a new generation.
 
 Each run creates a new private `wifi-debug-*` session beneath the usual native
 installer state root, retaining the same USB lease until it closes. Status,
@@ -112,11 +118,27 @@ preserves the original session and new partial receipt for separate recovery.
 
 The host then waits up to 60 seconds for the debug USB stage on the same port,
 without returning to backup, enrollment, credentials or final installation.
-Future debug runs omit `transition` and attach directly; the original temporary
-boot pin is deliberately no longer valid after a successful transition. All
+Future debug runs use the automatically saved private `debug-attach.json` in
+the new debug session. This removes `transition` and sets `completed_transition`
+to `{ "receipt": "/absolute/path/to/transition/completed.json", "sha256":
+"RECORDED_COMPLETED_RECEIPT_SHA256", "inputs": { ... } }`, where `inputs` is
+the full original transition configuration (all original/previous/debug and
+metadata pins and retained-source paths). The original temporary boot pin is
+historical proof, never a request to rewrite that image.
+
+Before every debug attachment, including immediately after a new transition,
+an offline validator checks that completed receipt's SHA-256 and its pinned
+readback/restart records; re-admits the retained source journal, all original
+files, image and metadata; and requires exact CID, capacity, layout, configured
+topology, previous/debug boot hashes, boot readback, and retained before/after
+checks. Missing, partial, tampered, wrong-topology or legacy receipts fail before
+`debug_open`. Keep all referenced files in place; the config is not authority
+to replace missing proof with new captures. Legacy status remains receipt-free.
+All
 new transition receipts live in the new private debug session; retained source
 evidence is read-only. The debug capability/status response is a protocol gate,
-not cryptographic attestation of firmware identity.
+not cryptographic attestation of firmware identity. The completed receipt proves
+the earlier transition, not that nobody has changed the device since then.
 
 Offline checks use mocked USB and the native private event channel; successful
 builds/tests do not establish hardware Wi-Fi success.

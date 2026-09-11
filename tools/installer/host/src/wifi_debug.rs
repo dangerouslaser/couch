@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{ensure, Context, Result};
 use ring::rand::{SecureRandom, SystemRandom};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
@@ -17,7 +17,7 @@ use std::{
     process::Command,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     schema: u32,
@@ -28,9 +28,23 @@ pub struct Config {
     runtime_receipt_sha256: String,
     #[serde(default)]
     transition: Option<crate::wifi_debug_transition::Config>,
+    #[serde(default)]
+    completed_transition: Option<crate::wifi_debug_transition::ReceiptConfig>,
 }
 impl Config {
     fn validate(&self) -> Result<()> {
+        if self.expected_stage == "wifi-debug-v1" {
+            ensure!(self.transition.is_some() != self.completed_transition.is_some(),
+                "debug stage requires exactly one new transition or pinned completed transition receipt");
+        } else {
+            ensure!(
+                self.transition.is_none() && self.completed_transition.is_none(),
+                "legacy status cannot use a debug transition or receipt"
+            );
+        }
+        if let Some(receipt) = &self.completed_transition {
+            receipt.validate()?;
+        }
         if let Some(transition) = &self.transition {
             ensure!(
                 self.expected_stage == "wifi-debug-v1",
@@ -121,6 +135,7 @@ fn status_summary(value: &Value) -> Result<Value> {
             | "dhcp-exit"
             | "supplicant-exit"
             | "supplicant-socket-timeout"
+            | "debug-retry-limit"
     ) {
         error
     } else {
@@ -133,6 +148,7 @@ fn require_debug_identity(status: &Value) -> Result<()> {
     ensure!(
         status["wifi_debug"] == true
             && status["capabilities"] == "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
+            && status["debug_generation_limit"].as_u64() == Some(8)
             && status["provisioned"] == false,
         "Expected dedicated unprovisioned Wi-Fi debug stage; transition the stage before retrying"
     );
@@ -144,6 +160,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
         value["stage_kind"] == "private-ram-wifi-debug-stage"
             && value["capability"] == "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
             && value["debug_protocol"].as_u64() == Some(1)
+            && value["debug_generation_limit"].as_u64() == Some(8)
             && value["precredential"] == true,
         "expected versioned pre-credential debug diagnostics"
     );
@@ -155,7 +172,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
     );
     let generation = value["generation"]
         .as_u64()
-        .filter(|v| *v <= u32::MAX as u64)
+        .filter(|v| *v <= 8)
         .context("invalid diagnostic generation")?;
     let step = value["step"].as_str().context("missing diagnostic step")?;
     ensure!(
@@ -174,7 +191,9 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
                 && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
         })
         .collect();
-    Ok(json!({"status":status,"generation":generation,"step":step,"precredential":true,"log":log}))
+    Ok(
+        json!({"status":status,"generation":generation,"debug_generation_limit":8,"step":step,"precredential":true,"log":log}),
+    )
 }
 
 pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
@@ -209,14 +228,22 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
     ui.progress(0, "Verifying the existing debug runtime", 0, 0)?;
     let (python, libusb) =
         dependencies::debug_runtime(&config.runtime_root, &config.runtime_receipt_sha256)?;
-    let transitioned = if let Some(transition) = &config.transition {
+    let verifier = if config.expected_stage == "wifi-debug-v1" {
+        Some(crate::wifi_debug_transition::materialize(&session)?)
+    } else {
+        None
+    };
+    let receipt = if let Some(transition) = &config.transition {
         let transition_result = crate::wifi_debug_transition::run(
             ui,
             &mut session,
             transition,
-            &python,
-            &config.runtime_root,
-            &libusb,
+            crate::wifi_debug_transition::Environment {
+                python: &python,
+                runtime: &config.runtime_root,
+                libusb: &libusb,
+                script: verifier.as_ref().context("missing receipt verifier")?,
+            },
             config.bus,
             &config.ports,
         );
@@ -224,14 +251,41 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
             let _ = session
                 .checkpoint(&json!({"event":"debug_transition_stopped","preserve_originals":true}));
         }
-        if !transition_result? {
-            session.checkpoint(&json!({"event":"debug_transition_cancelled"}))?;
-            return Ok(());
+        match transition_result? {
+            Some(receipt) => Some(receipt),
+            None => {
+                session.checkpoint(&json!({"event":"debug_transition_cancelled"}))?;
+                return Ok(());
+            }
         }
-        true
     } else {
-        false
+        config.completed_transition.clone()
     };
+    // Mandatory for both fresh and later debug attachments, before debug_open
+    // can import PyUSB or enumerate/claim anything. Legacy status stays read-only.
+    if config.expected_stage == "wifi-debug-v1" {
+        crate::wifi_debug_transition::validate_receipt(
+            ui,
+            &mut session,
+            receipt
+                .as_ref()
+                .context("missing completed transition receipt")?,
+            &python,
+            verifier.as_ref().context("missing receipt verifier")?,
+            config.bus,
+            &config.ports,
+        )?;
+        let mut reattach = serde_json::to_value(&config)?;
+        reattach["transition"] = Value::Null;
+        reattach["completed_transition"] = serde_json::to_value(&receipt)?;
+        let attach_path = session.path().join("debug-attach.json");
+        let mut attach_file = create(&attach_path)?;
+        attach_file.write_all(&serde_json::to_vec_pretty(&reattach)?)?;
+        attach_file.sync_all()?;
+        session.checkpoint(
+            &json!({"event":"debug_reattach_configuration_saved","file":attach_path}),
+        )?;
+    }
     let script = materialize(&session)?;
     session.checkpoint(
         &json!({"event":"debug_attach_requested","bus":config.bus,"ports":config.ports,
@@ -247,7 +301,7 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
         network::rpc(
             &mut worker,
             "debug_open",
-            json!({"bus":config.bus,"ports":config.ports,"wait_seconds":if transitioned {60} else {0},
+            json!({"bus":config.bus,"ports":config.ports,"wait_seconds":if config.transition.is_some() {60} else {0},
             "libusb":dependencies::python_path(&libusb)?}),
         )?;
         loop {
@@ -260,32 +314,35 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
                     diagnostic_summary(&network::rpc(&mut worker, "debug_status", Value::Null)?)?;
                 session
                     .checkpoint(&json!({"event":"wifi_startup_diagnostic","result":diagnostic}))?;
+                let can_retry = diagnostic["generation"].as_u64().unwrap() < 8
+                    && diagnostic["status"]["error"] != "debug-retry-limit";
+                let mut choices = vec![Choice {
+                    label: "Refresh diagnostics".into(),
+                    detail: "Read bounded pre-credential evidence".into(),
+                }];
+                if can_retry {
+                    choices.push(Choice {
+                        label: "Retry Wi-Fi startup".into(),
+                        detail: "Run the debug stage's bounded RAM-only retry".into(),
+                    });
+                }
+                choices.push(Choice {
+                    label: "Close debug attachment".into(),
+                    detail: "Preserve this session".into(),
+                });
                 let choice = ui.choose(
                     "Wi-Fi debug stage",
                     &format!(
-                        "Attempt {}; Wi-Fi {}; step {}; reason {}.\n{}",
+                        "Attempt {} of 8; Wi-Fi {}; step {}; reason {}.\n{}",
                         diagnostic["generation"],
                         diagnostic["status"]["status"].as_str().unwrap(),
                         diagnostic["step"].as_str().unwrap(),
                         diagnostic["status"]["error"].as_str().unwrap(),
                         diagnostic["log"].as_str().unwrap()
                     ),
-                    &[
-                        Choice {
-                            label: "Refresh diagnostics".into(),
-                            detail: "Read bounded pre-credential evidence".into(),
-                        },
-                        Choice {
-                            label: "Retry Wi-Fi startup".into(),
-                            detail: "Run the debug stage's bounded RAM-only retry".into(),
-                        },
-                        Choice {
-                            label: "Close debug attachment".into(),
-                            detail: "Preserve this session".into(),
-                        },
-                    ],
+                    &choices,
                 )?;
-                if choice == 2 {
+                if choice == choices.len() - 1 {
                     break;
                 }
                 if choice == 1 {
@@ -332,11 +389,11 @@ mod tests {
     fn debug_identity_and_diagnostics_are_required_before_actions() {
         assert!(require_debug_identity(&json!({"status":"ready","provisioned":false})).is_err());
         let mut status = json!({"status":"failed","provisioned":false,"wifi_debug":true,
-            "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"});
+            "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_generation_limit":8});
         assert!(require_debug_identity(&status).is_ok());
         let mut diagnostic = json!({"status":status,"generation":1,"step":"power",
             "stage_kind":"private-ram-wifi-debug-stage", "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
-            "precredential":true,"log":"message\u{001b}\u{202e}\nnext"});
+            "precredential":true,"debug_generation_limit":8,"log":"message\u{001b}\u{202e}\nnext"});
         assert_eq!(
             diagnostic_summary(&diagnostic).unwrap()["log"],
             "message\nnext"
@@ -352,9 +409,9 @@ mod tests {
     fn generic_or_mismatched_diagnostic_schema_is_rejected() {
         let diagnostic = json!({"stage_kind":"private-ram-wifi-debug-stage",
             "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
-            "precredential":true, "generation":1, "step":"power", "log":"",
+            "precredential":true, "generation":1, "debug_generation_limit":8, "step":"power", "log":"",
             "status":{"status":"ready", "provisioned":false, "wifi_debug":true,
-                "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"}});
+                "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_generation_limit":8}});
         assert!(diagnostic_summary(&diagnostic).is_ok());
         for key in [
             "stage_kind",
@@ -371,6 +428,8 @@ mod tests {
             ("capability", json!("generic")),
             ("debug_protocol", json!(true)),
             ("debug_protocol", json!(2)),
+            ("debug_generation_limit", json!(9)),
+            ("generation", json!(9)),
             ("precredential", json!(false)),
             ("step", json!("credentials")),
             ("status", json!({"status":"ready", "provisioned":false})),
@@ -394,12 +453,18 @@ mod tests {
     }
     #[test]
     fn configuration_rejects_unsafe_or_ambiguous_attachment() {
-        let mut value = json!({"schema":1,"bus":1,"ports":[2],"expected_stage":"legacy-status","runtime_root":"/tmp/runtime",
+        let mut value = json!({"schema":1,"bus":1,"ports":[2],"expected_stage":"legacy-status","runtime_root":std::env::temp_dir().join("runtime"),
             "runtime_receipt_sha256":"a".repeat(64)});
         assert!(serde_json::from_value::<Config>(value.clone())
             .unwrap()
             .validate()
             .is_ok());
+        let mut missing_receipt = value.clone();
+        missing_receipt["expected_stage"] = json!("wifi-debug-v1");
+        assert!(serde_json::from_value::<Config>(missing_receipt)
+            .unwrap()
+            .validate()
+            .is_err());
         value["ports"] = json!([]);
         assert!(serde_json::from_value::<Config>(value.clone())
             .unwrap()

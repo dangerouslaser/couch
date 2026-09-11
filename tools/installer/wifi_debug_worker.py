@@ -23,6 +23,7 @@ CAPABILITY = 'COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1'
 def debug_identity(status):
     return (isinstance(status, dict) and status.get('wifi_debug') is True
             and status.get('capabilities') == CAPABILITY
+            and type(status.get('debug_generation_limit')) is int and status['debug_generation_limit'] == 8
             and status.get('provisioned') is False)
 
 
@@ -82,9 +83,9 @@ class DebugWorker:
             if op in ('debug_status', 'debug_retry'):
                 require(debug_identity(self.stage.dispatch('stage_status', None)),
                         'Expected unprovisioned dedicated Wi-Fi debug stage')
-                raw = self.stage.debug_request(8 if op == 'debug_status' else 9)
-                if op == 'debug_retry':
-                    return {'accepted': True}
+                # Refresh bounded diagnostic generation immediately before a
+                # retry; never send op9 once the stage exhausted its eight runs.
+                raw = self.stage.debug_request(8)
                 value = json.loads(raw)
                 require(isinstance(value, dict)
                         and value.get('stage_kind') == 'private-ram-wifi-debug-stage'
@@ -93,9 +94,17 @@ class DebugWorker:
                         and value.get('precredential') is True
                         and debug_identity(value.get('status')),
                         'Expected versioned pre-credential debug diagnostic record')
+                require(type(value.get('debug_generation_limit')) is int and value['debug_generation_limit'] == 8
+                        and type(value.get('generation')) is int and 0 <= value['generation'] <= 8,
+                        'Invalid debug generation bound')
                 require(isinstance(value.get('log'), str)
                         and len(value['log'].encode('utf-8')) <= MAX_LOG,
                         'Diagnostic log exceeds UTF-8 byte bound')
+                if op == 'debug_retry':
+                    require(value['generation'] < 8 and value['status'].get('error') != 'debug-retry-limit',
+                            'Debug retry limit reached')
+                    require(self.stage.debug_request(9) == b'', 'Unexpected retry acknowledgement')
+                    return {'accepted': True}
                 return value
             return self.stage.dispatch(op, payload)
         except BaseException:
