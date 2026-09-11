@@ -52,7 +52,7 @@ class WifiRamdiskTests(unittest.TestCase):
     def test_startup_creates_private_control_directory_before_supplicant(self):
         source = (wifi.REPO / 'tools/installer/wifi-stage/wifi-init').read_text()
         startup = source.split('$BB ifconfig wlan0 up || fail interface-up\n', 1)[1]
-        startup = startup.split('/sbin/wpa_supplicant', 1)[0]
+        startup = startup.split('start_supplicant >/tmp/couch-wpa-startup.log 2>&1 &\n', 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             control = root / 'couch-wpa'
