@@ -1,24 +1,34 @@
 //! USB-provisioned, certificate-pinned TLS benchmark. All device state is RAM-only.
-use super::{invalid, recovery_hash, request, response, CHUNK};
+use super::invalid;
+#[cfg(not(feature = "wifi-debug"))]
+use super::{recovery_hash, request, response, CHUNK};
+#[cfg(not(feature = "wifi-debug"))]
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     ServerConfig, ServerConnection, StreamOwned,
 };
+#[cfg(not(feature = "wifi-debug"))]
 use serde::Deserialize;
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    net::TcpListener,
+    io::{self},
     os::unix::fs::OpenOptionsExt,
+};
+#[cfg(not(feature = "wifi-debug"))]
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
     sync::Arc,
     thread,
     time::Duration,
 };
+#[cfg(not(feature = "wifi-debug"))]
 use subtle::ConstantTimeEq;
 static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn active() -> bool {
     ACTIVE.load(std::sync::atomic::Ordering::Acquire)
 }
+#[cfg(not(feature = "wifi-debug"))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Provision {
@@ -28,6 +38,7 @@ struct Provision {
     private_key_hex: String,
     token_hex: String,
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn unhex(value: &str, min: usize, max: usize) -> io::Result<Vec<u8>> {
     if value.len() % 2 != 0
         || value.len() / 2 < min
@@ -41,6 +52,7 @@ fn unhex(value: &str, min: usize, max: usize) -> io::Result<Vec<u8>> {
         .map(|i| u8::from_str_radix(&value[i..i + 2], 16).map_err(|_| invalid("invalid hex")))
         .collect()
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn configuration(value: &Provision) -> io::Result<String> {
     unhex(&value.ssid_hex, 1, 32)?;
     let security = if let Some(psk) = &value.psk_hex {
@@ -54,6 +66,7 @@ fn configuration(value: &Provision) -> io::Result<String> {
         value.ssid_hex
     ))
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn private_file(path: &str, data: &[u8]) -> io::Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -63,6 +76,7 @@ fn private_file(path: &str, data: &[u8]) -> io::Result<()> {
     file.write_all(data)?;
     file.sync_all()
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn tls_config(value: &Provision) -> io::Result<ServerConfig> {
     let cert = CertificateDer::from(unhex(&value.certificate_hex, 1, 4096)?);
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(unhex(
@@ -78,6 +92,7 @@ fn tls_config(value: &Provision) -> io::Result<ServerConfig> {
         .with_single_cert(vec![cert], key)
         .map_err(|_| invalid("TLS certificate/key invalid"))
 }
+#[cfg(not(feature = "wifi-debug"))]
 pub fn provision(payload: &[u8]) -> io::Result<()> {
     if payload.len() > 16384 {
         return Err(invalid("provisioning too large"));
@@ -122,6 +137,7 @@ pub fn provision(payload: &[u8]) -> io::Result<()> {
     });
     Ok(())
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn session(stream: &mut (impl Read + Write), token: &[u8]) -> io::Result<()> {
     let mut supplied = [0u8; 32];
     stream.read_exact(&mut supplied)?;
@@ -207,6 +223,72 @@ fn error_label(error: &str) -> &str {
 pub fn status() -> Vec<u8> {
     status_from(std::path::Path::new("/tmp"))
 }
+
+/// The debug stage has no provisioning opcode. Its only diagnostic record is
+/// therefore pre-credential, bounded, and reduced to printable text.
+#[cfg(feature = "wifi-debug")]
+pub fn debug_status() -> Vec<u8> {
+    debug_status_from(std::path::Path::new("/tmp"))
+}
+
+#[cfg(feature = "wifi-debug")]
+fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
+    const MAX_LOG: usize = 4096;
+    let mut log = fs::read(root.join("couch-wifi-debug.log")).unwrap_or_default();
+    if log.len() > MAX_LOG {
+        log.drain(..log.len() - MAX_LOG);
+    }
+    let mut printable = String::new();
+    for c in String::from_utf8_lossy(&log)
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+    {
+        if printable.len() + c.len_utf8() > MAX_LOG {
+            break;
+        }
+        printable.push(c);
+    }
+    let step = fs::read_to_string(root.join("couch-wifi.step"))
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "detect" | "loader" | "transport" | "power" | "credentials" | "connect"
+            )
+        })
+        .unwrap_or_else(|| "unknown".into());
+    let generation = fs::read_to_string(root.join("couch-wifi-debug.generation"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    serde_json::json!({
+        "status": serde_json::from_slice::<serde_json::Value>(&status()).ok(),
+        "step": step,
+        "generation": generation,
+        "precredential": true,
+        "log": printable,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[cfg(feature = "wifi-debug")]
+pub fn request_debug_retry() -> io::Result<()> {
+    if active() {
+        return Err(invalid("debug retry is unavailable after provisioning"));
+    }
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open("/tmp/couch-wifi-debug.retry")
+    {
+        Ok(file) => file.sync_all(),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
+}
 fn status_from(root: &std::path::Path) -> Vec<u8> {
     let ip = fs::read_to_string(root.join("couch-wifi.ip")).unwrap_or_default();
     let status =
@@ -230,6 +312,7 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "wifi-debug"))]
     fn value() -> Provision {
         Provision {
             ssid_hex: "636f756368".into(),
@@ -307,6 +390,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
     #[test]
+    #[cfg(not(feature = "wifi-debug"))]
     fn credentials_are_hex_bounded_and_injection_is_rejected() {
         let mut p = value();
         assert!(configuration(&p).unwrap().contains("ssid=636f756368"));
@@ -320,12 +404,14 @@ mod tests {
         assert!(configuration(&p).is_err());
     }
     #[test]
+    #[cfg(not(feature = "wifi-debug"))]
     fn wrong_token_cannot_reach_commands() {
         let mut stream = io::Cursor::new(vec![0u8; 48]);
         assert!(session(&mut stream, &[1u8; 32]).is_err());
         assert_eq!(stream.position(), 32);
     }
     #[test]
+    #[cfg(not(feature = "wifi-debug"))]
     fn tls_loopback_requires_pinned_certificate_and_session_token() {
         use std::process::Command;
         let root = std::env::temp_dir().join(format!("couch-tls-test-{}", std::process::id()));
@@ -420,6 +506,20 @@ mod tests {
             drop(stream);
             server.join().unwrap();
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(feature = "wifi-debug")]
+    #[test]
+    fn debug_status_is_bounded_and_precredential() {
+        let root = std::env::temp_dir().join(format!("couch-debug-status-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("couch-wifi-debug.log"), [b'x'; 4096].repeat(2)).unwrap();
+        let raw = debug_status_from(&root);
+        let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(value["precredential"], true);
+        assert_eq!(value["log"].as_str().unwrap().len(), 4096);
+        assert!(raw.len() <= 4608);
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -122,7 +122,7 @@ def vendor_files(bundle):
     return selected
 
 
-def ramdisk(files):
+def ramdisk(files, include_recovery=True):
     records = {}
     def add(name, mode, data=b'', major=0, minor=0):
         require(name not in records, 'Duplicate cpio entry')
@@ -145,7 +145,8 @@ def ramdisk(files):
         add(name, 0o120777, target.encode())
     for name, major, minor in (('null', 1, 3), ('zero', 1, 5), ('urandom', 1, 9), ('console', 5, 1)):
         add('dev/' + name, 0o020600, major=major, minor=minor)
-    add('dev/mmcblk0p9', 0o060400, major=179, minor=9)
+    if include_recovery:
+        add('dev/mmcblk0p9', 0o060400, major=179, minor=9)
     add('TRAILER!!!', 0)
     output = bytearray()
     for inode, (name, (mode, content, major, minor)) in enumerate(records.items(), 1):
@@ -158,21 +159,24 @@ def ramdisk(files):
     return bytes(output)
 
 
-def neutral_files(busybox, service, apk_cache, installer=False, display=None, wmt_properties=None, filesystem_cache=None):
+def neutral_files(busybox, service, apk_cache, installer=False, debug=False, display=None, wmt_properties=None, filesystem_cache=None):
     files, apk_hash = alpine_files(apk_cache)
     fs_hash = None
     if filesystem_cache is not None:
-        require(installer, 'Filesystem tools are installer-only')
+        require(installer and not debug, 'Filesystem tools are installer-only')
         fs_files, fs_hash = alpine_files(filesystem_cache, filesystem=True)
         for name, data in fs_files.items():
             require(name not in files or files[name] == data, 'Conflicting RAM runtime libraries')
             files[name] = data
     if installer:
         require(filesystem_cache is not None, 'Installer requires offline filesystem expansion tools')
+    require(not (installer and debug), 'Installer and debug stages must be separate')
     bb, binary = regular(busybox), regular(service)
     arm_static(bb); arm_static(binary)
-    require((b'COUCH_PRIVATE_WIFI_INSTALLER_V1' in binary) == installer,
-            'Service binary capabilities differ from requested stage mode')
+    capability = (b'COUCH_PRIVATE_WIFI_INSTALLER_V1' if installer else
+                  b'COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1' if debug else
+                  b'COUCH_READONLY_RAM_PROBE_V1')
+    require(capability in binary, 'Service binary capabilities differ from requested stage mode')
     files.update({'bin/busybox': bb, 'bin/couch-installer-probe': binary})
     if wmt_properties is not None:
         bridge = regular(wmt_properties)
@@ -181,23 +185,27 @@ def neutral_files(busybox, service, apk_cache, installer=False, display=None, wm
         files['lib/couch-wmt-properties.so'] = bridge
     if installer:
         files['etc/couch-installer-mode'] = b'private-install\n'
+    if debug:
+        files['etc/couch-wifi-debug-mode'] = b'precredential-only\n'
     if display is not None:
         pixels = regular(display)
         arm_static(pixels)
         files['bin/couch-installer-display'] = pixels
     for source, target in (('init', 'init'), ('wifi-init', 'bin/couch-wifi-init'), ('dhcp', 'bin/couch-dhcp')):
         files[target] = regular(REPO / 'tools/installer/wifi-stage' / source)
+    if debug:
+        files['bin/couch-wifi-debug-supervisor'] = regular(REPO / 'tools/installer/wifi-stage' / 'debug-supervisor')
     return files, apk_hash, fs_hash
 
 
-def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cache, output, installer=False, display=None, wmt_properties=None, filesystem_cache=None):
+def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cache, output, installer=False, debug=False, display=None, wmt_properties=None, filesystem_cache=None):
     require(not output.exists() and not output.resolve().is_relative_to(REPO), 'New private output required')
     original = regular(template)
     metadata, pin = json.loads(regular(kernel_manifest)), json.loads(regular(PIN))
     verify(original, metadata, pin)
-    files, apk_hash, fs_hash = neutral_files(busybox, service, apk_cache, installer, display, wmt_properties, filesystem_cache)
+    files, apk_hash, fs_hash = neutral_files(busybox, service, apk_cache, installer, debug, display, wmt_properties, filesystem_cache)
     files.update(vendor_files(vendor_bundle))
-    raw = ramdisk(files)
+    raw = ramdisk(files, include_recovery=not debug)
     cpio_files(raw)
     compressed = gzip.compress(raw, mtime=0)
     estimated = 2048 + ((len(kernel(original)) + 2047) // 2048) * 2048 + ((len(compressed) + 2047) // 2048) * 2048
@@ -212,7 +220,9 @@ def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cach
     ramdisk_size = struct.unpack_from('<I', image, 16)[0]
     start = page + ((kernel_size + page - 1) // page) * page
     require(gzip.decompress(image[start:start + ramdisk_size]) == raw, 'Packaged WiFi ramdisk mismatch')
-    result = {'schema': 1, 'kind': 'private-ram-wifi-installer' if installer else 'private-ram-wifi-stage', 'private_only': True,
+    result = {'schema': 1, 'kind': ('private-ram-wifi-installer' if installer else
+                                    'private-ram-wifi-debug-stage' if debug else
+                                    'private-ram-wifi-stage'), 'private_only': True,
               'installable': False, 'redistribution_authorized': False, 'physical_boot_verified': False,
               'wifi_verified': False, 'file': 'wifi-stage.img', 'size': len(image),
               'used_boot_bytes': unpacked_size, 'ramdisk_raw_bytes': len(raw),
@@ -220,10 +230,14 @@ def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cach
               'payload_sha256': hashes, 'apk_inventory_sha256': apk_hash,
               'filesystem_inventory_sha256': fs_hash,
               'files': {name: {'size': len(data), 'sha256': sha(data)} for name, data in sorted(files.items())},
-              'credentials': 'USB provisioned into RAM only; not included',
-              'storage_operations': ['USB-bound TLS backups', 'verified OS partition transaction'] if installer else ['read-only recovery SHA-256'],
-              'pending': ['Physical WiFi association and TLS benchmark', 'Calibration/identity review',
-                          'Separate installer transaction and write-service review']}
+              'credentials': ('Not accepted by the debug protocol' if debug else
+                              'USB provisioned into RAM only; not included'),
+              'storage_operations': (['USB-bound TLS backups', 'verified OS partition transaction'] if installer else
+                                     [] if debug else ['read-only recovery SHA-256']),
+              'pending': (['Physical WiFi startup/retry diagnostics', 'Calibration/identity review',
+                           'Separate debug-stage transition review'] if debug else
+                          ['Physical WiFi association and TLS benchmark', 'Calibration/identity review',
+                           'Separate installer transaction and write-service review'])}
     output.mkdir(parents=True, mode=0o700)
     (output / 'wifi-stage.img').write_bytes(image)
     (output / 'wifi-stage.json').write_text(json.dumps(result, indent=2) + '\n')
@@ -235,6 +249,7 @@ if __name__ == '__main__':
     for name in ('template', 'kernel-manifest', 'busybox', 'service', 'vendor-bundle', 'apk-cache', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--installer', action='store_true')
+    parser.add_argument('--debug', action='store_true', help='Build the pre-credential Wi-Fi debug stage')
     parser.add_argument('--display', type=Path)
     parser.add_argument('--wmt-properties', type=Path)
     parser.add_argument('--filesystem-cache', type=Path)

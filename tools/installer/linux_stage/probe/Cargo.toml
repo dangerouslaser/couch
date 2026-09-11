@@ -25,3 +25,4 @@ subtle = "2"
 
 [features]
 private-install = ["dep:zeroize", "dep:couch-installer-storage", "dep:sha2", "dep:libc", "dep:crc32fast", "dep:flate2"]
+wifi-debug = []

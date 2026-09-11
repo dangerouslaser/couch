@@ -181,6 +181,31 @@ Tests exercise both protocol sides against fixtures, including corrupted chunks,
 wrong order, missing durable acknowledgments and failed independent readback.
 Physical radio bring-up and complete stock-to-Couch acceptance remain separate.
 
+## Wi-Fi debug stage extension
+
+The separately compiled `wifi-debug` binary advertises
+`COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1`. It is not the installer binary and cannot
+be combined with `private-install`. Its ramdisk has no block-device nodes; it
+does not accept provisioning, binding, scan, recovery-hash, RAM-transfer, or
+TLS installation operations.
+
+It accepts only the common USB hello/status operations plus the following
+zero-length USB-only requests:
+
+| Operation | Response | Meaning |
+| --- | --- | --- |
+| 8 | at most 4608 bytes of printable JSON | Current Wi-Fi status, allowlisted step, generation and capped (4096-byte) pre-credential startup log |
+| 9 | empty acknowledgement | Request one fixed local restart of the credential-free Wi-Fi init sequence |
+
+The retry request contains no command, path, configuration, or credentials. The
+initramfs supervisor consumes only its fixed marker, stops only its fixed
+supplicant/launcher process names, clears RAM-only startup state, then starts a
+new empty-network attempt. It never enables the normal provisioning endpoint.
+The standard installer bootstrap intentionally does not admit this metadata
+kind because it always recaptures originals; a separate reviewed no-capture
+transition must validate the retained original and current temporary boot pins
+before it writes a debug stage.
+
 
 ### Compact userdata, progress and backup selection
 

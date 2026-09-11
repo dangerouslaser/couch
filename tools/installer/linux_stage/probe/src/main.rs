@@ -1,8 +1,13 @@
-//! Linux 3.18 FunctionFS probe; the private-install feature adds USB-bound TLS installation.
+//! Linux 3.18 FunctionFS probe; private-install and wifi-debug are separate RAM stages.
+#[cfg(all(feature = "private-install", feature = "wifi-debug"))]
+compile_error!("private-install and wifi-debug must be built as separate stage binaries");
 #[cfg(feature = "private-install")]
 mod install;
+#[cfg(not(feature = "wifi-debug"))]
 mod scan;
 mod wifi;
+#[cfg(not(feature = "wifi-debug"))]
+use std::time::Instant;
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
@@ -12,13 +17,17 @@ use std::{
         Arc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
+#[cfg(any(test, not(feature = "wifi-debug")))]
 const MAX: u64 = 64 * 1024 * 1024;
+#[cfg(not(feature = "wifi-debug"))]
 const CHUNK: usize = 65536;
 #[cfg(feature = "private-install")]
 const CAPABILITIES: &str = "COUCH_PRIVATE_WIFI_INSTALLER_V1";
-#[cfg(not(feature = "private-install"))]
+#[cfg(feature = "wifi-debug")]
+const CAPABILITIES: &str = "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1";
+#[cfg(not(any(feature = "private-install", feature = "wifi-debug")))]
 const CAPABILITIES: &str = "COUCH_READONLY_RAM_PROBE_V1";
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -55,12 +64,17 @@ fn request(header: &[u8; 16]) -> io::Result<(u32, u64)> {
     }
     let op = u32::from_le_bytes(header[4..8].try_into().unwrap());
     let length = u64::from_le_bytes(header[8..].try_into().unwrap());
+    #[cfg(not(feature = "wifi-debug"))]
     let known = matches!(
         (op, length),
-        (0, 0) | (1..=2, 1..=MAX) | (3, 1) | (4, 1..=16384) | (5, 0) | (7, 0)
+        (0, 0) | (1..=2, 1..=MAX) | (3, 1) | (5, 0) | (7, 0)
     );
+    #[cfg(not(feature = "wifi-debug"))]
+    let known = known || matches!((op, length), (4, 1..=16384));
     #[cfg(feature = "private-install")]
     let known = known || matches!((op, length), (6, 1..=512) | (10, 0));
+    #[cfg(feature = "wifi-debug")]
+    let known = matches!((op, length), (0, 0) | (5, 0) | (8, 0) | (9, 0));
     if !known {
         return Err(invalid("unsupported command or length"));
     }
@@ -71,6 +85,7 @@ fn response(out: &mut impl Write, length: u64) -> io::Result<()> {
     out.write_all(&0u32.to_le_bytes())?;
     out.write_all(&length.to_le_bytes())
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn transfer(
     input: &mut impl Read,
     output: &mut impl Write,
@@ -99,6 +114,7 @@ fn transfer(
     }
     Ok(())
 }
+#[cfg(not(feature = "wifi-debug"))]
 fn recovery_hash() -> io::Result<Vec<u8>> {
     // No host paths, partition selection, offsets, or shell syntax are accepted.
     if std::fs::read_to_string("/sys/class/block/mmcblk0p9/size")?.trim() != "32768" {
@@ -177,17 +193,22 @@ fn run(root: &Path) -> io::Result<()> {
         let mut header = [0u8; 16];
         input.read_exact(&mut header)?;
         let (op, length) = request(&header)?;
+        #[cfg(feature = "wifi-debug")]
+        let _ = length;
         match op {
             0 => {
                 response(&mut output, 4)?;
                 output.write_all(b"CBP1")?;
             }
+            #[cfg(not(feature = "wifi-debug"))]
             1 | 2 => transfer(&mut input, &mut output, op, length)?,
+            #[cfg(not(feature = "wifi-debug"))]
             3 => {
                 let data = recovery_hash()?;
                 response(&mut output, data.len() as u64)?;
                 output.write_all(&data)?;
             }
+            #[cfg(not(feature = "wifi-debug"))]
             4 => {
                 let mut payload = vec![0; length as usize];
                 input.read_exact(&mut payload)?;
@@ -199,10 +220,22 @@ fn run(root: &Path) -> io::Result<()> {
                 response(&mut output, data.len() as u64)?;
                 output.write_all(&data)?;
             }
+            #[cfg(not(feature = "wifi-debug"))]
             7 => {
                 let data = scan::response();
                 response(&mut output, data.len() as u64)?;
                 output.write_all(&data)?;
+            }
+            #[cfg(feature = "wifi-debug")]
+            8 => {
+                let data = wifi::debug_status();
+                response(&mut output, data.len() as u64)?;
+                output.write_all(&data)?;
+            }
+            #[cfg(feature = "wifi-debug")]
+            9 => {
+                wifi::request_debug_retry()?;
+                response(&mut output, 0)?;
             }
             #[cfg(feature = "private-install")]
             6 => {
@@ -256,17 +289,20 @@ mod tests {
     fn commands_fail_closed() {
         for (op, n, valid) in [
             (0, 0, true),
-            (1, MAX, true),
+            (1, MAX, !cfg!(feature = "wifi-debug")),
             (1, MAX + 1, false),
             (2, 0, false),
-            (3, 1, true),
+            (3, 1, !cfg!(feature = "wifi-debug")),
             (3, 2, false),
             (4, 0, false),
-            (7, 0, true),
+            (4, 1, !cfg!(feature = "wifi-debug")),
+            (7, 0, !cfg!(feature = "wifi-debug")),
             (7, 1, false),
             (6, 128, cfg!(feature = "private-install")),
             (6, 513, false),
             (10, 0, cfg!(feature = "private-install")),
+            (8, 0, cfg!(feature = "wifi-debug")),
+            (9, 0, cfg!(feature = "wifi-debug")),
         ] {
             let mut h = [0u8; 16];
             h[..4].copy_from_slice(b"CBP1");
@@ -275,6 +311,7 @@ mod tests {
             assert_eq!(request(&h).is_ok(), valid);
         }
     }
+    #[cfg(not(feature = "wifi-debug"))]
     #[test]
     fn transfer_chunk_boundary_and_corruption() {
         let n = CHUNK as u64 + 17;
