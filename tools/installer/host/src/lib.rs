@@ -3,6 +3,7 @@ pub mod android;
 pub mod assembly;
 pub mod dependencies;
 pub mod frontend;
+pub mod saved_enrollment;
 pub mod session;
 pub mod stage;
 pub mod stage_files;
