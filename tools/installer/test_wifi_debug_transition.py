@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +13,13 @@ import wifi_debug_transition as debug
 
 class TransitionTests(unittest.TestCase):
     def setUp(self):
+        if os.name == 'nt':
+            # Native debug boot transitions are Linux-only. Exercise receipt
+            # and identity logic on Windows without pretending its directory
+            # handles support POSIX fsync; Unix tests retain the real sync.
+            directory_sync = patch.object(recovery, 'sync_directory')
+            directory_sync.start()
+            self.addCleanup(directory_sync.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
