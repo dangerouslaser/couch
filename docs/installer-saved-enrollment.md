@@ -65,8 +65,9 @@ hardware signature or an authentication scheme for backups from strangers.
 
 `SavedEnrollment::rebind` requires fresh observations from the explicitly selected
 physical USB session: MT6580 chip and canonical CID encoding, exact CID, capacity,
-full partition map and all five calibration hashes. Legacy imports also require
-the live odmdtbo digest to equal the independently trusted retained stock profile.
+full partition map, all five calibration hashes and the retained odmdtbo digest.
+Native records bind the saved odmdtbo original; legacy imports bind its digest
+from the independently trusted retained stock profile.
 Neither a TUI selection nor values copied from the imported record count as live
 observations. A mismatch stops before writes.
 
