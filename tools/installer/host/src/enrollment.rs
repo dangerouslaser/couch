@@ -107,6 +107,34 @@ pub fn admit_layout(observed: &Value, cid: &str, prepared: &Path) -> Result<()> 
     );
     Ok(())
 }
+// Progress activities. The first is host-driven; the rest are the phase names
+// the USB worker reports with each of its own progress events.
+const SAVE_ORIGINAL: &str = "save original";
+const VERIFY_ORIGINAL: &str = "Verify original";
+const WRITE_STAGE: &str = "Write";
+const HASH_READBACK: &str = "Hash readback";
+/// Fixed host wording for one progress tick.
+///
+/// Four different device operations drive this progress line and previously
+/// shared the single label `Verifying NAME`: streaming an original into a local
+/// backup, independently re-reading that partition from the device to check the
+/// backup, writing the installer stage, and reading partitions back after that
+/// write. The reported activity only selects wording here and is never shown
+/// to the user, so no read, admission gate or ordering depends on it. Only boot
+/// is written during bootstrap, because `authorize_boot` requires the stage
+/// image to fill exactly that partition, so a readback of any other partition
+/// is the recheck of the partitions the write had to leave untouched. An
+/// unreported activity keeps the previous neutral wording.
+fn progress_label(activity: &str, name: &str) -> String {
+    match (activity, name) {
+        (SAVE_ORIGINAL, _) => format!("Saving original {name} to this computer"),
+        (VERIFY_ORIGINAL, _) => format!("Independently verifying saved {name} against the device"),
+        (WRITE_STAGE, _) => format!("Writing the installer stage to {name}"),
+        (HASH_READBACK, "boot") => format!("Verifying the installer stage written to {name}"),
+        (HASH_READBACK, _) => format!("Rechecking retained {name} after the write"),
+        _ => format!("Verifying {name}"),
+    }
+}
 pub fn event(worker: &mut Worker, ui: &mut Ui, phase: usize) -> Result<Value> {
     loop {
         let value = worker.event()?;
@@ -126,7 +154,8 @@ pub fn event(worker: &mut Worker, ui: &mut Ui, phase: usize) -> Result<Value> {
             IDENTITY.contains(&name) || ORIGINALS.contains(&name),
             "invalid USB progress target"
         );
-        ui.progress(phase, &format!("Verifying {name}"), done, total)?;
+        let activity = value["phase"].as_str().unwrap_or_default();
+        ui.progress(phase, &progress_label(activity, name), done, total)?;
     }
 }
 
@@ -157,7 +186,7 @@ pub fn capture(
             let mut full = Sha256::new();
             while done < size {
                 let count = (size - done).min(CHUNK as u64) as usize;
-                ui.progress(2, &format!("Saving original {name}"), done, size)?;
+                ui.progress(2, &progress_label(SAVE_ORIGINAL, name), done, size)?;
                 let data = w.chunk(count)?;
                 output.write_all(&data)?;
                 full.update(&data);
@@ -176,12 +205,7 @@ pub fn capture(
             "saved original readback differs"
         );
         worker.operation(Duration::from_secs(1800), |w| {
-            ui.progress(
-                2,
-                &format!("Independently verifying original {name}"),
-                0,
-                size,
-            )?;
+            ui.progress(2, &progress_label(VERIFY_ORIGINAL, name), 0, size)?;
             w.send(&json!({"op":"hash","target":name}))?;
             ensure!(
                 event(w, ui, 2)? == json!({"event":"hash","target":name,"sha256":expected}),
@@ -290,6 +314,38 @@ pub fn original_boot(session: &SessionGuard) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bootstrap_progress_labels_distinguish_every_device_operation() {
+        let ticks = [
+            (SAVE_ORIGINAL, "boot"),
+            (VERIFY_ORIGINAL, "boot"),
+            (WRITE_STAGE, "boot"),
+            (HASH_READBACK, "boot"),
+            (HASH_READBACK, "nvdata"),
+        ];
+        let labels: Vec<_> = ticks
+            .into_iter()
+            .map(|(activity, name)| progress_label(activity, name))
+            .collect();
+        assert_eq!(
+            labels
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            labels.len(),
+            "each bootstrap device operation needs its own progress wording"
+        );
+        for ((_, name), label) in ticks.into_iter().zip(&labels) {
+            assert!(label.contains(name), "progress label must name its target");
+        }
+        assert!(
+            !progress_label(WRITE_STAGE, "boot")
+                .to_lowercase()
+                .contains("verif"),
+            "the stage write must not be reported as a verification"
+        );
+        assert!(progress_label("unreported", "logo").contains("logo"));
+    }
     #[test]
     fn stock_profiles_admit_complete_reviewed_pairs_only() {
         assert_eq!(
