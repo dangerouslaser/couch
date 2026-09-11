@@ -16,7 +16,11 @@ if [ -x /bin/couch-installer-display ]; then
              /bin/couch-installer-display >/tmp/display.log 2>&1 & ;;
     esac
 fi
-/bin/couch-wifi-init >/tmp/wifi-init.log 2>&1 &
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    /bin/couch-wifi-debug-supervisor >/tmp/wifi-init.log 2>&1 &
+else
+    /bin/couch-wifi-init >/tmp/wifi-init.log 2>&1 &
+fi
 AUSB=/sys/class/android_usb/android0
 for cpu in 1 2 3; do
     online=/sys/devices/system/cpu/cpu$cpu/online
@@ -40,7 +44,9 @@ serial_log() {
     $BB mknod -m 600 /dev/ttyGS0 c "$major" 0 || return
     $BB stty -F /dev/ttyGS0 raw -echo 2>/dev/null
     while true; do
-        { if [ -f /etc/couch-installer-mode ]; then
+        { if [ -f /etc/couch-wifi-debug-mode ]; then
+              echo 'Couch Wi-Fi debug stage; no credentials or partition writes'
+          elif [ -f /etc/couch-installer-mode ]; then
               echo 'Couch private Wi-Fi installer; stage configuration and logs remain in RAM'
           else
               echo 'Couch RAM-only probe; no partition writes or mounts'
@@ -67,7 +73,9 @@ echo 0 > "$AUSB/enable"
 echo 1 > "$AUSB/f_acm/instances"
 echo 0e8d > "$AUSB/idVendor"
 echo 201c > "$AUSB/idProduct"
-if [ -f /etc/couch-installer-mode ]; then
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    echo 'Couch Wi-Fi debug stage' > "$AUSB/iProduct"
+elif [ -f /etc/couch-installer-mode ]; then
     echo 'Couch WiFi installer' > "$AUSB/iProduct"
 else
     echo 'Couch RAM probe' > "$AUSB/iProduct"

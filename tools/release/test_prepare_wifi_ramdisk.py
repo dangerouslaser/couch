@@ -141,6 +141,22 @@ class WifiRamdiskTests(unittest.TestCase):
             offset = (offset + size + 3) & ~3
         self.assertEqual(blocks, [('dev/mmcblk0p9', 0o060400, 179, 9)])
 
+    def test_debug_ramdisk_has_no_block_node(self):
+        raw = wifi.ramdisk({'init': b'init', 'bin/busybox': b'bb'}, include_recovery=False)
+        self.assertFalse(any(name.startswith('dev/mmcblk') for name in wifi.cpio_files(raw)))
+
+    def test_debug_supervisor_is_fixed_precredential_loop(self):
+        source = (wifi.REPO / 'tools/installer/wifi-stage/debug-supervisor').read_text()
+        init = (wifi.REPO / 'tools/installer/wifi-stage/wifi-init').read_text()
+        self.assertIn('/tmp/couch-wifi-debug.retry', source)
+        self.assertIn('/bin/couch-wifi-init', source)
+        self.assertIn('MAX_GENERATIONS=8', source)
+        self.assertIn('debug-retry-limit', source)
+        self.assertLess(init.index('/etc/couch-wifi-debug-mode'), init.index('step credentials'))
+        self.assertIn('tail -c 4096 /tmp/probe.log > /tmp/couch-wifi-debug.log', init)
+        for forbidden in ('stage_provision', 'mmcblk', 'eval ', 'sh -c'):
+            self.assertNotIn(forbidden, source)
+
     def test_duplicate_elf_aliases_are_links_and_cellular_firmware_excluded(self):
         entries = wifi.cpio_files(wifi.ramdisk({'lib/loader.so': b'\x7fELFsame',
                                                 'lib/libc.so': b'\x7fELFsame'}))

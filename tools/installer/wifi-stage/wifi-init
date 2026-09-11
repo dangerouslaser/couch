@@ -31,6 +31,11 @@ fail() {
             echo 'WiFi control directory absent'; } | $BB head -c 1024 >> /tmp/probe.log
         $BB dmesg | $BB tail -c 4096 >> /tmp/probe.log 2>/dev/null
     fi
+    # The debug binary has no provisioning opcode. Preserve only this bounded
+    # startup record for its USB status operation, never arbitrary log files.
+    if [ -f /etc/couch-wifi-debug-mode ]; then
+        $BB tail -c 4096 /tmp/probe.log > /tmp/couch-wifi-debug.log 2>/dev/null
+    fi
     exit 1
 }
 step detect
@@ -101,6 +106,14 @@ while [ ! -S /tmp/couch-wpa/wlan0 ]; do
     $BB sleep 1; n=$((n+1))
 done
 starting_supplicant=0
+# The dedicated debug stage never reaches provisioning or DHCP. It leaves the
+# empty-network supplicant alive for observation until its fixed supervisor
+# receives a retry marker; no credential-bearing configuration can be accepted.
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    echo ready > /tmp/couch-wifi.status
+    while $BB kill -0 "$supplicant" 2>/dev/null; do $BB sleep 1; done
+    fail supplicant-exit
+fi
 step credentials
 echo ready > /tmp/couch-wifi.status
 while true; do
