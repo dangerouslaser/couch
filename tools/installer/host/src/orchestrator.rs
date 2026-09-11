@@ -2,7 +2,7 @@
 //! the Python worker is restricted to MTK and bounded USB setup transport.
 use crate::{
     adapter::{self, UsbLease, Worker},
-    android, assembly, dependencies, enrollment,
+    android, assembly, dependencies, enrollment, enrollment_sources,
     frontend::{Choice, Ui},
     network,
     public_inputs::{self, create, decode, digest, hex},
@@ -84,6 +84,32 @@ fn input_path(ui: &mut Ui, title: &str, body: &str) -> Result<PathBuf> {
         Ok(PathBuf::from(std::env::var_os("HOME").context("missing home directory")?).join(rest))
     } else {
         Ok(PathBuf::from(value.as_str()))
+    }
+}
+fn enrollment_source(ui: &mut Ui, state_root: &Path) -> Result<PathBuf> {
+    const TITLE: &str = "Saved Android enrollment directory";
+    const BODY: &str =
+        "Choose the retained native enrollment or older verified Python backup folder.";
+    let candidates =
+        enrollment_sources::discover(state_root, enrollment_sources::remembered(state_root));
+    if candidates.is_empty() {
+        return input_path(ui, TITLE, BODY);
+    }
+    let mut options: Vec<Choice> = candidates
+        .iter()
+        .map(|found| choice(&found.path.display().to_string(), found.detail()))
+        .collect();
+    options.push(choice("Enter a folder path", "Type the location yourself."));
+    // The manual option is always last, so a single candidate is still an
+    // explicit selection rather than something applied on the operator's behalf.
+    let picked = ui.choose(
+        TITLE,
+        "Confirm which retained enrollment to import, or enter another folder. Whichever you pick is verified in full before use.",
+        &options,
+    )?;
+    match enrollment_sources::resolve(&candidates, picked) {
+        Some(path) => Ok(path),
+        None => input_path(ui, TITLE, BODY),
     }
 }
 fn identity_input(
@@ -310,11 +336,12 @@ fn install(
     let vendor = vendor_transfer::prepare(&prepared)?;
     session.transition(Phase::InputsVerified,&json!({"event":"inputs_verified","release":release.version,"payload_sha256":release.payload.sha256,"stage_sha256":stage_hash}))?;
     let (saved, serial, expected_cid, identity) = if reinstall {
-        let source = input_path(
-            ui,
-            "Saved Android enrollment directory",
-            "Choose the retained native enrollment or older verified Python backup folder.",
-        )?;
+        let state_root = session
+            .path()
+            .parent()
+            .context("session needs a parent")?
+            .to_path_buf();
+        let source = enrollment_source(ui, &state_root)?;
         let imported = if source.join("enrollment.json").is_file() {
             saved_enrollment::import(&source, session)?
         } else {
@@ -334,6 +361,8 @@ fn install(
                 },
             )?
         };
+        // Only now, past full admission, is the folder worth offering again.
+        enrollment_sources::remember(&state_root, &source);
         let cid = imported.record().cid.clone();
         let identity = serde_json::to_value(&imported.record().android_identity)?;
         (Some(imported), None, cid, identity)
