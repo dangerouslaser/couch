@@ -17,11 +17,12 @@ class WifiRamdiskTests(unittest.TestCase):
         for starting in (0, 1):
             with self.subTest(starting=starting), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                busybox = root / 'busybox'
-                busybox.write_text('#!/bin/sh\nexec "$@"\n')
-                busybox.chmod(0o700)
                 (root / 'couch-wpa-startup.log').write_text('x' * 5000)
-                fixture = script.replace('BB=/bin/busybox', 'BB=' + str(busybox))
+                # Do not execute a temporary fake busybox here: hardened CI
+                # runners may mount temporary directories noexec, which would
+                # suppress tail's output through fail()'s stderr redirection.
+                # env passes the fixed `tail` invocation through directly.
+                fixture = script.replace('BB=/bin/busybox', 'BB=/usr/bin/env')
                 fixture = fixture.replace('/tmp/', str(root) + '/')
                 fixture += f'\nstarting_supplicant={starting}\nfail supplicant-exit\n'
                 result = subprocess.run(['sh'], input=fixture, text=True, capture_output=True, timeout=5)
