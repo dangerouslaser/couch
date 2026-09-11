@@ -31,6 +31,8 @@ pub struct Manifest {
     pub size: u64,
     pub sha256: String,
     pub files: Vec<File>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_os_baseline: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -114,6 +116,12 @@ fn verify(bytes: &[u8], key: &[u8], expected: &str) -> Result<Manifest> {
             )
     {
         return Err("Update does not match this remote or selected release".into());
+    }
+    if m.required_os_baseline
+        .as_deref()
+        .is_some_and(|id| !crate::baseline::valid_id(id))
+    {
+        return Err("Invalid required OS baseline".into());
     }
     Ok(m)
 }
@@ -200,8 +208,13 @@ mod tests {
             size: 123,
             sha256: "a".repeat(64),
             files: Vec::new(),
+            required_os_baseline: None,
         };
-        let signature = hex(&key.sign(&serde_json::to_vec(&m).unwrap()).to_bytes());
+        let old_bytes = serde_json::to_vec(&m).unwrap();
+        assert!(!String::from_utf8_lossy(&old_bytes).contains("required_os_baseline"));
+        let legacy: serde_json::Value = serde_json::from_slice(&old_bytes).unwrap();
+        assert_eq!(legacy.as_object().unwrap().len(), 10);
+        let signature = hex(&key.sign(&old_bytes).to_bytes());
         let mut signed = SignedManifest {
             signed: m,
             signature,
@@ -210,6 +223,29 @@ mod tests {
         assert!(verify(&bytes, key.verifying_key().as_bytes(), "v1.2.3").is_ok());
         assert!(verify(&bytes, key.verifying_key().as_bytes(), "v1.2.4").is_err());
         assert!(verify(&bytes, &[1; 32], "v1.2.3").is_err());
+        signed.signed.required_os_baseline = Some("baseline-a".into());
+        assert!(verify(
+            &serde_json::to_vec(&signed).unwrap(),
+            key.verifying_key().as_bytes(),
+            "v1.2.3"
+        )
+        .is_err());
+        signed.signature = hex(&key
+            .sign(&serde_json::to_vec(&signed.signed).unwrap())
+            .to_bytes());
+        assert!(verify(
+            &serde_json::to_vec(&signed).unwrap(),
+            key.verifying_key().as_bytes(),
+            "v1.2.3"
+        )
+        .is_ok());
+        signed.signed.required_os_baseline = Some("baseline-b".into());
+        assert!(verify(
+            &serde_json::to_vec(&signed).unwrap(),
+            key.verifying_key().as_bytes(),
+            "v1.2.3"
+        )
+        .is_err());
         signed.signed.sha256 = "b".repeat(64);
         assert!(verify(
             &serde_json::to_vec(&signed).unwrap(),
