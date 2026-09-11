@@ -1,7 +1,8 @@
 # Inputs for installing on an original Android HA100
 
-This audit is offline. It does not enable the public installer, alter USB
-transport policy, or demonstrate installation on a previously unmodified unit.
+This guide documents the owner-input audit and original read-only enrollment
+helpers. The [native installer](installer.md) now integrates input preparation
+and fresh enrollment; the audit alone does not demonstrate physical installation.
 
 ## Preserve identity without an existing Couch baseline
 
@@ -10,8 +11,8 @@ flashing, using the Android settings screens. Its guide documents user-visible
 values, not partition offsets or a binary decoder. See the
 [official identity-backup instructions](https://hub.sanytron.com/support/astrion/backup-device-identity).
 
-The current private installer compares an earlier Couch runtime baseline. A
-fresh Android unit needs a separate first-capture workflow: identify the model,
+The legacy private installer compared an earlier Couch runtime baseline. Native
+fresh Android enrollment performs a first capture: identify the model,
 read both GPT copies, retain the fixed-format DA storage identity, and save all
 five protected partitions (`proinfo`, `nvram`, `nvdata`, `protect1`, `protect2`)
 with independent readback before any persistent write. That establishes a new
@@ -154,14 +155,11 @@ misrepresented as an earlier trusted runtime baseline. Different stock builds,
 changed partitions or inaccessible Android CID fail closed; arbitrary MT6580
 hardware is not accepted merely because the chip family matches.
 
-This is an enrollment prerequisite, not a public installation approval. The
-normal-to-preloader port binding and official EMI upload still need a physical
-fresh-device test. The public wizard must integrate this first capture before
-any write path, and the host orchestration migration to Rust remains pending.
-Windows driver/locking/deadline support, macOS filesystem dependency delivery,
-public payload allowlist/corresponding-source review and per-platform execution
-also remain release requirements. Neither a native TUI executable nor these
-read-only fixtures satisfy them.
+These read-only helpers are enrollment prerequisites, not physical installation
+approval. The native host now integrates first capture, selected-port bootstrap,
+verified dependency delivery and public payload admission. Windows driver
+binding and complete physical fresh-device acceptance remain separate from
+passing host fixtures. See the [current installer status](installer.md).
 
 The native `tools/installer/host` workspace provides the same owner-side input
 preparation without Python, debugfs or subprocesses. It reconstructs the pinned

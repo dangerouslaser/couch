@@ -5,13 +5,11 @@ The Python reference terminal (`python3 tools/installer/couch_tui.py`) can brows
 exact tag, then select a numbered release to inspect its descriptor. Browsing
 does not download or execute installer/OS payloads and never opens USB.
 
-The planned installation flow uses **WiFi for image transfer**, with USB for
-bootstrap and recovery. This metadata browser does not implement that transport
-or relax the current public installation gates. Existing simulation and private
-trial paths remain separate.
-
-The native Rust terminal remains unchanged; this read-only reference-browser
-entry point does not add a native-terminal installation command.
+The [native installation flow](installer.md) uses **Wi-Fi for image transfer**,
+with USB for bootstrap and recovery. This Python metadata browser remains a
+separate reference tool; it does not start that transport or replace the native
+release-specific launcher. Existing simulation and private trial paths remain
+separate.
 
 ## Release selection
 

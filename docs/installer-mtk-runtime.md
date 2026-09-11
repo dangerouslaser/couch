@@ -50,14 +50,13 @@ The smoke check runs the exact Python `--version`, loads the bundled native
 libusb, imports the required MTK modules and constructs `Mtk(preinit=False)`.
 USB discovery is replaced with a rejecting stub; no device is opened, rebooted
 or flashed. CI runs this check on all four native platforms. It does not prove
-physical USB operation or platform driver setup. In particular, the existing
-Unix deadline/lock boundary must be replaced by the native supervisor before
-claiming Windows physical installation support.
+physical USB operation or platform driver setup. The integrated native host
+now supplies the platform deadline/lock supervision, including the Windows
+worker job and verified libusb path.
 
-The runtime is currently an owner-local preparation component, not a published
-complete installer. A public bundle additionally needs its own corresponding
-source/notices coverage for Python, wheel native code and libusb, and the final
-host release must bind the actual runtime receipt. The upstream MTK archive is
+The runtime remains an owner-local download, not a Python/wheel/libusb bundle
+redistributed in the public Couch assets. The native host binds and reverifies
+its receipt before use; downloaded notices remain with those dependencies. The upstream MTK archive is
 only a verified cache input: do not publish it, since it contains excluded DA
 and prebuilt payload files.
 
