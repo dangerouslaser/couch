@@ -263,6 +263,9 @@ fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(0);
     serde_json::json!({
+        "stage_kind": "private-ram-wifi-debug-stage",
+        "capability": "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1",
+        "debug_protocol": 1,
         "status": serde_json::from_slice::<serde_json::Value>(&status()).ok(),
         "step": step,
         "generation": generation,
@@ -305,9 +308,14 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
     } else {
         "none"
     };
-    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")})
-        .to_string()
-        .into_bytes()
+    let mut value = serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")});
+    #[cfg(feature = "wifi-debug")]
+    {
+        value["stage_kind"] = serde_json::json!("private-ram-wifi-debug-stage");
+        value["capability"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
+        value["debug_protocol"] = serde_json::json!(1);
+    }
+    value.to_string().into_bytes()
 }
 #[cfg(test)]
 mod tests {
@@ -518,8 +526,15 @@ mod tests {
         let raw = debug_status_from(&root);
         let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(value["precredential"], true);
+        assert_eq!(value["stage_kind"], "private-ram-wifi-debug-stage");
+        assert_eq!(value["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
+        assert_eq!(value["debug_protocol"], 1);
         assert_eq!(value["log"].as_str().unwrap().len(), 4096);
         assert!(raw.len() <= 4608);
+        let ordinary: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
+        assert_eq!(ordinary["stage_kind"], "private-ram-wifi-debug-stage");
+        assert_eq!(ordinary["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
+        assert_eq!(ordinary["debug_protocol"], 1);
         fs::remove_dir_all(root).unwrap();
     }
 }
