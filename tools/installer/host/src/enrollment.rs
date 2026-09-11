@@ -194,7 +194,7 @@ pub fn capture(
     }
     Ok(hashes)
 }
-// Older Android firmware independently reviewed against retained stock manifest
+// Retained Android stock firmware independently reviewed against stock manifest
 // aeca8cc8f31652924acfd2a793cad2cb54faa87974bc4ce103c5104866a21857.
 // These are complete 16 MiB boot/odmdtbo hashes, admitted only as one exact pair.
 // No private image or calibration bytes are distributed with this policy.

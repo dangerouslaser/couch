@@ -1,7 +1,7 @@
 //! Native backup-first, boot-last transaction driver for a USB-bound stage plan.
-//! Admission (signed release, enrollment proof and selected-device identity) is a
+//! Admission (verified release, enrollment proof and selected-device identity) is a
 //! caller prerequisite. No discovery, bootstrap writes, retries or restoration
-//! are performed here. The CLI does not currently expose this entry point.
+//! are performed here. The native orchestrator supplies these prerequisites.
 use crate::{
     session::{Phase, SessionGuard},
     stage::{Channel, CHUNK},
