@@ -24,6 +24,18 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'source/status'):
                     prepare.prepare(Path('.'), Path('.'), Path('unused'))
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows ConPTY fixture')
+    def test_actual_console_receives_only_four_cancel_keys(self):
+        import windows_console
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root/'console.ps1'
+            script.write_text('[Console]::WriteLine("Reinstall existing Couch / Cancel"); 1..4 | ForEach-Object { $null = [Console]::ReadKey($true) }; exit 0')
+            with patch.dict(os.environ, {'LOCALAPPDATA':str(root/'owner')}):
+                result = windows_console.run(script, root/'console.txt')
+            self.assertTrue(result['cancel_selected'])
+            self.assertFalse(result['session_created'])
+
     def test_symlinks_and_empty_artifacts_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'empty'; path.write_bytes(b'')
