@@ -193,7 +193,15 @@ pub fn capture(
     Ok(hashes)
 }
 pub fn stock_prefixes(session: &SessionGuard, prepared: &Path) -> Result<()> {
+    let pin: Value =
+        serde_json::from_str(include_str!("../../../release/ha100_official_runtime.json"))?;
     for name in ["boot", "odmdtbo"] {
+        let path = prepared.join(format!("bootstrap/{name}.img"));
+        ensure!(
+            fs::metadata(&path)?.len() == pin["members"][format!("{name}.img")]["size"]
+                && digest(&path)? == pin["members"][format!("{name}.img")]["sha256"],
+            "official stock input changed"
+        );
         let official = fs::read(prepared.join(format!("bootstrap/{name}.img")))?;
         let mut original = fs::File::open(session.path().join(format!("bootstrap-{name}.img")))?;
         let mut prefix = vec![0; official.len()];
@@ -207,4 +215,51 @@ pub fn stock_prefixes(session: &SessionGuard, prepared: &Path) -> Result<()> {
 }
 pub fn original_boot(session: &SessionGuard) -> PathBuf {
     session.path().join("bootstrap-boot.img")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identity_encoding_and_complete_fixed_regions_are_required_before_bootstrap() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("bootstrap")).unwrap();
+        let scatter = include_str!("../tests/fixtures/ha100-scatter.txt");
+        fs::write(root.path().join("bootstrap/scatter.txt"), scatter).unwrap();
+        let mut ordered: Vec<_> = scatter
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let name = fields.next().unwrap();
+                let offset =
+                    u64::from_str_radix(fields.next().unwrap().trim_start_matches("0x"), 16)
+                        .unwrap();
+                (!["preloader", "pgpt", "sgpt", "flashinfo"].contains(&name))
+                    .then_some((name, offset))
+            })
+            .collect();
+        ordered.sort_by_key(|v| v.1);
+        let capacity = 4 * 1024 * 1024 * 1024u64;
+        ordered.push(("flashinfo", capacity - 2 * 1024 * 1024));
+        let mut parts = serde_json::Map::new();
+        for pair in ordered.windows(2) {
+            parts.insert(
+                pair[0].0.into(),
+                json!({"offset":pair[0].1,"size":pair[1].1-pair[0].1}),
+            );
+        }
+        parts.insert(
+            "flashinfo".into(),
+            json!({"offset":capacity-2*1024*1024,"size":2*1024*1024}),
+        );
+        let cid = "12".repeat(16);
+        let device = json!({"hwcode":0x6580,"cid_encoding":"mt6580-legacy-le32-registers","runtime_cid_sha256":format!("{:x}",Sha256::digest(decode(&cid).unwrap())),"capacity":capacity,"partitions":parts});
+        admit_layout(&device, &cid, root.path()).unwrap();
+        let mut shortened = device.clone();
+        shortened["partitions"]["nvram"]["size"] = json!(512);
+        assert!(admit_layout(&shortened, &cid, root.path()).is_err());
+        let mut wrong = device.clone();
+        wrong["cid_encoding"] = json!("guessed-permutation");
+        assert!(admit_layout(&wrong, &cid, root.path()).is_err());
+        assert!(admit_layout(&device, &"34".repeat(16), root.path()).is_err());
+    }
 }

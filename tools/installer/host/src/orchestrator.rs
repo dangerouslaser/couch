@@ -52,14 +52,6 @@ fn state_root() -> Result<PathBuf> {
     }
     Ok(path)
 }
-fn python(path: &Path) -> Result<String> {
-    let value = path.to_str().context("non-UTF8 interpreter path")?;
-    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
-        Ok(format!(r"\\{rest}"))
-    } else {
-        Ok(value.strip_prefix(r"\\?\").unwrap_or(value).to_string())
-    }
-}
 fn simple(
     worker: &mut Worker,
     command: Value,
@@ -104,7 +96,7 @@ fn identity_input(
             .to_string();
         let valid = if mac {
             let bytes = decode(&value.to_ascii_lowercase().replace(':', ""));
-            value.to_ascii_lowercase() != "02:00:00:00:00:00"
+            !value.eq_ignore_ascii_case("02:00:00:00:00:00")
                 && value.len() == 17
                 && value.as_bytes().iter().enumerate().all(|(i, c)| {
                     if i % 3 == 2 {
@@ -320,13 +312,13 @@ fn install(
     command
         .arg("-I")
         .arg("-B")
-        .arg(python(&script)?)
+        .arg(dependencies::python_path(&script)?)
         .arg("--events-stdio")
         .current_dir(session.path());
     let mut worker = Worker::spawn(&mut command)?;
     simple(
         &mut worker,
-        json!({"op":"prepare","checkout":python(&dependencies.mtk_root)?,"loader":python(&dependencies.owner_da)?,"loader_sha256":dependencies.owner_da_sha256,"preloader":python(&prepared.join("bootstrap/preloader.img"))?,"preloader_sha256":"0ad0d14b7203d98a6567af7a022cfe5df5b6fcbba60cb4e9b4bc2ee569cf1069","libusb":python(&dependencies.libusb)?}),
+        json!({"op":"prepare","checkout":dependencies::python_path(&dependencies.mtk_root)?,"loader":dependencies::python_path(&dependencies.owner_da)?,"loader_sha256":dependencies.owner_da_sha256,"preloader":dependencies::python_path(&prepared.join("bootstrap/preloader.img"))?,"preloader_sha256":"0ad0d14b7203d98a6567af7a022cfe5df5b6fcbba60cb4e9b4bc2ee569cf1069","libusb":dependencies::python_path(&dependencies.libusb)?}),
         "prepared",
         60,
         ui,
@@ -418,7 +410,7 @@ fn install(
     )?;
     simple(
         &mut worker,
-        json!({"op":"authorize_boot","cid_sha256":device["runtime_cid_sha256"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"original_sha256":original_hashes,"stage":python(&stage)?,"stage_sha256":stage_hash}),
+        json!({"op":"authorize_boot","cid_sha256":device["runtime_cid_sha256"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"original_sha256":original_hashes,"stage":dependencies::python_path(&stage)?,"stage_sha256":stage_hash}),
         "boot_authorized",
         1800,
         ui,
@@ -578,4 +570,41 @@ fn install(
         1,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    #[test]
+    fn cancel_never_requires_release_config_or_creates_session() {
+        let mut ui = Ui::new(
+            Box::new(Cursor::new(b"{\"id\":1,\"value\":\"2\"}\n".to_vec())),
+            Box::new(Vec::new()),
+        );
+        run(&mut ui, None).unwrap();
+    }
+    #[test]
+    fn images_use_fixed_wire_chunks_and_full_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("image");
+        let data = vec![42; crate::stage::CHUNK + 512];
+        fs::write(&path, &data).unwrap();
+        let paths = BTreeMap::from([("userdata".into(), path)]);
+        let device = json!({"partitions":{"userdata":{"size":data.len()}}});
+        let mut ui = Ui::new(Box::new(Cursor::new(Vec::new())), Box::new(Vec::new()));
+        ui.set_steps(vec!["step".into(); 8]).unwrap();
+        let result = plan_images(&paths, &device, &mut ui).unwrap();
+        assert_eq!(
+            result["userdata"]["chunks"],
+            json!([
+                format!("{:x}", Sha256::digest(&data[..crate::stage::CHUNK])),
+                format!("{:x}", Sha256::digest(&data[crate::stage::CHUNK..]))
+            ])
+        );
+        assert_eq!(
+            result["userdata"]["sha256"],
+            format!("{:x}", Sha256::digest(&data))
+        );
+    }
 }

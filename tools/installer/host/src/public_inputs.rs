@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -233,9 +233,9 @@ fn extract(
     let mut total = 0;
     let mut manifest = None;
     {
-        let decoded = flate2::read::GzDecoder::new(&mut file);
+        let decoded = flate2::bufread::GzDecoder::new(std::io::BufReader::new(&mut file));
         let mut tar = tar::Archive::new(decoded.take(MAX));
-        for entry in tar.entries()? {
+        for entry in tar.entries()?.raw(true) {
             let mut entry = entry?;
             ensure!(
                 entry.header().entry_type().is_file(),
@@ -271,6 +271,19 @@ fn extract(
             }
             found.insert(name, target);
         }
+        let mut remaining = tar.into_inner();
+        let mut padding = Vec::new();
+        remaining.by_ref().take(65537).read_to_end(&mut padding)?;
+        ensure!(
+            padding.len() <= 65536 && padding.iter().all(|b| *b == 0),
+            "non-padding data after public tar end"
+        );
+        let decoded = remaining.into_inner();
+        let mut compressed = decoded.into_inner();
+        ensure!(
+            compressed.fill_buf()?.is_empty(),
+            "trailing compressed payload data"
+        );
     }
     ensure!(
         hash(&mut file)? == release.payload.sha256,
@@ -298,4 +311,96 @@ fn extract(
         );
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn fixture(extra: Option<&str>, corrupt: bool) -> (tempfile::TempDir, Release, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("payload.tar.gz");
+        let names = [
+            "userdata.ext4",
+            "installer.cpio.gz",
+            "boot.cpio.gz",
+            "recovery.cpio.gz",
+            "zImage",
+            "logo.bgra",
+        ];
+        let sha = format!("{:x}", Sha256::digest(b"fixture"));
+        let files: BTreeMap<_, _> = names
+            .into_iter()
+            .map(|name| {
+                (
+                    name,
+                    json!({"size":7,"sha256":if corrupt{"0".repeat(64)}else{sha.clone()}}),
+                )
+            })
+            .collect();
+        let manifest=serde_json::to_vec(&json!({"schema":1,"kind":"couch-public-os-inputs","version":"fixture","source_commit":"a".repeat(40),"files":files})).unwrap();
+        let gzip = flate2::write::GzEncoder::new(
+            File::create(&path).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut tar = tar::Builder::new(gzip);
+        fn append(tar: &mut tar::Builder<flate2::write::GzEncoder<File>>, name: &str, data: &[u8]) {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o600);
+            header.set_cksum();
+            tar.append_data(&mut header, name, data).unwrap();
+        }
+        append(&mut tar, "manifest.json", &manifest);
+        for name in names {
+            append(&mut tar, name, b"fixture");
+        }
+        if let Some(extra) = extra {
+            append(&mut tar, extra, b"private");
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+        let release = Release {
+            schema: 1,
+            kind: "couch-native-installer-release".into(),
+            model: "sanytron-ha100".into(),
+            version: "fixture".into(),
+            source_commit: "a".repeat(40),
+            payload: Payload {
+                url: "https://example.invalid/payload".into(),
+                size: fs::metadata(&path).unwrap().len(),
+                sha256: digest(&path).unwrap(),
+                format: "tar.gz".into(),
+            },
+        };
+        (root, release, path)
+    }
+    #[test]
+    fn fixed_public_inventory_excludes_owner_vendor_and_duplicate_members() {
+        let (root, release, path) = fixture(None, false);
+        assert_eq!(
+            extract(&release, &path, &root.path().join("good"))
+                .unwrap()
+                .len(),
+            6
+        );
+        for name in ["vendor-runtime.bin", "userdata.ext4", "nested/boot.cpio.gz"] {
+            let (root, release, path) = fixture(Some(name), false);
+            assert!(extract(&release, &path, &root.path().join("bad")).is_err());
+        }
+    }
+    #[test]
+    fn public_member_hash_and_trailing_compressed_bytes_are_checked() {
+        let (root, release, path) = fixture(None, true);
+        assert!(extract(&release, &path, &root.path().join("bad")).is_err());
+        let (root, mut release, path) = fixture(None, false);
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"hidden owner data")
+            .unwrap();
+        release.payload.size = fs::metadata(&path).unwrap().len();
+        release.payload.sha256 = digest(&path).unwrap();
+        assert!(extract(&release, &path, &root.path().join("trailing")).is_err());
+    }
 }
