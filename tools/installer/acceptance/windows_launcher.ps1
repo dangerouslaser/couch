@@ -25,13 +25,16 @@ try {
     Clear-DnsClientCache
     $serverArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSScriptRoot\https_fixture.ps1`"",'-Assets',"`"$Candidate\assets`"",'-Log',"`"$Candidate\requests.json`"")
     $server = Start-Process powershell -ArgumentList $serverArgs -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $Candidate 'https-error.txt')
+    # Retain the process handle before this short-lived server can exit, so
+    # .NET can report its real exit code after the client finishes.
+    $null = $server.Handle
     $env:LOCALAPPDATA = Join-Path $Candidate 'owner'
     $env:TEMP = Join-Path $Candidate 'temporary'; $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Path $env:LOCALAPPDATA,$env:TEMP | Out-Null
     Start-Sleep -Seconds 1
     & python "$PSScriptRoot\windows_console.py" "$Candidate\launchers\install.ps1" "$Candidate\console.txt" "$Candidate\result.json"
     if ($LASTEXITCODE -ne 0) { throw 'Actual Windows launcher did not safely cancel' }
-    if (-not $server.WaitForExit(10000) -or $server.ExitCode -ne 0) { throw 'HTTPS fixture failed' }
+    if (-not $server.WaitForExit(10000) -or $server.ExitCode -ne 0) { throw "HTTPS fixture failed (exit=$($server.ExitCode)): $(Get-Content -Raw (Join-Path $Candidate 'https-error.txt'))" }
     $requests = Get-Content -Raw "$Candidate\requests.json" | ConvertFrom-Json
     if ($requests.Count -ne 3) { throw 'Unexpected downloader activity' }
     if (@(Get-ChildItem -Force $env:TEMP).Count -ne 0 -or (Test-Path "$env:LOCALAPPDATA\CouchInstaller")) { throw 'Launcher left temporary files or created a session' }
