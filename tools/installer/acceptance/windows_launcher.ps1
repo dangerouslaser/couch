@@ -18,8 +18,8 @@ try {
     $export = Join-Path $Candidate 'fixture.cer'
     Export-Certificate -Cert $certificate -FilePath $export | Out-Null
     Import-Certificate -FilePath $export -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
-    & netsh http add sslcert ipport=127.0.0.1:443 certhash=$certificate.Thumbprint 'appid={b0966d2c-a0fa-4ee0-953d-ae064411cbb6}' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not bind fixture certificate' }
+    $bindingResult = & netsh http add sslcert ipport=127.0.0.1:443 "certhash=$($certificate.Thumbprint)" 'appid={b0966d2c-a0fa-4ee0-953d-ae064411cbb6}'
+    if ($LASTEXITCODE -ne 0) { throw "Could not bind fixture certificate: $bindingResult" }
     $binding = $true
     [IO.File]::AppendAllText($hosts, "`r`n127.0.0.1 github.com`r`n")
     Clear-DnsClientCache
