@@ -242,12 +242,42 @@ pub fn run<S: Read + Write>(
     original_boot: &Path,
     original_os: OriginalOs,
     session: &mut SessionGuard,
+    progress: impl FnMut(&str, &str, u64, u64) -> Result<()>,
+) -> Result<()> {
+    run_with_vendor(
+        channel,
+        plan,
+        paths,
+        original_boot,
+        original_os,
+        session,
+        None,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_vendor<S: Read + Write>(
+    channel: &mut Channel<S>,
+    plan: &Value,
+    paths: &BTreeMap<String, PathBuf>,
+    original_boot: &Path,
+    original_os: OriginalOs,
+    session: &mut SessionGuard,
+    mut vendor: Option<crate::vendor_transfer::VendorTransfer>,
     mut progress: impl FnMut(&str, &str, u64, u64) -> Result<()>,
 ) -> Result<()> {
     let result = (|| {
         ensure!(
             session.phase() == Phase::StageConnected,
             "transaction requires selected authenticated stage"
+        );
+        ensure!(
+            match vendor.as_ref() {
+                Some(v) => plan["vendor_source_sha256"] == v.source_sha256(),
+                None => plan.get("vendor_source_sha256").is_none(),
+            },
+            "owner vendor admission differs from install plan"
         );
         let valid = validate(plan, paths)?;
         let mut images = BTreeMap::new();
@@ -296,6 +326,9 @@ pub fn run<S: Read + Write>(
         channel.expect(&json!({"event":"backups_complete"}))?;
         session.transition(Phase::BackupsVerified, &json!({"event":"backups_complete"}))?;
         channel.acknowledge("backups_complete", "none", "")?;
+        if let Some(vendor) = vendor.as_mut() {
+            vendor.send(channel, session, &mut progress)?;
+        }
         session.transition(Phase::Writing, &json!({"event":"write_sequence_started"}))?;
         for name in ORDER.into_iter().filter(|n| valid.images.contains_key(*n)) {
             let image = images.get_mut(name).unwrap();

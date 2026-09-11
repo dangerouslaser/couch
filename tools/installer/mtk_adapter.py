@@ -110,6 +110,17 @@ class Adapter:
         self.reader = self.reader_factory(mtk, REVIEWED_REVISION)
         self.wire.send({'event': 'connected', 'device': self.reader.description})
 
+    def hash_partition(self, name):
+        total = self.reader.description['partitions'][name]['size']
+        full, done = hashlib.sha256(), 0
+        for data in self.reader.chunks(name):
+            full.update(data)
+            done += len(data)
+            self.wire.send({'event': 'progress', 'phase': 'Verify original',
+                'target': name, 'done': done, 'total': total})
+        require(done == total, 'Incomplete original readback')
+        return full.hexdigest()
+
     def authorize_boot(self, command):
         require(self.reader is not None and self.writer is None and not self.written, 'Expected fresh read-only session')
         require(set(command) == {'op', 'cid_sha256', 'partitions', 'identity_sha256', 'original_sha256', 'stage', 'stage_sha256'}, 'Unexpected boot admission fields')
@@ -120,7 +131,7 @@ class Adapter:
         require(isinstance(hashes, dict) and set(hashes) == IDENTITY_PARTITIONS
                 and isinstance(originals, dict) and set(originals) == {'boot', 'recovery', 'odmdtbo', 'logo'}, 'Incomplete original identity evidence')
         for name, checksum in {**hashes, **originals}.items():
-            require(self.reader.hash(name) == checksum, 'Device changed after original capture')
+            require(self.hash_partition(name) == checksum, 'Device changed after original capture')
         stage = regular(command['stage']).resolve()
         require(stage.stat().st_size == desc['partitions']['boot']['size'] == 16*1024*1024, 'RAM stage must fill one boot partition')
         with stage.open('rb') as file:
@@ -163,7 +174,7 @@ class Adapter:
             require(self.reader is not None and set(command) == {'op', 'target'} and command['target'] in READABLE, 'Unsupported read target')
             name = command['target']
             if op == 'hash':
-                self.wire.send({'event': 'hash', 'target': name, 'sha256': self.reader.hash(name)})
+                self.wire.send({'event': 'hash', 'target': name, 'sha256': self.hash_partition(name)})
             else:
                 self.wire.send({'event': 'partition', 'target': name, 'size': self.reader.description['partitions'][name]['size']})
                 full = hashlib.sha256()
