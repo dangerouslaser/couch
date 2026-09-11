@@ -3,7 +3,8 @@
 The current installer interface is the [native Ratatui terminal](../tools/installer/tui/README.md).
 See the [Wi-Fi installer workflow](installer-wifi-wizard.md) for network selection,
 backups, reinstall and recovery. Native frontend binaries are built for Linux,
-macOS and Windows; complete public installer packaging remains separate work.
+macOS and Windows. The complete native host and public payload are now assembled;
+see the [installer guide](installer.md) for publication and physical-test status.
 
 The Python interface below remains a reference/simulation and guarded developer
 entry point. Its default public gate keeps hardware writes disabled.
@@ -81,7 +82,10 @@ and preserves the journal; after a stuck interrupt, the frontend terminates the
 child. Do not disconnect while writing. Completion reports verified readback,
 not successful normal startup; retain originals until physical boot is checked.
 
-## Bootstrap contract
+## Legacy Python bootstrap contract
+
+The native release uses the [release-specific launchers](installer-native-launchers.md).
+The following contract describes only the older Python reference bootstrap.
 
 `tools/installer/bootstrap.sh` is suitable for a future curl-piped entry point,
 but is **not an available public installation command today**. Its approved
@@ -118,8 +122,19 @@ archive members. They never connect to USB or flash hardware.
 
 `.github/workflows/installer-binaries.yml` builds Linux x64/ARM64, Windows x64,
 and macOS Intel/Apple Silicon executables, including a universal macOS binary.
-These CI artifacts are the terminal interface, not a complete approved installer
-release. Platform USB drivers, backend dependencies, end-to-end flashing, and
-public payload preparation are separate release requirements. Windows uses
+The workflow builds both the native host and terminal. The `.24` release combines
+verified host/terminal binaries with a verified public payload and owner-local
+dependency preparation. Physical driver and installation acceptance remain
+separate requirements; see the [installer guide](installer.md). Windows uses
 private anonymous pipes; Unix uses an inherited local socket. Native subprocess
 output is redirected away from both transports.
+
+### Native progress measurements
+
+Native byte transfers report throughput from changes in byte counters over a
+monotonic clock interval (at least 250 ms, or the final chunk). Each partition,
+verification pass, changed total, or restarted counter begins a fresh sample.
+Dependency extraction reports item counts; USB/Wi-Fi waits report elapsed seconds.
+Neither is presented as MiB/s. Initial samples show “measuring speed”; after two
+seconds without a byte-progress event, an incomplete transfer hides stale speed
+and ETA and shows “waiting for progress”. Prompts and errors clear measurements.

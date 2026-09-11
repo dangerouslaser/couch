@@ -6,6 +6,7 @@ This worker retains the reviewed MTK handshake/read/write implementation only.
 Use an independently verified Python/runtime/source bundle. Never run it against
 hardware outside the native host's admitted and supervised session.
 """
+import copy
 import hashlib
 import json
 import os
@@ -85,6 +86,11 @@ class Adapter:
         self.boot_requested = False
         self.stage_usb = None
         self.selected = None
+        self.failed = False
+        self.authorization_attempted = False
+        self.capture_context = None
+        self.capture_reads = {}
+        self.capture_verified = {}
 
     def prepare(self, command):
         require(self.backend is None, 'Adapter already prepared')
@@ -110,7 +116,23 @@ class Adapter:
         require(self.backend.claimed_candidate() == selected, 'Claimed USB selection differs')
         mtk = self.backend.start_readonly(self.loader, ReadPolicy())
         self.reader = self.reader_factory(mtk, REVIEWED_REVISION)
+        self.capture_context = (self.backend, self.reader, self.backend.mtk,
+            self.backend.device, self.selected, fingerprint(self.reader.description), self.reader.runtime_cid)
         self.wire.send({'event': 'connected', 'device': self.reader.description, 'cid': self.reader.runtime_cid})
+
+    def invalidate_capture(self):
+        self.capture_context = None
+        self.capture_reads.clear()
+        self.capture_verified.clear()
+
+    def require_capture_connection(self):
+        require(self.capture_context is not None and not self.failed, 'No live capture evidence')
+        backend, reader, mtk, device, selected, description, cid = self.capture_context
+        require(self.backend is backend and self.reader is reader
+                and backend.mtk is mtk and backend.device is device
+                and self.selected == selected and backend.claimed_candidate() == selected
+                and fingerprint(reader.description) == description and reader.runtime_cid == cid,
+                'Verified capture connection changed')
 
     def hash_partition(self, name):
         total = self.reader.description['partitions'][name]['size']
@@ -124,7 +146,10 @@ class Adapter:
         return full.hexdigest()
 
     def authorize_boot(self, command):
+        require(not self.failed and not self.authorization_attempted, 'Boot authorization already consumed')
+        self.authorization_attempted = True
         require(self.reader is not None and self.writer is None and not self.written, 'Expected fresh read-only session')
+        self.require_capture_connection()
         require(set(command) == {'op', 'cid_sha256', 'partitions', 'identity_sha256', 'original_sha256', 'stage', 'stage_sha256'}, 'Unexpected boot admission fields')
         desc = self.reader.description
         require(desc['runtime_cid_sha256'] == command['cid_sha256'] and desc['partitions'] == command['partitions'], 'Observed device differs from admitted baseline')
@@ -132,8 +157,11 @@ class Adapter:
         originals = command['original_sha256']
         require(isinstance(hashes, dict) and set(hashes) == IDENTITY_PARTITIONS
                 and isinstance(originals, dict) and set(originals) == {'boot', 'recovery', 'odmdtbo', 'logo'}, 'Incomplete original identity evidence')
-        for name, checksum in {**hashes, **originals}.items():
-            require(self.hash_partition(name) == checksum, 'Device changed after original capture')
+        # No writes or reconnects are admitted between capture and authorization.
+        # Each proof comes from a complete streamed backup plus an independent
+        # device hash on this exact connection, never from the host's hash map.
+        require(set(self.capture_verified) == READABLE, 'Missing independently verified capture')
+        require(self.capture_verified == {**hashes, **originals}, 'Submitted originals differ from verified capture')
         stage = regular(command['stage']).resolve()
         require(stage.stat().st_size == desc['partitions']['boot']['size'] == 16*1024*1024, 'RAM stage must fill one boot partition')
         with stage.open('rb') as file:
@@ -146,10 +174,20 @@ class Adapter:
                 self.wire.send({'event': 'progress', 'phase': phase, 'target': target, 'done': done, 'total': total}))
         self.reader = self.writer
         self.stage = stage
-        self.binding = command
+        self.binding = copy.deepcopy(command)
+        self.invalidate_capture()
         self.wire.send({'event': 'boot_authorized'})
 
     def dispatch(self, command):
+        require(not self.failed, 'Adapter stopped after failure')
+        try:
+            return self._dispatch(command)
+        except BaseException:
+            self.failed = True
+            self.invalidate_capture()
+            raise
+
+    def _dispatch(self, command):
         op = command.get('op')
         if op == 'prepare':
             return self.prepare(command)
@@ -199,15 +237,31 @@ class Adapter:
         elif op in ('read', 'hash'):
             require(self.reader is not None and set(command) == {'op', 'target'} and command['target'] in READABLE, 'Unsupported read target')
             name = command['target']
+            self.require_capture_connection()
             if op == 'hash':
-                self.wire.send({'event': 'hash', 'target': name, 'sha256': self.hash_partition(name)})
+                checksum = self.hash_partition(name)
+                self.require_capture_connection()
+                if name in self.capture_reads:
+                    require(checksum == self.capture_reads[name], 'Independent original readback differs')
+                self.wire.send({'event': 'hash', 'target': name, 'sha256': checksum})
+                if name in self.capture_reads:
+                    self.capture_verified[name] = checksum
             else:
-                self.wire.send({'event': 'partition', 'target': name, 'size': self.reader.description['partitions'][name]['size']})
-                full = hashlib.sha256()
+                self.capture_reads.pop(name, None)
+                self.capture_verified.pop(name, None)
+                total = self.reader.description['partitions'][name]['size']
+                self.wire.send({'event': 'partition', 'target': name, 'size': total})
+                full, done = hashlib.sha256(), 0
                 for data in self.reader.chunks(name):
+                    done += len(data)
+                    require(0 < len(data) <= MAX and done <= total, 'Invalid original capture length')
                     full.update(data)
                     self.wire.chunk(data)
-                self.wire.send({'event': 'read_complete', 'target': name, 'sha256': full.hexdigest()})
+                require(done == total, 'Incomplete original capture')
+                self.require_capture_connection()
+                checksum = full.hexdigest()
+                self.wire.send({'event': 'read_complete', 'target': name, 'sha256': checksum})
+                self.capture_reads[name] = checksum
         elif op == 'authorize_boot':
             self.authorize_boot(command)
         elif op == 'write_boot':
@@ -264,6 +318,8 @@ class Adapter:
         return True
 
     def close(self):
+        self.failed = True
+        self.invalidate_capture()
         if self.stage_usb is not None:
             self.stage_usb.close()
             self.stage_usb = None

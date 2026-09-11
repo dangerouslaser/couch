@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         let guard = session::SessionGuard::create(&parent.join("run"))?;
         let mut last = String::new();
         let prepared =
-            dependencies::prepare(&guard, dependencies::host_platform()?, |label, _, _| {
+            dependencies::prepare(&guard, dependencies::host_platform()?, |label, _, _, _| {
                 if label != last {
                     eprintln!("{label}…");
                     last = label.into();
@@ -109,11 +109,18 @@ fn ui_smoke(args: &[std::ffi::OsString]) -> Result<()> {
 fn installer(args: &[std::ffi::OsString]) -> Result<()> {
     use couch_installer_host::frontend::Ui;
     let mut config = None;
+    let mut local_payload = None;
     let mut events = false;
     let mut index = 0;
     while index < args.len() {
         if args[index] == "--config" && config.is_none() && index + 1 < args.len() {
             config = Some(PathBuf::from(&args[index + 1]));
+            index += 2;
+        } else if args[index] == "--local-payload"
+            && local_payload.is_none()
+            && index + 1 < args.len()
+        {
+            local_payload = Some(PathBuf::from(&args[index + 1]));
             index += 2;
         } else if cfg!(unix)
             && args[index] == "--events-fd"
@@ -134,7 +141,11 @@ fn installer(args: &[std::ffi::OsString]) -> Result<()> {
     let mut ui = Ui::inherited_socket(3)?;
     #[cfg(windows)]
     let mut ui = Ui::stdio();
-    let result = couch_installer_host::orchestrator::run(&mut ui, config.as_deref());
+    let result = couch_installer_host::orchestrator::run(
+        &mut ui,
+        config.as_deref(),
+        local_payload.as_deref(),
+    );
     if let Err(error) = &result {
         let _ = ui.error(&error.to_string());
     }

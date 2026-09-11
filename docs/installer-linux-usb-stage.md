@@ -1,9 +1,10 @@
 # Wi-Fi installer stage
 
-The private Wi-Fi installer uses a Linux image that runs from RAM. USB is used
+The native Wi-Fi installer uses a Linux image that runs from RAM. USB is used
 for selecting the remote and starting this image; authenticated Wi-Fi carries
-large backups and OS images. The native host migration and public desktop
-package are still being completed. The older FunctionFS USB benchmark is
+large backups and OS images. The integrated desktop flow is described in the
+[installer guide](installer.md); publication and physical acceptance are separate
+from the transport implementation. The older FunctionFS USB benchmark is
 separate research, documented in [the RAM probe guide](installer-ram-probe.md).
 
 ## Bootstrap

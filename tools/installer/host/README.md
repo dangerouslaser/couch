@@ -88,11 +88,10 @@ per chunk. Explicit YOLO omits only userdata backup. Failed expansion or journal
 publication prevents the final boot acknowledgement. Completion leaves the restart
 decision to the caller; there is no automatic reconnect, restore or retry.
 
-These components are not a complete installer command. Native enrollment proof
-consumption, boot assembly, the selected MTK adapter and its platform dependencies,
-and TUI admission/wiring remain to be connected. Callers must verify the release,
-enrollment evidence, selected device and USB plan binding before the transaction
-API; it deliberately does not infer admission from a caller-supplied plan alone.
+The integrated orchestrator below connects these components. Direct library
+callers must still verify the release, enrollment evidence, selected device and
+USB plan binding before using the transaction API; it deliberately does not
+infer admission from a caller-supplied plan alone.
 
 ## Native installation orchestration
 
@@ -113,7 +112,7 @@ inherits the TUI's process group.
 
 Fresh enrollment requires authorized Android ADB, canonical storage CID, exact
 physical USB selection, the pinned HA100 partition boundaries and matching stock
-boot/device-tree prefixes. Original calibration, boot, recovery, device tree and
+boot/device-tree prefixes or the reviewed retained-stock full-image pair. Original calibration, boot, recovery, device tree and
 logo are read, saved, independently read back and journaled before the sole USB
 boot write. Device ID and unavailable MAC addresses are entered from Android;
 Android ID or serial is never substituted for the vendor Device ID. Free space

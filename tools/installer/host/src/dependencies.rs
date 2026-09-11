@@ -1,4 +1,5 @@
 //! Native owner-local dependency preparation. No Python, Git, shell, or USB is used.
+use crate::frontend::ProgressUnit;
 use crate::session::{Phase, SessionGuard};
 use anyhow::{bail, ensure, Context, Result};
 use flate2::read::GzDecoder;
@@ -24,7 +25,7 @@ const DA_MEMBER: &str = "mtkclient/Loader/MTK_DA_V5.bin";
 const DA_SIZE: u64 = 22_483_280;
 const DA_SHA256: &str = "aef234190ccb8145d2e3b8459741e9adb70f2caa8481aa216c1b25152afaca1f";
 
-type Progress<'a> = dyn FnMut(&str, u64, u64) -> Result<()> + 'a;
+type Progress<'a> = dyn FnMut(&str, u64, u64, ProgressUnit) -> Result<()> + 'a;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct Blob {
@@ -254,7 +255,7 @@ fn verified_download(
             && url.fragment().is_none(),
         "dependency requires public HTTPS"
     );
-    progress(label, 0, pin.blob.size)?;
+    progress(label, 0, pin.blob.size, ProgressUnit::Bytes)?;
     let path = cache.join(&pin.blob.sha256);
     let bytes = if path.exists() {
         ensure!(
@@ -287,14 +288,19 @@ fn verified_download(
                 "dependency download overflow"
             );
             bytes.extend_from_slice(&buffer[..n]);
-            progress(label, bytes.len() as u64, pin.blob.size)?;
+            progress(
+                label,
+                bytes.len() as u64,
+                pin.blob.size,
+                ProgressUnit::Bytes,
+            )?;
         }
         check_bytes(&bytes, &pin.blob)?;
         create(cache, &pin.blob.sha256, &bytes, false)?;
         bytes
     };
     check_bytes(&bytes, &pin.blob)?;
-    progress(label, pin.blob.size, pin.blob.size)?;
+    progress(label, pin.blob.size, pin.blob.size, ProgressUnit::Bytes)?;
     // The returned snapshot, rather than the cache path, is the only parse input.
     Ok(bytes)
 }
@@ -390,7 +396,12 @@ fn unpack_python(bytes: &[u8], root: &Path, progress: &mut Progress<'_>) -> Resu
     let members = tar_members(bytes, "python/")?;
     let mut total = 0;
     for (index, (name, _)) in members.iter().enumerate() {
-        progress("Preparing Python", index as u64, members.len() as u64)?;
+        progress(
+            "Preparing Python",
+            index as u64,
+            members.len() as u64,
+            ProgressUnit::Items,
+        )?;
         let mut current = name.clone();
         let mut seen = BTreeSet::new();
         let member = loop {
@@ -415,6 +426,7 @@ fn unpack_python(bytes: &[u8], root: &Path, progress: &mut Progress<'_>) -> Resu
         "Preparing Python",
         members.len() as u64,
         members.len() as u64,
+        ProgressUnit::Items,
     )
 }
 fn zip_files(bytes: &[u8], mut consume: impl FnMut(&str, &[u8], bool) -> Result<()>) -> Result<()> {
@@ -470,7 +482,12 @@ fn unpack_wheel(
         }
     }
     let mut count = 0;
-    progress("Preparing Python packages", count, total)?;
+    progress(
+        "Preparing Python packages",
+        count,
+        total,
+        ProgressUnit::Items,
+    )?;
     zip_files(bytes, |name, data, executable| {
         ensure!(
             !name.split('/').any(|part| part.ends_with(".data")),
@@ -478,7 +495,12 @@ fn unpack_wheel(
         );
         create(root, &format!("{site_packages}/{name}"), data, executable)?;
         count += 1;
-        progress("Preparing Python packages", count, total)
+        progress(
+            "Preparing Python packages",
+            count,
+            total,
+            ProgressUnit::Items,
+        )
     })
 }
 fn unpack_mtk(
@@ -531,6 +553,7 @@ fn unpack_mtk(
             "Preparing reviewed MTK source",
             selected.len() as u64,
             source.files.len() as u64,
+            ProgressUnit::Items,
         )?;
         create(root, &format!("mtk/{name}"), &data, false)?;
     }
@@ -549,6 +572,7 @@ fn unpack_adb(bytes: &[u8], root: &Path, pin: &AdbPin, progress: &mut Progress<'
                 "Preparing ADB",
                 selected.len() as u64,
                 pin.files.len() as u64,
+                ProgressUnit::Items,
             )?;
             create(root, name, data, name == pin.adb)?;
             selected.insert(name.to_string());
@@ -593,7 +617,12 @@ fn unpack_owner_da(
         let mut data = Vec::new();
         entry.take(DA_SIZE + 1).read_to_end(&mut data)?;
         check_bytes(&data, &expected)?;
-        progress("Preparing owner-local download agent", DA_SIZE, DA_SIZE)?;
+        progress(
+            "Preparing owner-local download agent",
+            DA_SIZE,
+            DA_SIZE,
+            ProgressUnit::Bytes,
+        )?;
         create(root, "loader.bin", &data, false)?;
         selected = true;
     }
@@ -606,7 +635,7 @@ fn unpack_owner_da(
 pub fn prepare(
     session: &SessionGuard,
     platform: &str,
-    mut progress: impl FnMut(&str, u64, u64) -> Result<()>,
+    mut progress: impl FnMut(&str, u64, u64, ProgressUnit) -> Result<()>,
 ) -> Result<PreparedDependencies> {
     ensure!(
         session.phase() == Phase::Created,
@@ -636,7 +665,7 @@ pub fn prepare(
         inventory.revision == pins.mtk_source.revision,
         "MTK source revision mismatch"
     );
-    progress("Preparing dependencies", 0, 0)?;
+    progress("Preparing dependencies", 0, 0, ProgressUnit::Items)?;
     let base = session.path().join("dependencies");
     crate::private_dir(&base).context("dependency output must be new")?;
     let cache = base.join("cache");
@@ -757,7 +786,7 @@ pub fn prepare(
         owner_da_receipt_sha256,
     };
     prepared.verify()?;
-    progress("Dependencies verified", 1, 1)?;
+    progress("Dependencies verified", 1, 1, ProgressUnit::Items)?;
     Ok(prepared)
 }
 impl PreparedDependencies {
@@ -1023,7 +1052,7 @@ mod tests {
         }
         archive.into_inner().unwrap().finish().unwrap()
     }
-    fn no_progress(_: &str, _: u64, _: u64) -> Result<()> {
+    fn no_progress(_: &str, _: u64, _: u64, _: ProgressUnit) -> Result<()> {
         Ok(())
     }
     #[test]
@@ -1042,11 +1071,17 @@ mod tests {
             Box::new(std::io::sink()),
         );
         let mut measurements = Vec::new();
-        unpack_wheel(&bytes, root.path(), "site", &mut |label, done, total| {
-            ui.progress(0, label, done, total)?;
-            measurements.push((done, total));
-            Ok(())
-        })
+        unpack_wheel(
+            &bytes,
+            root.path(),
+            "site",
+            &mut |label, done, total, unit| {
+                ui.progress_with_unit(0, label, done, total, unit)?;
+                assert_eq!(unit, ProgressUnit::Items);
+                measurements.push((done, total));
+                Ok(())
+            },
+        )
         .unwrap();
         assert_eq!(measurements, [(0, 2), (1, 2), (2, 2)]);
         assert_eq!(
@@ -1055,7 +1090,7 @@ mod tests {
         );
 
         let stopped = tempfile::tempdir().unwrap();
-        let error = unpack_wheel(&bytes, stopped.path(), "site", &mut |_, done, _| {
+        let error = unpack_wheel(&bytes, stopped.path(), "site", &mut |_, done, _, _| {
             ensure!(done == 0, "frontend disconnected");
             Ok(())
         })
@@ -1158,7 +1193,8 @@ mod tests {
     #[test]
     fn cancellation_stops_extraction_and_cache_admission_before_network() {
         let root = tempfile::tempdir().unwrap();
-        let mut cancel = |_: &str, _: u64, _: u64| -> Result<()> { bail!("UI disconnected") };
+        let mut cancel =
+            |_: &str, _: u64, _: u64, _: ProgressUnit| -> Result<()> { bail!("UI disconnected") };
         assert!(unpack_python(&tar_fixture(None), root.path(), &mut cancel).is_err());
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
         let pin = Download {
