@@ -411,6 +411,7 @@ fn import_checked(
     let events = journal(source, &record, &checksum)?;
     // Admit every opened snapshot before publishing any imported data.
     let mut files = Vec::new();
+    let mut stock_prefixes = BTreeMap::new();
     for (name, entry) in &record.originals {
         let data = read(&source.join(&entry.file), entry.size)?;
         ensure!(
@@ -419,14 +420,18 @@ fn import_checked(
         );
         for &(target, size, expected) in prefixes {
             if name == target {
-                ensure!(
+                stock_prefixes.insert(
+                    target,
                     data.len() >= size && digest(&data[..size]) == expected,
-                    "saved originals do not establish official HA100 Android model evidence"
                 );
             }
         }
         files.push((entry.file.clone(), data));
     }
+    ensure!(
+        native_stock_evidence(&record, &stock_prefixes),
+        "saved originals do not establish a reviewed HA100 Android boot/overlay pair"
+    );
     let root = destination.path().join("imported-enrollment");
     crate::private_dir(&root)?;
     for (name, data) in files
@@ -461,6 +466,21 @@ fn import_checked(
         retained_sha256,
         provenance: "native-android-enrollment",
     })
+}
+
+// Called only after the complete native journal and each original file hash are
+// verified. Reuse fresh enrollment's joint profile policy; never mix variants.
+fn native_stock_evidence(record: &Record, prefixes: &BTreeMap<&str, bool>) -> bool {
+    crate::enrollment::admitted_stock_pair(
+        [
+            prefixes.get("boot") == Some(&true),
+            prefixes.get("odmdtbo") == Some(&true),
+        ],
+        [
+            &record.originals["boot"].sha256,
+            &record.originals["odmdtbo"].sha256,
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -545,6 +565,24 @@ mod tests {
                 .map(|entry| BTreeMap::from([("odmdtbo".into(), entry.sha256.clone())]))
                 .unwrap_or_default(),
         }
+    }
+    #[test]
+    fn native_import_reuses_joint_stock_policy_without_relaxing_journal_or_hash_checks() {
+        let mut saved = record();
+        let latest = BTreeMap::from([("boot", true), ("odmdtbo", true)]);
+        assert!(native_stock_evidence(&saved, &latest));
+        saved.originals.get_mut("boot").unwrap().sha256 =
+            "68f6baf03d3df9cf42503b6c7e205cb630ab0cb0bf64d2d93e19e0f551ef0e15".into();
+        saved.originals.get_mut("odmdtbo").unwrap().sha256 =
+            "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760".into();
+        assert!(native_stock_evidence(&saved, &BTreeMap::new()));
+        saved.originals.get_mut("odmdtbo").unwrap().sha256 = "a".repeat(64);
+        assert!(!native_stock_evidence(
+            &saved,
+            &BTreeMap::from([("boot", false), ("odmdtbo", true)])
+        ));
+        saved.originals.get_mut("boot").unwrap().sha256 = "b".repeat(64);
+        assert!(!native_stock_evidence(&saved, &BTreeMap::new()));
     }
     #[test]
     fn only_exact_android_profile_and_original_inventory_are_accepted() {
@@ -650,7 +688,12 @@ mod tests {
         assert!(imported.rebind(&observed(&record), &mut target).is_ok());
         fs::write(source.join("bootstrap-logo.img"), b"corrupt").unwrap();
         let mut failed = SessionGuard::create(&root.path().join("failed")).unwrap();
-        assert!(import_checked(&source, &mut failed, &[]).is_err());
+        assert!(import_checked(
+            &source,
+            &mut failed,
+            &[("boot", 8, &prefix), ("odmdtbo", 8, &prefix)]
+        )
+        .is_err());
         assert!(!failed.path().join("imported-enrollment").exists());
     }
     #[test]

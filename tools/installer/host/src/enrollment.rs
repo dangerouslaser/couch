@@ -194,34 +194,143 @@ pub fn capture(
     }
     Ok(hashes)
 }
-pub fn stock_prefixes(session: &SessionGuard, prepared: &Path) -> Result<()> {
+// Older Android firmware independently reviewed against retained stock manifest
+// aeca8cc8f31652924acfd2a793cad2cb54faa87974bc4ce103c5104866a21857.
+// These are complete 16 MiB boot/odmdtbo hashes, admitted only as one exact pair.
+// No private image or calibration bytes are distributed with this policy.
+const RETAINED_STOCK_PAIR: [&str; 2] = [
+    "68f6baf03d3df9cf42503b6c7e205cb630ab0cb0bf64d2d93e19e0f551ef0e15",
+    "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760",
+];
+const STOCK_PARTITION_SIZE: usize = 16 * 1024 * 1024;
+fn admitted_stock_profile(prefixes: [bool; 2], full_hashes: [&str; 2]) -> Option<&'static str> {
+    if prefixes == [true, true] {
+        Some("official-ota-prefixes")
+    } else if full_hashes == RETAINED_STOCK_PAIR {
+        Some("reviewed-retained-stock-pair")
+    } else {
+        None
+    }
+}
+pub(crate) fn admitted_stock_pair(prefixes: [bool; 2], full_hashes: [&str; 2]) -> bool {
+    admitted_stock_profile(prefixes, full_hashes).is_some()
+}
+fn inspect_stock_image(
+    original: &mut impl Read,
+    official: &[u8],
+    size: usize,
+) -> Result<(bool, String)> {
+    ensure!(
+        !official.is_empty() && official.len() <= size,
+        "invalid official stock prefix size"
+    );
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0; CHUNK];
+    let mut done = 0;
+    let mut matches = true;
+    while done < size {
+        let count = (size - done).min(buffer.len());
+        original.read_exact(&mut buffer[..count])?;
+        hash.update(&buffer[..count]);
+        if done < official.len() {
+            let prefix_count = count.min(official.len() - done);
+            matches &= buffer[..prefix_count] == official[done..done + prefix_count];
+        }
+        done += count;
+    }
+    ensure!(
+        original.read(&mut [0; 1])? == 0,
+        "original stock partition grew"
+    );
+    Ok((matches, format!("{:x}", hash.finalize())))
+}
+pub fn stock_prefixes(session: &SessionGuard, prepared: &Path) -> Result<&'static str> {
+    // The caller already requires the selected Android CID, exact HA100 layout,
+    // independently captured originals and calibration. This only admits firmware.
+    let mut inspected = Vec::new();
     for name in ["boot", "odmdtbo"] {
         let path = prepared.join(format!("bootstrap/{name}.img"));
         let (_, size, sha) = crate::BOOTSTRAP
             .iter()
             .find(|v| v.0 == format!("{name}.img"))
             .unwrap();
+        let mut input = crate::regular(&path)?;
         ensure!(
-            fs::metadata(&path)?.len() == *size && digest(&path)? == *sha,
+            input.metadata()?.is_file() && input.metadata()?.len() == *size,
+            "official stock input size changed"
+        );
+        let mut official = vec![0; *size as usize];
+        input.read_exact(&mut official)?;
+        ensure!(
+            input.read(&mut [0; 1])? == 0 && format!("{:x}", Sha256::digest(&official)) == *sha,
             "official stock input changed"
         );
-        let official = fs::read(prepared.join(format!("bootstrap/{name}.img")))?;
-        let mut original = fs::File::open(session.path().join(format!("bootstrap-{name}.img")))?;
-        let mut prefix = vec![0; official.len()];
-        original.read_exact(&mut prefix)?;
+        let mut original = crate::regular(&session.path().join(format!("bootstrap-{name}.img")))?;
         ensure!(
-            prefix == official,
-            "original stock image differs from reviewed HA100 firmware"
+            original.metadata()?.is_file()
+                && original.metadata()?.len() == STOCK_PARTITION_SIZE as u64,
+            "original stock partition size differs"
         );
+        inspected.push(inspect_stock_image(
+            &mut original,
+            &official,
+            STOCK_PARTITION_SIZE,
+        )?);
     }
-    Ok(())
+    admitted_stock_profile(
+        [inspected[0].0, inspected[1].0],
+        [&inspected[0].1, &inspected[1].1],
+    )
+    .context("original boot/overlay pair differs from reviewed HA100 Android firmware")
 }
+
 pub fn original_boot(session: &SessionGuard) -> PathBuf {
     session.path().join("bootstrap-boot.img")
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stock_profiles_admit_complete_reviewed_pairs_only() {
+        assert_eq!(
+            admitted_stock_profile([true, true], ["latest-boot", "latest-overlay"]),
+            Some("official-ota-prefixes")
+        );
+        assert_eq!(
+            admitted_stock_profile([false, false], RETAINED_STOCK_PAIR),
+            Some("reviewed-retained-stock-pair")
+        );
+        assert!(admitted_stock_pair(
+            [true, true],
+            ["latest-boot", "latest-overlay"]
+        ));
+        assert!(admitted_stock_pair([false, false], RETAINED_STOCK_PAIR));
+        for (prefixes, pair) in [
+            ([false, true], [RETAINED_STOCK_PAIR[0], "latest-overlay"]),
+            ([true, false], ["latest-boot", RETAINED_STOCK_PAIR[1]]),
+            ([false, false], ["unknown", "unknown"]),
+            (
+                [false, false],
+                [RETAINED_STOCK_PAIR[1], RETAINED_STOCK_PAIR[0]],
+            ),
+        ] {
+            assert!(!admitted_stock_pair(prefixes, pair));
+        }
+    }
+    #[test]
+    fn stock_snapshot_checks_entire_partition_and_rejects_short_or_growing_reads() {
+        let bytes = b"prefix and original tail";
+        let (matches, full) = inspect_stock_image(&mut &bytes[..], b"prefix", bytes.len()).unwrap();
+        assert!(matches);
+        assert_eq!(full, format!("{:x}", Sha256::digest(bytes)));
+        assert!(
+            !inspect_stock_image(&mut &bytes[..], b"other", bytes.len())
+                .unwrap()
+                .0
+        );
+        assert!(inspect_stock_image(&mut &bytes[..], b"prefix", bytes.len() + 1).is_err());
+        assert!(inspect_stock_image(&mut &bytes[..], b"prefix", bytes.len() - 1).is_err());
+    }
     #[test]
     fn identity_encoding_and_complete_fixed_regions_are_required_before_bootstrap() {
         let root = tempfile::tempdir().unwrap();

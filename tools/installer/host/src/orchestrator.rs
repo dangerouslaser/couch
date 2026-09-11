@@ -452,7 +452,7 @@ fn install(
             20,
             ui,
             1,
-        )?;
+        ).context("Couch USB identity/restart failed or its delivery is ambiguous; no automatic retry was attempted")?;
         session
             .checkpoint(&json!({"event":"couch_restart","usb":bound,"result":restart["result"]}))?;
         match restart["result"].as_str() {
@@ -556,7 +556,8 @@ fn install(
         session.transition(Phase::AndroidBound,&json!({"event":"retained_enrollment_bound","cid":cid,"original_os":"Couch","enrollment_sha256":proof.enrollment().sha256(),"usb":bound}))?;
         Some(proof)
     } else {
-        enrollment::stock_prefixes(session, &prepared)?;
+        let profile = enrollment::stock_prefixes(session, &prepared)?;
+        session.checkpoint(&json!({"event":"android_stock_profile_verified","profile":profile}))?;
         None
     };
     ensure!(
