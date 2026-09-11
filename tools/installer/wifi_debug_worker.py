@@ -11,13 +11,32 @@ import time
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from couch_install import require
+from couch_install import InstallError, require
 from stage_usb import StageUsb
 
 MAX = 32768
 MAX_DIAGNOSTIC = 4608
 MAX_LOG = 4096
 CAPABILITY = 'COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1'
+OPERATIONS = ('debug_open', 'stage_status', 'debug_status', 'debug_retry', 'debug_close')
+
+
+def failure_record(error, operation, phase):
+    # Never serialize exception text, arguments, paths, payloads or tracebacks.
+    category = type(error).__name__
+    if isinstance(error, InstallError):
+        category = 'ContractError'
+    elif isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
+        category = 'DecodeError'
+    elif category not in ('USBError', 'USBTimeoutError', 'OSError', 'TimeoutError'):
+        category = 'WorkerError'
+    result = {'operation': operation if operation in OPERATIONS else 'unknown',
+              'phase': phase, 'category': category}
+    for name in ('errno', 'backend_error_code'):
+        value = getattr(error, name, None)
+        if type(value) is int and -65536 <= value <= 65536:
+            result[name] = value
+    return result
 
 
 def debug_identity(status):
@@ -57,9 +76,11 @@ class DebugWorker:
         self.factory = factory
         self.stage = None
         self.failed = False
+        self.failure = None
 
     def dispatch(self, command):
         require(not self.failed, 'Debug connection stopped')
+        op, phase = 'unknown', 'request'
         try:
             require(isinstance(command, dict) and set(command) == {'op', 'payload'},
                     'Invalid debug command')
@@ -73,6 +94,7 @@ class DebugWorker:
                         and isinstance(payload['ports'], list) and 1 <= len(payload['ports']) <= 7
                         and all(type(n) is int and 0 < n <= 255 for n in payload['ports']),
                         'Invalid physical USB port')
+                phase = 'attach'
                 self.stage = self.factory(payload)
                 return {'attached': True}
             require(self.stage is not None, 'Debug stage is not attached')
@@ -80,16 +102,23 @@ class DebugWorker:
                     'Unsupported debug operation')
             if op == 'debug_close':
                 require(payload is None, 'Unexpected close payload')
+                phase = 'close'
                 self.close()
                 return {'closed': True}
             require(payload is None, 'Debug operations take no payload')
             if op in ('debug_status', 'debug_retry'):
-                require(debug_identity(self.stage.dispatch('stage_status', None)),
+                phase = 'status'
+                status = self.stage.dispatch('stage_status', None)
+                phase = 'identity'
+                require(debug_identity(status),
                         'Expected unprovisioned dedicated Wi-Fi debug stage')
                 # Refresh bounded diagnostic generation immediately before a
                 # retry; never send op9 once the stage exhausted its eight runs.
+                phase = 'diagnostic-read'
                 raw = self.stage.debug_request(8)
+                phase = 'diagnostic-parse'
                 value = json.loads(raw)
+                phase = 'diagnostic-contract'
                 require(isinstance(value, dict)
                         and value.get('stage_kind') == 'private-ram-wifi-debug-stage'
                         and value.get('capability') == CAPABILITY
@@ -106,19 +135,28 @@ class DebugWorker:
                 if op == 'debug_retry':
                     require(value['generation'] < 8 and value['status'].get('error') != 'debug-retry-limit',
                             'Debug retry limit reached')
+                    phase = 'retry'
                     require(self.stage.debug_request(9) == b'', 'Unexpected retry acknowledgement')
                     return {'accepted': True}
                 return value
+            phase = 'status'
             return self.stage.dispatch(op, payload)
-        except BaseException:
+        except BaseException as error:
+            # Preserve the first failure even if releasing a disconnected USB
+            # interface fails too. A failed connection is never reused.
+            self.failure = failure_record(error, op, phase)
             self.failed = True
-            self.close()
+            try:
+                self.close()
+            except BaseException:
+                pass
             raise
 
     def close(self):
         if self.stage is not None:
-            self.stage.close()
+            stage = self.stage
             self.stage = None
+            stage.close()
 
 
 def attach(payload):
@@ -142,26 +180,48 @@ def attach(payload):
 
 def main():
     worker = DebugWorker(attach)
+    operation, phase, response_started = 'unknown', 'request', False
     try:
         while True:
+            operation, phase, response_started = 'unknown', 'request', False
             size, = struct.unpack('<I', exact(sys.stdin.buffer, 4))
             require(0 < size <= MAX, 'Debug request exceeds bound')
             command = json.loads(exact(sys.stdin.buffer, size))
+            if isinstance(command, dict) and command.get('op') in OPERATIONS:
+                operation = command['op']
             result = worker.dispatch(command)
+            phase = 'response'
             data = json.dumps({'event': command['op'], 'result': result}, separators=(',', ':')).encode()
             require(len(data) <= MAX, 'Debug response exceeds bound')
+            response_started = True
             sys.stdout.buffer.write(struct.pack('<I', len(data)) + data)
             sys.stdout.buffer.flush()
             if command['op'] == 'debug_close':
                 return
+    except Exception as error:
+        # A partially written response cannot safely be followed by another
+        # frame. Otherwise report the bounded failure before closing the pipe.
+        if not response_started:
+            failure = worker.failure or failure_record(error, operation, phase)
+            data = json.dumps({'event': 'debug_error', 'diagnostic': failure},
+                              separators=(',', ':')).encode()
+            try:
+                require(len(data) <= 512, 'Debug error exceeds bound')
+                sys.stdout.buffer.write(struct.pack('<I', len(data)) + data)
+                sys.stdout.buffer.flush()
+            except Exception:
+                pass
+        raise
     finally:
-        worker.close()
+        try:
+            worker.close()
+        except BaseException:
+            pass
 
 
 if __name__ == '__main__':
     try:
         main()
     except Exception:
-        # Exceptions can contain USB payloads. The supervisor reports a generic
-        # failed operation; never copy exceptions or credentials to stderr.
+        # Safe detail uses the framed native channel, never raw stderr.
         sys.exit(1)

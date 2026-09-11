@@ -3,7 +3,6 @@ use crate::{
     adapter::{UsbLease, Worker},
     dependencies,
     frontend::{Choice, Ui},
-    network,
     public_inputs::{create, hex},
     session::{self, SessionGuard},
 };
@@ -15,7 +14,103 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
+
+#[derive(Debug, Serialize)]
+struct DebugFailure {
+    operation: String,
+    phase: String,
+    category: String,
+    errno: Option<i64>,
+    backend_error_code: Option<i64>,
+}
+impl std::fmt::Display for DebugFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Wi-Fi debug {} stopped: {} during {} (errno {:?}, backend {:?}); session preserved",
+            self.operation, self.category, self.phase, self.errno, self.backend_error_code
+        )
+    }
+}
+impl std::error::Error for DebugFailure {}
+impl DebugFailure {
+    fn safe(operation: &str, value: &Value) -> Self {
+        let operation = match operation {
+            "debug_open" | "stage_status" | "debug_status" | "debug_retry" | "debug_close" => {
+                operation
+            }
+            _ => "unknown",
+        };
+        let phase = match value["phase"].as_str().unwrap_or("") {
+            v @ ("request"
+            | "attach"
+            | "status"
+            | "identity"
+            | "diagnostic-read"
+            | "diagnostic-parse"
+            | "diagnostic-contract"
+            | "retry"
+            | "close"
+            | "response") => v,
+            _ => "ipc",
+        };
+        let category = match value["category"].as_str().unwrap_or("") {
+            v @ ("USBError" | "USBTimeoutError" | "OSError" | "TimeoutError" | "ContractError"
+            | "DecodeError" | "WorkerError") => v,
+            _ => "WorkerUnavailable",
+        };
+        let code = |key: &str| value[key].as_i64().filter(|v| (-65536..=65536).contains(v));
+        Self {
+            operation: operation.into(),
+            phase: phase.into(),
+            category: category.into(),
+            errno: code("errno"),
+            backend_error_code: code("backend_error_code"),
+        }
+    }
+}
+
+// Deliberately separate from the normal installer RPC: debug failures carry
+// only reviewed fields, poison the worker, and never trigger retry/reconnect.
+fn debug_rpc(worker: &mut Worker, operation: &str, payload: Value) -> Result<Value> {
+    worker
+        .operation(Duration::from_secs(75), |w| {
+            w.send(&json!({"op":operation,"payload":payload}))?;
+            let event = w.event()?;
+            if event["event"] == "debug_error" {
+                ensure!(
+                    serde_json::to_vec(&event)?.len() <= 512,
+                    "oversized debug error"
+                );
+                ensure!(
+                    event["diagnostic"]["operation"] == operation,
+                    "mismatched debug operation"
+                );
+                return Err(DebugFailure::safe(operation, &event["diagnostic"]).into());
+            }
+            ensure!(event["event"] == operation, "unexpected debug event");
+            Ok(event["result"].clone())
+        })
+        .map_err(|error| {
+            if error.is::<DebugFailure>() {
+                error
+            } else {
+                // Pipe closure, malformed framing, or unknown worker errors must
+                // not leak arbitrary bytes through anyhow's error chain.
+                DebugFailure::safe(operation, &Value::Null).into()
+            }
+        })
+}
+
+fn stopped_evidence(error: &anyhow::Error) -> Value {
+    let mut evidence = json!({"event":"debug_stopped","storage_workflow":false});
+    if let Some(failure) = error.downcast_ref::<DebugFailure>() {
+        evidence["diagnostic"] = serde_json::to_value(failure).expect("safe debug fields");
+    }
+    evidence
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -301,20 +396,20 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
         .current_dir(session.path());
     let mut worker = Worker::spawn(&mut command)?;
     let result = (|| {
-        network::rpc(
+        debug_rpc(
             &mut worker,
             "debug_open",
             json!({"bus":config.bus,"ports":config.ports,"wait_seconds":if config.transition.is_some() {60} else {0},
             "libusb":dependencies::python_path(&libusb)?}),
         )?;
         loop {
-            let raw = network::rpc(&mut worker, "stage_status", Value::Null)?;
+            let raw = debug_rpc(&mut worker, "stage_status", Value::Null)?;
             let status = status_summary(&raw)?;
             session.checkpoint(&json!({"event":"debug_status","result":status}))?;
             if config.expected_stage == "wifi-debug-v1" {
                 require_debug_identity(&raw)?;
                 let diagnostic =
-                    diagnostic_summary(&network::rpc(&mut worker, "debug_status", Value::Null)?)?;
+                    diagnostic_summary(&debug_rpc(&mut worker, "debug_status", Value::Null)?)?;
                 session
                     .checkpoint(&json!({"event":"wifi_startup_diagnostic","result":diagnostic}))?;
                 let can_retry = diagnostic["generation"].as_u64().unwrap() < 8
@@ -350,7 +445,7 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
                 }
                 if choice == 1 {
                     session.checkpoint(&json!({"event":"wifi_retry_requested","generation":diagnostic["generation"]}))?;
-                    network::rpc(&mut worker, "debug_retry", Value::Null)?;
+                    debug_rpc(&mut worker, "debug_retry", Value::Null)?;
                     session.checkpoint(&json!({"event":"wifi_retry_accepted","generation":diagnostic["generation"]}))?;
                 }
                 continue;
@@ -375,12 +470,12 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
                 break;
             }
         }
-        network::rpc(&mut worker, "debug_close", Value::Null)?;
+        debug_rpc(&mut worker, "debug_close", Value::Null)?;
         session.checkpoint(&json!({"event":"debug_closed","storage_workflow":false}))?;
         Ok(())
     })();
-    if result.is_err() {
-        let _ = session.checkpoint(&json!({"event":"debug_stopped","storage_workflow":false}));
+    if let Err(error) = &result {
+        let _ = session.checkpoint(&stopped_evidence(error));
     }
     result
 }
@@ -388,6 +483,94 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn actual_worker_boundary_preserves_safe_failures_and_poisoning() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_wifi_debug_boundary.py");
+        for (case, category, operation) in [
+            ("transport", "USBError", "stage_status"),
+            ("cleanup", "USBError", "stage_status"),
+            ("identity", "ContractError", "debug_status"),
+            ("json", "DecodeError", "debug_status"),
+            ("valid", "", "debug_status"),
+        ] {
+            let mut command = Command::new("python3");
+            command.args(["-B"]).arg(&script).args(["--fixture", case]);
+            let mut worker = Worker::spawn(&mut command).unwrap();
+            debug_rpc(
+                &mut worker,
+                "debug_open",
+                json!({"bus":1,"ports":[1],"libusb":"/fake","wait_seconds":0}),
+            )
+            .unwrap();
+            let result = debug_rpc(&mut worker, operation, Value::Null);
+            if case == "valid" {
+                let value = diagnostic_summary(&result.unwrap()).unwrap();
+                assert_eq!(value["generation"], 2);
+                assert_eq!(value["status"]["status"], "initializing");
+                debug_rpc(&mut worker, "debug_close", Value::Null).unwrap();
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains(category));
+                assert!(!error.to_string().contains("SECRET"));
+                let evidence = stopped_evidence(&error);
+                assert_eq!(evidence["diagnostic"]["operation"], operation);
+                assert_eq!(evidence["diagnostic"]["category"], category);
+                if category == "USBError" {
+                    assert_eq!(evidence["diagnostic"]["errno"], 19);
+                    assert_eq!(evidence["diagnostic"]["backend_error_code"], -4);
+                }
+                // Persist through the real private session writer, not just UI formatting.
+                let root = tempfile::tempdir().unwrap();
+                let parent = root.path().join("private");
+                session::create_private_parent(&parent).unwrap();
+                let mut session = SessionGuard::create(&parent.join("boundary")).unwrap();
+                session.checkpoint(&evidence).unwrap();
+                let saved = std::fs::read(session.path().join("event-00001.json")).unwrap();
+                let saved: Value = serde_json::from_slice(&saved).unwrap();
+                assert_eq!(saved["evidence"], evidence);
+                assert!(!saved.to_string().contains("SECRET"));
+                assert!(worker
+                    .operation(Duration::from_secs(1), |_| Ok(()))
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn debug_rpc_rejects_untrusted_failure_frames_without_leaking_text() {
+        let emit = "import sys,struct; n=struct.unpack('<I',sys.stdin.buffer.read(4))[0]; sys.stdin.buffer.read(n); b=sys.argv[1].encode(); sys.stdout.buffer.write(struct.pack('<I',len(b))+b); sys.stdout.buffer.flush()";
+        for frame in [
+            json!({"event":"debug_error","diagnostic":{"operation":"debug_open","category":"SECRET","phase":"/private/SECRET","errno":true,"message":"SECRET"}}).to_string(),
+            json!({"event":"debug_error","diagnostic":{"operation":"stage_status","category":"USBError"}}).to_string(),
+            json!({"event":"debug_error","diagnostic":{"operation":"debug_open","category":"USBError","extra":"SECRET".repeat(200)}}).to_string(),
+            "{SECRET".into(),
+        ] {
+            let mut command = Command::new("python3");
+            command.args(["-B", "-c", emit, &frame]);
+            let mut worker = Worker::spawn(&mut command).unwrap();
+            let error = debug_rpc(&mut worker, "debug_open", Value::Null).unwrap_err();
+            assert!(error.to_string().contains("WorkerUnavailable"));
+            assert!(!error.to_string().contains("SECRET"));
+            assert!(!stopped_evidence(&error).to_string().contains("SECRET"));
+            assert!(worker.operation(Duration::from_secs(1), |_| Ok(())).is_err());
+        }
+    }
+
+    #[test]
+    fn failure_display_and_evidence_are_bounded_and_allowlisted() {
+        let error = DebugFailure::safe(
+            "stage_status",
+            &json!({
+            "operation":"SECRET", "phase":"/private/SECRET", "category":"SECRET".repeat(1000),
+            "errno":true,"backend_error_code":65537,"message":"SECRET"}),
+        );
+        assert_eq!(error.operation, "stage_status");
+        assert_eq!(error.phase, "ipc");
+        assert_eq!(error.category, "WorkerUnavailable");
+        let text = error.to_string();
+        assert!(!text.contains("SECRET") && text.len() < 256);
+        assert!(error.errno.is_none() && error.backend_error_code.is_none());
+    }
     #[test]
     fn debug_identity_and_diagnostics_are_required_before_actions() {
         assert!(require_debug_identity(&json!({"status":"ready","provisioned":false})).is_err());
