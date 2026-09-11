@@ -527,6 +527,7 @@ mod tests {
         assert_eq!(value["stage_kind"], "private-ram-wifi-debug-stage");
         assert_eq!(value["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         assert_eq!(value["debug_protocol"], 1);
+        assert_eq!(value["status"]["provisioned"], false);
         assert_eq!(value["log"].as_str().unwrap().len(), 4096);
         assert!(raw.len() <= 4608);
         let ordinary: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
@@ -539,6 +540,7 @@ mod tests {
         );
         assert_eq!(ordinary["debug_protocol"], 1);
         assert_eq!(ordinary["scan"], false);
+        assert_eq!(ordinary["provisioned"], false);
         fs::remove_dir_all(root).unwrap();
     }
 }
