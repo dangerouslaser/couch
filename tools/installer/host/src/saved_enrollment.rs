@@ -452,11 +452,13 @@ fn import_checked(
     }
     crate::session::sync_private_directory(&root)?;
     destination.checkpoint(&json!({"event":"android_enrollment_imported","enrollment_sha256":checksum,"live_hardware_rebound":false}))?;
+    let retained_sha256 =
+        BTreeMap::from([("odmdtbo".into(), record.originals["odmdtbo"].sha256.clone())]);
     Ok(SavedEnrollment {
         record,
         root,
         sha256: checksum,
-        retained_sha256: BTreeMap::new(),
+        retained_sha256,
         provenance: "native-android-enrollment",
     })
 }
@@ -537,7 +539,11 @@ mod tests {
             cid_encoding: "mt6580-legacy-le32-registers".into(),
             partitions: record.partitions.clone(),
             identity_sha256: record.identity_sha256.clone(),
-            retained_sha256: BTreeMap::new(),
+            retained_sha256: record
+                .originals
+                .get("odmdtbo")
+                .map(|entry| BTreeMap::from([("odmdtbo".into(), entry.sha256.clone())]))
+                .unwrap_or_default(),
         }
     }
     #[test]
@@ -560,7 +566,7 @@ mod tests {
     }
     #[test]
     fn imported_metadata_cannot_bind_another_device_or_changed_calibration() {
-        for changed in 0..4 {
+        for changed in 0..6 {
             let root = private_root();
             let mut session = SessionGuard::create(&root.path().join("new")).unwrap();
             let record = record();
@@ -571,13 +577,23 @@ mod tests {
                     live.identity_sha256.insert("nvram".into(), "b".repeat(64));
                 }
                 3 => live.partitions.get_mut("userdata").unwrap().size -= 4096,
+                4 => {
+                    live.retained_sha256.clear();
+                }
+                5 => {
+                    live.retained_sha256
+                        .insert("odmdtbo".into(), "b".repeat(64));
+                }
                 _ => {}
             };
             let saved = SavedEnrollment {
+                retained_sha256: BTreeMap::from([(
+                    "odmdtbo".into(),
+                    record.originals["odmdtbo"].sha256.clone(),
+                )]),
                 record,
                 root: root.path().join("saved"),
                 sha256: "a".repeat(64),
-                retained_sha256: BTreeMap::new(),
                 provenance: "fixture",
             };
             assert_eq!(saved.rebind(&live, &mut session).is_ok(), changed == 0);
