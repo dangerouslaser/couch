@@ -110,10 +110,14 @@ fn installer(args: &[std::ffi::OsString]) -> Result<()> {
     use couch_installer_host::frontend::Ui;
     let mut config = None;
     let mut local_payload = None;
+    let mut wifi_debug = None;
     let mut events = false;
     let mut index = 0;
     while index < args.len() {
-        if args[index] == "--config" && config.is_none() && index + 1 < args.len() {
+        if args[index] == "--wifi-debug" && wifi_debug.is_none() && index + 1 < args.len() {
+            wifi_debug = Some(PathBuf::from(&args[index + 1]));
+            index += 2;
+        } else if args[index] == "--config" && config.is_none() && index + 1 < args.len() {
             config = Some(PathBuf::from(&args[index + 1]));
             index += 2;
         } else if args[index] == "--local-payload"
@@ -137,18 +141,49 @@ fn installer(args: &[std::ffi::OsString]) -> Result<()> {
         }
     }
     anyhow::ensure!(events, "private installer event channel missing");
+    anyhow::ensure!(
+        wifi_debug.is_none() || (config.is_none() && local_payload.is_none()),
+        "debug attachment cannot be combined with installer inputs"
+    );
     #[cfg(unix)]
     let mut ui = Ui::inherited_socket(3)?;
     #[cfg(windows)]
     let mut ui = Ui::stdio();
-    let result = couch_installer_host::orchestrator::run(
-        &mut ui,
-        config.as_deref(),
-        local_payload.as_deref(),
-    );
+    let result = if let Some(path) = wifi_debug {
+        couch_installer_host::wifi_debug::run(&mut ui, &path)
+    } else {
+        couch_installer_host::orchestrator::run(
+            &mut ui,
+            config.as_deref(),
+            local_payload.as_deref(),
+        )
+    };
     if let Err(error) = &result {
         let _ = ui.error(&error.to_string());
     }
     let _ = ui.finish(if result.is_ok() { 0 } else { 1 });
     result
+}
+
+#[cfg(test)]
+mod debug_argument_tests {
+    #[test]
+    fn debug_and_installer_inputs_are_rejected_before_opening_event_channel() {
+        for installer_option in ["--config", "--local-payload"] {
+            let mut args = vec!["--wifi-debug", "debug.json", installer_option, "unused"];
+            if cfg!(unix) {
+                args.extend(["--events-fd", "3"]);
+            } else {
+                args.push("--events-stdio");
+            }
+            let args = args
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+            assert!(super::installer(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be combined"));
+        }
+    }
 }

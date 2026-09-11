@@ -227,6 +227,65 @@ fn file_inventory(root: &Path) -> Result<BTreeMap<String, Blob>> {
     visit(root, root, &mut files, &mut 0)?;
     Ok(files)
 }
+
+/// Reuse an independently pinned, already prepared runtime without downloading
+/// anything or opening USB. Debug attachment needs only Python and libusb.
+pub fn debug_runtime(root: &Path, receipt_sha256: &str) -> Result<(PathBuf, PathBuf)> {
+    ensure!(
+        fs::symlink_metadata(root)?.is_dir(),
+        "expected runtime directory"
+    );
+    let receipt = verified_receipt(&root.join("runtime.json"), receipt_sha256)?;
+    ensure!(
+        receipt["schema"] == 1
+            && receipt["kind"] == "couch-owner-mtk-runtime"
+            && receipt["complete"] == true
+            && receipt["platform"] == host_platform()?,
+        "invalid debug runtime receipt"
+    );
+    let expected: BTreeMap<String, Blob> = serde_json::from_value(receipt["files"].clone())?;
+    let mut actual = file_inventory(root)?;
+    actual.remove("runtime.json");
+    ensure!(actual == expected, "debug runtime files changed");
+    let mut paths = Vec::new();
+    for name in [
+        receipt["executables"]["python"].as_str(),
+        receipt["native_libraries"]["libusb"].as_str(),
+    ] {
+        let name = name.context("missing debug runtime executable/library")?;
+        safe_name(name)?;
+        ensure!(
+            expected.contains_key(name),
+            "runtime entrypoint is not inventoried"
+        );
+        paths.push(root.join(name));
+    }
+    Ok((paths.remove(0), paths.remove(0)))
+}
+
+#[cfg(test)]
+mod debug_runtime_tests {
+    use super::*;
+    #[test]
+    fn debug_runtime_rechecks_pin_and_files_without_executing_them() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("python"), b"inert fixture").unwrap();
+        fs::write(root.path().join("libusb"), b"inert library").unwrap();
+        let receipt = json!({"schema":1,"kind":"couch-owner-mtk-runtime","complete":true,
+            "platform":host_platform().unwrap(),"files":file_inventory(root.path()).unwrap(),
+            "executables":{"python":"python"},"native_libraries":{"libusb":"libusb"}});
+        let data = serde_json::to_vec(&receipt).unwrap();
+        fs::write(root.path().join("runtime.json"), &data).unwrap();
+        let pin = digest(&data);
+        assert_eq!(
+            debug_runtime(root.path(), &pin).unwrap(),
+            (root.path().join("python"), root.path().join("libusb"))
+        );
+        assert!(debug_runtime(root.path(), &"0".repeat(64)).is_err());
+        fs::write(root.path().join("python"), b"changed executable").unwrap();
+        assert!(debug_runtime(root.path(), &pin).is_err());
+    }
+}
 fn verified_download(
     client: &Client,
     pin: &Download,

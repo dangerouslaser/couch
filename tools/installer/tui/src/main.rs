@@ -730,7 +730,11 @@ impl Worker {
                 "--python" => python = Some(value.clone()),
                 "--backend" => backend = Some(value.clone()),
                 "--native-backend" => native_backend = Some(value.clone()),
-                "--config" | "--local-payload" | "--wifi-retry-from" | "--wifi-restore-from" => {
+                "--config"
+                | "--local-payload"
+                | "--wifi-retry-from"
+                | "--wifi-restore-from"
+                | "--wifi-debug" => {
                     forwarded.push(name.clone());
                     forwarded.push(value.clone());
                 }
@@ -1080,6 +1084,38 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires COUCH_NATIVE_HOST_TEST built from the host workspace"]
+    fn native_debug_entrypoint_never_opens_installer_menu() {
+        let executable = std::env::var("COUCH_NATIVE_HOST_TEST").expect("native host fixture path");
+        let missing =
+            std::env::temp_dir().join(format!("couch-missing-debug-config-{}", std::process::id()));
+        assert!(!missing.exists());
+        let worker = Worker::start(&[
+            "--native-backend".into(),
+            executable,
+            "--wifi-debug".into(),
+            missing.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        for _ in 0..8 {
+            let event = worker
+                .messages
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !matches!(event, Message::Prompt { .. }),
+                "debug path entered an installer prompt"
+            );
+            if let Message::Finished { code } = event {
+                assert_ne!(code, 0);
+                return;
+            }
+        }
+        panic!("debug host did not report its configuration failure");
+    }
+
     #[test]
     #[ignore = "requires COUCH_NATIVE_HOST_TEST built from the host workspace"]
     fn native_private_channel_roundtrip_and_cancel() {
