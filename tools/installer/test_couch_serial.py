@@ -12,7 +12,7 @@ class SerialTests(unittest.TestCase):
         writes, pending = [], bytearray()
         def write(data, **kwargs):
             writes.append(data)
-            if data == b'\nsync; reboot\n':
+            if data == b'\n/bin/busybox sync; /bin/busybox reboot -f\n':
                 return 1 if reboot_short else len(data)
             marker = re.search(rb'COUCH_[0-9a-f]{32}', data).group()
             pending.extend(data if query_echo else b'\n' + marker + b':' + cid.encode() + b':END\r\n')
@@ -29,7 +29,7 @@ class SerialTests(unittest.TestCase):
     def test_matching_nonce_cid_allows_one_fixed_reboot(self):
         serial, writes = self.fixture()
         serial.restart('1'*32)
-        self.assertEqual(writes[-1], b'\nsync; reboot\n')
+        self.assertEqual(writes[-1], b'\n/bin/busybox sync; /bin/busybox reboot -f\n')
         with self.assertRaises(InstallError): serial.restart('1'*32)
         self.assertEqual(len(writes), 2)
 

@@ -80,7 +80,7 @@ class CouchSerial:
         # Consume before the one write. An exception or short write is ambiguous:
         # propagate it as a hard failure, never offer an automatic second attempt.
         self.attempted = True
-        reboot = b'\nsync; reboot\n'
+        reboot = b'\n/bin/busybox sync; /bin/busybox reboot -f\n'
         require(self.outgoing.write(reboot, timeout=1000) == len(reboot),
                 'Couch reboot delivery ambiguous; do not retry automatically')
 
