@@ -85,3 +85,5 @@ inputs supply separately built ARM binaries. See the maintained RAM-stage
 No build command accesses hardware. Physical fresh installation, reinstall,
 rollback, interrupted-operation recovery and target filesystem expansion remain
 separate acceptance tests; fixture tests alone do not establish them.
+
+Supplicant startup failures before credential entry retain at most the last 4096 bytes of startup output in the RAM-stage diagnostic stream. After the empty-network supplicant becomes ready, its output stays private in RAM and is not copied into that stream. Host errors distinguish an initialization failure (with an allowlisted reason) from an already-provisioned stage.

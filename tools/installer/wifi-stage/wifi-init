@@ -3,6 +3,7 @@
 BB=/bin/busybox
 umask 077
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+starting_supplicant=0
 echo initializing > /tmp/couch-wifi.status
 step() {
     echo "$1" > /tmp/couch-wifi.step
@@ -12,6 +13,11 @@ fail() {
     echo "$1" > /tmp/couch-wifi.error
     echo failed > /tmp/couch-wifi.status
     echo "WiFi failed: $1" >> /tmp/probe.log
+    if [ "$starting_supplicant" = 1 ]; then
+        # Only startup output from the empty-network configuration is exposed.
+        # Once ready, provisioning may include secrets and logs stay RAM-private.
+        $BB tail -c 4096 /tmp/couch-wpa-startup.log >> /tmp/probe.log 2>/dev/null
+    fi
     exit 1
 }
 step detect
@@ -67,7 +73,8 @@ done
 $BB ifconfig wlan0 up || fail interface-up
 # Start one supplicant with no networks. Scans and provisioning share its PID.
 printf 'ctrl_interface=/tmp/couch-wpa\nupdate_config=0\n' > /tmp/couch-wpa_supplicant.conf
-/sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf >/dev/null 2>&1 &
+starting_supplicant=1
+/sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf >/tmp/couch-wpa-startup.log 2>&1 &
 supplicant=$!
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
@@ -75,6 +82,7 @@ while [ ! -S /tmp/couch-wpa/wlan0 ]; do
     [ "$n" -lt 10 ] || fail supplicant-exit
     $BB sleep 1; n=$((n+1))
 done
+starting_supplicant=0
 step credentials
 echo ready > /tmp/couch-wifi.status
 while true; do

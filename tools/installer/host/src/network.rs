@@ -34,9 +34,31 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
         )?;
         let status = rpc(worker, "stage_status", Value::Null)?;
         ensure!(
-            status["status"] != "failed" && status["provisioned"] != true,
-            "Wi-Fi stage failed or was already provisioned"
+            status["provisioned"] != true,
+            "Wi-Fi stage was already provisioned"
         );
+        if status["status"] == "failed" {
+            let reason = status["error"]
+                .as_str()
+                .filter(|v| {
+                    matches!(
+                        *v,
+                        "detect-node"
+                            | "loader-exit"
+                            | "transport-node"
+                            | "wifi-node"
+                            | "launcher-exit"
+                            | "transport-timeout"
+                            | "power-on"
+                            | "interface-timeout"
+                            | "interface-up"
+                            | "dhcp-exit"
+                            | "supplicant-exit"
+                    )
+                })
+                .unwrap_or("unknown");
+            anyhow::bail!("Remote Wi-Fi initialization failed: {reason}");
+        }
         if status["status"] == "ready" {
             return Ok(());
         }
