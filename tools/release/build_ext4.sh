@@ -29,3 +29,9 @@ MK=/tmp/tools/sbin
     -d /tmp/root /out/userdata.ext4 "$BLOCKS" > /out/mke2fs.txt 2>&1
 "$MK/e2fsck" -fn /out/userdata.ext4 > /out/e2fsck.txt 2>&1
 /tmp/tools/usr/sbin/dumpe2fs -h /out/userdata.ext4 > /out/superblock.txt 2>&1
+
+if [ "${4:-full}" = compact ]; then
+    /tmp/tools/usr/sbin/resize2fs -M /out/userdata.ext4 > /out/compact.txt 2>&1
+    "$MK/e2fsck" -fn /out/userdata.ext4 >> /out/compact.txt 2>&1
+    /tmp/tools/usr/sbin/dumpe2fs -h /out/userdata.ext4 > /out/superblock.txt 2>&1
+fi

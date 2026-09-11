@@ -3,7 +3,8 @@ on:
   pull_request:
     paths:
       - 'tools/installer/host/**'
-      - 'tools/release/ha100_official_runtime.json'
+      - 'tools/release/**'
+      - 'tools/installer/linux_stage/**'
       - '.github/workflows/installer-native-host.yml'
   workflow_dispatch:
     inputs:
@@ -59,3 +60,19 @@ jobs:
           assert len(result['files']) == 33 and result['installable'] is False
           print('Native owner-side extraction verified: 33 files; no device access.')
           # No OTA, vendor input, private directory or output is uploaded.
+
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install regular-image fixture tools
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
+      - name: Check private stage and neutral payload builders
+        run: |
+          cargo fmt --manifest-path tools/installer/linux_stage/probe/Cargo.toml --check
+          cargo test --locked --manifest-path tools/installer/linux_stage/probe/Cargo.toml --features private-install
+          python3 -m unittest discover -s tools/release -p 'test_*.py'

@@ -256,6 +256,7 @@ fn no_mounts_or_holders() -> io::Result<()> {
     Ok(())
 }
 pub struct Disk {
+    vendor: Option<super::vendor::Inputs>,
     network: Option<zeroize::Zeroizing<Vec<u8>>>,
     expected: Identity,
     identity_hashes: BTreeMap<String, String>,
@@ -270,6 +271,7 @@ impl Disk {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         let mut disk = Self {
             network: None,
+            vendor: None,
             expected,
             identity_hashes,
             nodes: BTreeMap::new(),
@@ -278,6 +280,14 @@ impl Disk {
         };
         disk.refresh()?;
         Ok(disk)
+    }
+    pub(super) fn receive_vendor(
+        &mut self,
+        stream: &mut (impl std::io::Read + std::io::Write),
+    ) -> io::Result<()> {
+        ensure(self.vendor.is_none(), "vendor inputs already set")?;
+        self.vendor = Some(super::vendor::receive(stream, &self.root)?);
+        Ok(())
     }
     pub(super) fn configure_network(
         &mut self,
@@ -449,6 +459,12 @@ impl Storage for Disk {
         drop(guard);
         fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
         self.refresh()?;
+        if let Some(vendor) = self.vendor.take() {
+            vendor.configure(&path)?;
+            self.refresh()?;
+            self.file("userdata", false, false)?.sync_all()?;
+            fs_tool("/sbin/e2fsck", &["-fn"], &path, None)?;
+        }
         if let Some(network) = self.network.take() {
             super::network::configure(&path, &self.root, &network)?;
             self.refresh()?;
@@ -460,6 +476,7 @@ impl Storage for Disk {
         self.refresh()
     }
     fn abort(&mut self) {
+        self.vendor.take();
         self.network.take();
         self.writer.take();
     }

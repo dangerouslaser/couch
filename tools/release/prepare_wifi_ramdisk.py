@@ -115,6 +115,8 @@ def vendor_files(bundle):
                 (path.startswith('vendor/firmware/') and PurePosixPath(path).name in FIRMWARE) or path.endswith('property_contexts') or
                 path == 'system/etc/ld.config.txt'):
             selected[path] = regular(bundle / path)
+    require(set(selected) == set(json.loads(regular(REPO / "tools/release/ha100_ram_runtime.json"))),
+            "Audited WMT closure differs from native compiled RAM subset")
     require('vendor/bin/wmt_loader' in selected and 'vendor/bin/wmt_launcher' in selected,
             'Missing WMT executables')
     return selected
@@ -156,11 +158,7 @@ def ramdisk(files):
     return bytes(output)
 
 
-def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cache, output, installer=False, display=None, wmt_properties=None, filesystem_cache=None):
-    require(not output.exists() and not output.resolve().is_relative_to(REPO), 'New private output required')
-    original = regular(template)
-    metadata, pin = json.loads(regular(kernel_manifest)), json.loads(regular(PIN))
-    verify(original, metadata, pin)
+def neutral_files(busybox, service, apk_cache, installer=False, display=None, wmt_properties=None, filesystem_cache=None):
     files, apk_hash = alpine_files(apk_cache)
     fs_hash = None
     if filesystem_cache is not None:
@@ -171,7 +169,6 @@ def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cach
             files[name] = data
     if installer:
         require(filesystem_cache is not None, 'Installer requires offline filesystem expansion tools')
-    files.update(vendor_files(vendor_bundle))
     bb, binary = regular(busybox), regular(service)
     arm_static(bb); arm_static(binary)
     require((b'COUCH_PRIVATE_WIFI_INSTALLER_V1' in binary) == installer,
@@ -190,6 +187,16 @@ def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cach
         files['bin/couch-installer-display'] = pixels
     for source, target in (('init', 'init'), ('wifi-init', 'bin/couch-wifi-init'), ('dhcp', 'bin/couch-dhcp')):
         files[target] = regular(REPO / 'tools/installer/wifi-stage' / source)
+    return files, apk_hash, fs_hash
+
+
+def prepare(template, kernel_manifest, busybox, service, vendor_bundle, apk_cache, output, installer=False, display=None, wmt_properties=None, filesystem_cache=None):
+    require(not output.exists() and not output.resolve().is_relative_to(REPO), 'New private output required')
+    original = regular(template)
+    metadata, pin = json.loads(regular(kernel_manifest)), json.loads(regular(PIN))
+    verify(original, metadata, pin)
+    files, apk_hash, fs_hash = neutral_files(busybox, service, apk_cache, installer, display, wmt_properties, filesystem_cache)
+    files.update(vendor_files(vendor_bundle))
     raw = ramdisk(files)
     cpio_files(raw)
     compressed = gzip.compress(raw, mtime=0)
