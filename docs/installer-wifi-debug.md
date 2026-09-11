@@ -48,6 +48,11 @@ diagnostics (opcode 8) or an explicit startup retry (opcode 9). Both requests
 have empty payloads. The worker repeats the identity check for each operation.
 The dedicated debug stage must reject provisioning: this host never prompts
 for credentials or sends provisioning, plan-binding, or install opcodes.
+Opcode 8 must identify `stage_kind: "private-ram-wifi-debug-stage"`,
+`capability: "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"`, `debug_protocol: 1`, and
+`precredential: true`, with a nested status satisfying the same debug identity
+gate. Generic status, scan flags and USB descriptor text do not grant debug
+capability. Missing or mismatched identity/version fields close the attachment.
 
 Each run creates a new private `wifi-debug-*` session beneath the usual native
 installer state root, retaining the same USB lease until it closes. Status,

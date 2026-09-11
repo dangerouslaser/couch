@@ -141,9 +141,13 @@ fn require_debug_identity(status: &Value) -> Result<()> {
 
 fn diagnostic_summary(value: &Value) -> Result<Value> {
     ensure!(
-        value["precredential"] == true,
-        "diagnostics are not pre-credential"
+        value["stage_kind"] == "private-ram-wifi-debug-stage"
+            && value["capability"] == "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
+            && value["debug_protocol"].as_u64() == Some(1)
+            && value["precredential"] == true,
+        "expected versioned pre-credential debug diagnostics"
     );
+    require_debug_identity(&value["status"])?;
     let status = status_summary(&value["status"])?;
     ensure!(
         status["provisioned"] == false,
@@ -157,7 +161,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
     ensure!(
         matches!(
             step,
-            "unknown" | "detect" | "loader" | "transport" | "power" | "credentials" | "connect"
+            "unknown" | "detect" | "loader" | "transport" | "power"
         ),
         "invalid diagnostic step"
     );
@@ -331,6 +335,7 @@ mod tests {
             "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"});
         assert!(require_debug_identity(&status).is_ok());
         let mut diagnostic = json!({"status":status,"generation":1,"step":"power",
+            "stage_kind":"private-ram-wifi-debug-stage", "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
             "precredential":true,"log":"message\u{001b}\u{202e}\nnext"});
         assert_eq!(
             diagnostic_summary(&diagnostic).unwrap()["log"],
@@ -340,6 +345,38 @@ mod tests {
         assert!(diagnostic_summary(&diagnostic).is_err());
         status["provisioned"] = json!(true);
         assert!(require_debug_identity(&status).is_err());
+    }
+    #[test]
+    fn generic_or_mismatched_diagnostic_schema_is_rejected() {
+        let diagnostic = json!({"stage_kind":"private-ram-wifi-debug-stage",
+            "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
+            "precredential":true, "generation":1, "step":"power", "log":"",
+            "status":{"status":"ready", "provisioned":false, "wifi_debug":true,
+                "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"}});
+        assert!(diagnostic_summary(&diagnostic).is_ok());
+        for key in [
+            "stage_kind",
+            "capability",
+            "debug_protocol",
+            "precredential",
+        ] {
+            let mut invalid = diagnostic.clone();
+            invalid.as_object_mut().unwrap().remove(key);
+            assert!(diagnostic_summary(&invalid).is_err());
+        }
+        for (key, replacement) in [
+            ("stage_kind", json!("benchmark")),
+            ("capability", json!("generic")),
+            ("debug_protocol", json!(true)),
+            ("debug_protocol", json!(2)),
+            ("precredential", json!(false)),
+            ("step", json!("credentials")),
+            ("status", json!({"status":"ready", "provisioned":false})),
+        ] {
+            let mut invalid = diagnostic.clone();
+            invalid[key] = replacement;
+            assert!(diagnostic_summary(&invalid).is_err());
+        }
     }
     #[test]
     fn status_receipt_drops_untrusted_and_private_fields() {

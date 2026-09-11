@@ -84,8 +84,13 @@ class DebugWorker:
                 if op == 'debug_retry':
                     return {'accepted': True}
                 value = json.loads(raw)
-                require(isinstance(value, dict) and value.get('precredential') is True,
-                        'Expected pre-credential diagnostic record')
+                require(isinstance(value, dict)
+                        and value.get('stage_kind') == 'private-ram-wifi-debug-stage'
+                        and value.get('capability') == CAPABILITY
+                        and type(value.get('debug_protocol')) is int and value['debug_protocol'] == 1
+                        and value.get('precredential') is True
+                        and debug_identity(value.get('status')),
+                        'Expected versioned pre-credential debug diagnostic record')
                 return value
             return self.stage.dispatch(op, payload)
         except BaseException:

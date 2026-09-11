@@ -83,6 +83,27 @@ class DebugTests(unittest.TestCase):
         with self.assertRaises(InstallError):
             worker.dispatch({'op': 'debug_status', 'payload': None})
 
+    def test_diagnostics_require_exact_versioned_debug_schema(self):
+        status = {'status': 'ready', 'wifi_debug': True, 'capabilities': CAPABILITY, 'provisioned': False}
+        valid = {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
+                 'debug_protocol': 1, 'precredential': True, 'status': status}
+        cases = [(valid, True)]
+        for key in ('stage_kind', 'capability', 'debug_protocol', 'precredential'):
+            cases.append(({k: v for k, v in valid.items() if k != key}, False))
+        for key, value in (('stage_kind', 'benchmark'), ('capability', 'wrong'),
+                           ('debug_protocol', True), ('debug_protocol', 2),
+                           ('precredential', False), ('status', {'provisioned': False})):
+            cases.append(({**valid, key: value}, False))
+        for response, accepted in cases:
+            worker, calls = self.fixture()
+            self.open(worker)
+            worker.stage.dispatch = lambda *args: status
+            worker.stage.debug_request = lambda opcode: json.dumps(response).encode()
+            if accepted:
+                self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None}), valid)
+            else:
+                with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
+
 
 if __name__ == '__main__':
     unittest.main()
