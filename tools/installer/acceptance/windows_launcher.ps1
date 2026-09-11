@@ -31,7 +31,7 @@ try {
     if (-not $server.WaitForExit(10000) -or $server.ExitCode -ne 0) { throw 'HTTPS fixture failed' }
     $requests = Get-Content -Raw "$Candidate\requests.json" | ConvertFrom-Json
     if ($requests.Count -ne 3) { throw 'Unexpected downloader activity' }
-    if ((Get-ChildItem -Force $env:TEMP).Count -ne 0 -or (Test-Path "$env:LOCALAPPDATA\CouchInstaller")) { throw 'Launcher left temporary files or created a session' }
+    if (@(Get-ChildItem -Force $env:TEMP).Count -ne 0 -or (Test-Path "$env:LOCALAPPDATA\CouchInstaller")) { throw 'Launcher left temporary files or created a session' }
 } finally {
     $env:LOCALAPPDATA = $oldLocal; $env:TEMP = $oldTemp; $env:TMP = $oldTmp
     if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }

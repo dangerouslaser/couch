@@ -36,6 +36,28 @@ class AdmissionTests(unittest.TestCase):
             self.assertTrue(result['cancel_selected'])
             self.assertFalse(result['session_created'])
 
+    @unittest.skipUnless(os.name == 'nt' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted', 'Ephemeral hosted Windows HTTPS fixture')
+    def test_https_fixture_and_console_restore_runner_state(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root/'assets').mkdir(); (root/'launchers').mkdir()
+            for name in ('couch-installer-host-windows-x64.exe', 'couch-installer-tui-windows-x64.exe', 'installer.json'):
+                (root/'assets'/name).write_bytes(b'fixture')
+            script = '''$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Net.Http
+$client=[Net.Http.HttpClient]::new()
+foreach ($name in @('couch-installer-host-windows-x64.exe','couch-installer-tui-windows-x64.exe','installer.json')) {
+ $bytes=$client.GetByteArrayAsync("https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.24/$name").GetAwaiter().GetResult()
+ if ([Text.Encoding]::UTF8.GetString($bytes) -ne 'fixture') { throw 'Fixture bytes differ' }
+}
+$client.Dispose()
+[Console]::WriteLine('Reinstall existing Couch / Cancel')
+1..4 | ForEach-Object { $null=[Console]::ReadKey($true) }
+'''
+            (root/'launchers/install.ps1').write_text(script)
+            subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(Path(__file__).with_name('windows_launcher.ps1')),'-Candidate',str(root)],check=True,timeout=160)
+            self.assertTrue((root/'result.json').is_file())
+
     def test_symlinks_and_empty_artifacts_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'empty'; path.write_bytes(b'')
