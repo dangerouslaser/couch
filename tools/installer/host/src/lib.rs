@@ -1,4 +1,5 @@
 //! Native input preparation, dependency bootstrap, and supervised installer interfaces.
+pub mod android;
 pub mod assembly;
 pub mod dependencies;
 pub mod frontend;
