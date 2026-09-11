@@ -563,4 +563,18 @@ mod tests {
         assert_eq!(ordinary["provisioned"], false);
         fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(feature = "wifi-debug")]
+    #[test]
+    fn debug_feature_advertises_no_scan_or_provisioning() {
+        let root =
+            std::env::temp_dir().join(format!("couch-debug-status-mode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
+        assert_eq!(status["wifi_debug"], true);
+        assert_eq!(status["scan"], false);
+        assert_eq!(status["provisioned"], false);
+        assert_eq!(status["stage_network_config"], false);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

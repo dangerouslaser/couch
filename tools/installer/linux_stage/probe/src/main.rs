@@ -49,6 +49,11 @@ fn descriptors() -> Vec<u8> {
     out
 }
 fn strings() -> Vec<u8> {
+    #[cfg(feature = "wifi-debug")]
+    let text = b"Couch Wi-Fi debug stage\0";
+    #[cfg(all(not(feature = "wifi-debug"), feature = "private-install"))]
+    let text = b"Couch private Wi-Fi installer\0";
+    #[cfg(not(any(feature = "wifi-debug", feature = "private-install")))]
     let text = b"Couch read-only benchmark\0";
     let mut out = Vec::new();
     for n in [2u32, (18 + text.len()) as u32, 1, 1] {

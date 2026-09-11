@@ -198,7 +198,9 @@ zero-length USB-only requests:
 | 9 | empty acknowledgement | Request one fixed local restart of the credential-free Wi-Fi init sequence |
 
 Operation 0 remains the common `CBP1` hello and intentionally carries no
-identity. Before using either debug operation, a host queries operation 5 and
+wire identity. The debug binary's FunctionFS interface string and USB product
+label identify it as `Couch Wi-Fi debug stage` for operators, but a host must
+still query operation 5 and
 requires all of `wifi_debug: true`,
 `capabilities: "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"`,
 `stage_kind: "private-ram-wifi-debug-stage"`, and `debug_protocol: 1`.
