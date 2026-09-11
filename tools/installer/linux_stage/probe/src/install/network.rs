@@ -51,7 +51,7 @@ impl Network {
     }
 }
 
-fn debugfs(args: &[&str], image: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+pub(super) fn debugfs(args: &[&str], image: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
     let mut child = Command::new("/usr/sbin/debugfs")
         .args(args)
         .arg(image)

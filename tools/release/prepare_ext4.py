@@ -70,7 +70,7 @@ def validate_image(path, size):
             'Unexpected filesystem features for the legacy kernel')
 
 
-def prepare(staging_dir, tools_dir, geometry, output, private_bundle=None):
+def prepare(staging_dir, tools_dir, geometry, output, private_bundle=None, *, compact=False):
     geometry = validate_geometry(geometry)
     require(not output.exists(), 'Output directory must be new')
     staging = json.loads((staging_dir / 'staging.json').read_text())
@@ -117,9 +117,11 @@ def prepare(staging_dir, tools_dir, geometry, output, private_bundle=None):
                         '--mount', f'type=bind,src={helper},dst=/build.sh,readonly',
                         '--mount', f'type=bind,src={output.resolve()},dst=/out',
                         image, 'sh', '/build.sh', str(epoch), str(geometry['size'] // 4096),
-                        filesystem_uuid], check=True)
+                        filesystem_uuid, "compact" if compact else "full"], check=True)
     artifact = output / 'userdata.ext4'
-    validate_image(artifact, geometry['size'])
+    image_size = artifact.stat().st_size
+    require(not compact or 0 < image_size < geometry["size"], "Expected compact filesystem smaller than partition")
+    validate_image(artifact, image_size if compact else geometry["size"])
     result = {'schema': 1, 'kind': 'couch-userdata-image-preparation', 'installable': False,
               'private_only': private_bundle is not None, 'redistribution_authorized': False,
               'geometry': geometry, 'source_date_epoch': epoch, 'filesystem_uuid': filesystem_uuid,
@@ -127,7 +129,7 @@ def prepare(staging_dir, tools_dir, geometry, output, private_bundle=None):
               'staging_manifest_sha256': file_hash(staging_dir / 'staging.json'),
               'tool_closure_sha256': file_hash(tools_dir / 'closure.json'), 'builder_image': image,
               'image': {'path': 'userdata.ext4', 'format': 'raw-ext4',
-                        'size': geometry['size'], 'sha256': file_hash(artifact)},
+                        'size': image_size, 'sha256': file_hash(artifact)},
               'validation': ['e2fsck -fn', 'superblock size and legacy feature validation'],
               'pending': ['complete reviewed runtime/vendor artifacts', 'signed release inventory',
                           'physical boot and recovery validation']}

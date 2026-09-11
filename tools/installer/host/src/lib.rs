@@ -1,5 +1,6 @@
 //! Native input preparation, dependency bootstrap, and supervised installer interfaces.
 pub mod android;
+pub mod assembly;
 pub mod dependencies;
 pub mod frontend;
 pub mod session;
@@ -7,6 +8,7 @@ pub mod stage;
 pub mod stage_files;
 pub mod stage_tls;
 pub mod transaction;
+pub mod vendor_transfer;
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use serde_json::json;
