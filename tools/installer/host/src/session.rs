@@ -88,6 +88,11 @@ pub fn create_private_parent(path: &Path) -> Result<()> {
     sync_directory(&parent)?;
     Ok(())
 }
+/// Flush a private child directory after publishing imported evidence.
+pub(crate) fn sync_private_directory(path: &Path) -> Result<()> {
+    sync_directory(path)
+}
+
 impl SessionGuard {
     /// The parent must already exist. On Unix it must be owned by this user and private.
     /// Existing directories (including interrupted sessions) are always rejected.
