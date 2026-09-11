@@ -1,6 +1,9 @@
 param([Parameter(Mandatory=$true)][string]$Candidate)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# The parent CI shell may be PowerShell Core; load this Windows PowerShell
+# edition's certificate provider explicitly before using its Cert: drive.
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')
 # Ephemeral GitHub-hosted runner only: exact final launcher bytes fetch from a
 # loopback HTTPS fixture with normal Windows certificate validation intact.
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Run only on an ephemeral hosted CI runner' }
