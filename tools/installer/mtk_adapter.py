@@ -8,6 +8,7 @@ hardware outside the native host's admitted and supervised session.
 """
 import hashlib
 import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
 import struct
@@ -284,18 +285,27 @@ def serve(wire, factory=Adapter):
         adapter.close()
 
 
-if __name__ == '__main__':
-    require(sys.argv[1:] == ['--events-stdio'], 'Use the native host event channel')
-    incoming, outgoing = sys.stdin.buffer, sys.stdout.buffer
-    # Upstream diagnostics must never interleave with the binary RPC channel.
-    with open(__import__('os').devnull, 'w') as quiet:
-        sys.stdout = sys.stderr = quiet
+def serve_stdio(factory=Adapter):
+    # Keep the RPC pipe on its own descriptor. The pinned MTK library detaches
+    # and re-wraps stdout/stderr independently while importing utils.py; aliasing
+    # both streams to one TextIOWrapper makes its second detach fail.
+    incoming = sys.stdin.buffer
+    with os.fdopen(os.dup(sys.stdout.fileno()), 'wb') as outgoing:
+        with open(os.devnull, 'wb') as quiet:
+            os.dup2(quiet.fileno(), sys.stdout.fileno())
+            os.dup2(quiet.fileno(), sys.stderr.fileno())
         wire = Wire(incoming, outgoing)
         try:
-            serve(wire)
+            serve(wire, factory)
+            return 0
         except BaseException:
             try:
                 wire.send({'event': 'error', 'preserve_originals': True})
             except BaseException:
                 pass
-            raise SystemExit(1)
+            return 1
+
+
+if __name__ == '__main__':
+    require(sys.argv[1:] == ['--events-stdio'], 'Use the native host event channel')
+    raise SystemExit(serve_stdio())
