@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import tarfile
 
-from clean_stage import checksum, require
+from clean_stage import archive_name, checksum, require
 
 PIN = Path(__file__).with_name('ha100_os_baseline.json')
 MARKER = 'opt/couch/os-baseline.json'
@@ -16,14 +16,17 @@ def seed(data, closure_digest, *, pin=None):
             'OS baseline requires the reviewed FFmpeg package closure')
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         members = archive.getmembers()
-        require(len({item.name for item in members}) == len(members), 'Duplicate baseline input path')
-        require(MARKER not in {item.name for item in members}, 'OS baseline marker must be generated')
-        require({'opt/couch/runtime-boot.sh', 'usr/bin/ffmpeg'} <= {item.name for item in members},
+        # Alpine's assembler emits ./ prefixes. Canonicalize before admission so
+        # aliases cannot evade duplicate or preexisting-marker rejection.
+        indexed = {archive_name(item.name): item for item in members}
+        require(len(indexed) == len(members), 'Duplicate baseline input path')
+        require(MARKER not in indexed, 'OS baseline marker must be generated')
+        require({'opt/couch/runtime-boot.sh', 'usr/bin/ffmpeg'} <= indexed.keys(),
                 'OS baseline requires stable bootstrap and FFmpeg files')
-        boot = archive.getmember('opt/couch/runtime-boot.sh')
+        boot = indexed['opt/couch/runtime-boot.sh']
         require(boot.isreg() and boot.mode & 0o111 and checksum(archive.extractfile(boot).read()) == pin['runtime_boot_sha256'],
                 'OS baseline requires the reviewed stable runtime bootstrap')
-        ffmpeg = archive.getmember('usr/bin/ffmpeg')
+        ffmpeg = indexed['usr/bin/ffmpeg']
         require(ffmpeg.isreg() and ffmpeg.mode & 0o111, 'OS baseline requires installed FFmpeg')
         header = archive.extractfile(ffmpeg).read(20)
         require(header[:6] == b'\x7fELF\x01\x01' and header[18:20] == b'\x28\x00',
