@@ -18,6 +18,28 @@ pub fn rpc(worker: &mut Worker, operation: &str, payload: Value) -> Result<Value
         Ok(event["result"].clone())
     })
 }
+fn failure_reason(status: &Value) -> &str {
+    status["error"]
+        .as_str()
+        .filter(|v| {
+            matches!(
+                *v,
+                "detect-node"
+                    | "loader-exit"
+                    | "transport-node"
+                    | "wifi-node"
+                    | "launcher-exit"
+                    | "transport-timeout"
+                    | "power-on"
+                    | "interface-timeout"
+                    | "interface-up"
+                    | "dhcp-exit"
+                    | "supplicant-exit"
+                    | "supplicant-socket-timeout"
+            )
+        })
+        .unwrap_or("unknown")
+}
 pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
     let start = Instant::now();
     loop {
@@ -32,26 +54,7 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
             "Wi-Fi stage was already provisioned"
         );
         if status["status"] == "failed" {
-            let reason = status["error"]
-                .as_str()
-                .filter(|v| {
-                    matches!(
-                        *v,
-                        "detect-node"
-                            | "loader-exit"
-                            | "transport-node"
-                            | "wifi-node"
-                            | "launcher-exit"
-                            | "transport-timeout"
-                            | "power-on"
-                            | "interface-timeout"
-                            | "interface-up"
-                            | "dhcp-exit"
-                            | "supplicant-exit"
-                            | "supplicant-socket-timeout"
-                    )
-                })
-                .unwrap_or("unknown");
+            let reason = failure_reason(&status);
             anyhow::bail!("Remote Wi-Fi initialization failed: {reason}");
         }
         if status["status"] == "ready" {
@@ -212,5 +215,15 @@ mod tests {
     #[test]
     fn display_cannot_inject_terminal_controls() {
         assert!(!display(b"a\x1b[2J\n").contains('\x1b'));
+    }
+    #[test]
+    fn stalled_supplicant_reason_reaches_host_error_handling() {
+        let stalled = json!({
+            "status": "failed",
+            "error": "supplicant-socket-timeout",
+        });
+        assert_eq!(failure_reason(&stalled), "supplicant-socket-timeout");
+        let unknown = json!({"status": "failed", "error": "untrusted detail"});
+        assert_eq!(failure_reason(&unknown), "unknown");
     }
 }

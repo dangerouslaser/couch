@@ -13,7 +13,6 @@ import subprocess
 import unittest
 
 STAGE = Path(__file__).resolve().parent/'wifi-stage'/'wifi-init'
-NETWORK = Path(__file__).resolve().parent/'host'/'src'/'network.rs'
 
 
 def extract(text, name):
@@ -168,12 +167,6 @@ class WifiStartupEvidence(unittest.TestCase):
             self.assertIn(' c ', call)
         self.assertNotIn('misc_node', code)
         self.assertNotIn('rfkill', self.text)
-
-    def test_the_host_accepts_the_new_reason_and_still_rejects_unknown_ones(self):
-        source = NETWORK.read_text()
-        self.assertIn('"supplicant-socket-timeout"', source)
-        self.assertIn('"supplicant-exit"', source)
-        self.assertIn('.unwrap_or("unknown")', source)
 
     def test_extraction_is_not_fooled_by_braces_in_quotes_or_comments(self):
         """A brace inside a message must not end the function early."""
