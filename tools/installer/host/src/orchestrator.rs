@@ -200,6 +200,8 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
     if mode == 2 {
         return Ok(());
     }
+    #[cfg(windows)]
+    ui.choose("Windows USB driver setup", "The selected remote's MediaTek download interface and Couch installer interface (VID 0e8d, PID 201c) need usable WinUSB bindings. ADB working alone does not verify those drivers. Configure only this remote's interfaces; the installer will stop on a claim failure and will not replace drivers automatically.", &[choice("Continue with drivers prepared", "See the Windows USB notes in the installer guide.")])?;
     let release = public_inputs::release(
         config.context("This installer requires its verified release configuration")?,
     )?;

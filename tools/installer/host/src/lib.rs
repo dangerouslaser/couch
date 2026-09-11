@@ -26,6 +26,28 @@ use std::{
     path::Path,
 };
 use zip::ZipArchive;
+pub(crate) const BOOTSTRAP: [(&str, u64, &str); 4] = [
+    (
+        "preloader.img",
+        109992,
+        "0ad0d14b7203d98a6567af7a022cfe5df5b6fcbba60cb4e9b4bc2ee569cf1069",
+    ),
+    (
+        "boot.img",
+        8030464,
+        "dda78c8ebe7cb82095b08a10c2a1f779cbdbebc53464aee34c85bb3a7382cad7",
+    ),
+    (
+        "odmdtbo.img",
+        37120,
+        "a5cf1159f6e8c0a95bd1d3b8c1edaca3b2c9704642df50912dfe52df277f0575",
+    ),
+    (
+        "scatter.txt",
+        455,
+        "531f0807ea065bed1c97a8a7d06284fa521749eadf3a6c0b149f0f2c72f8015d",
+    ),
+];
 const BLOCK: u64 = 4096;
 const MAX_IMAGE: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_FILE: u64 = 32 * 1024 * 1024;
@@ -265,28 +287,7 @@ pub fn prepare(ota: &Path, destination: &Path) -> Result<()> {
     let names: std::collections::BTreeSet<_> = archive.file_names().map(str::to_owned).collect();
     ensure!(names.len() == archive.len(), "duplicate archive members");
     let mut bootstrap_pins = BTreeMap::new();
-    for (name, size, sha) in [
-        (
-            "preloader.img",
-            109992,
-            "0ad0d14b7203d98a6567af7a022cfe5df5b6fcbba60cb4e9b4bc2ee569cf1069",
-        ),
-        (
-            "boot.img",
-            8030464,
-            "dda78c8ebe7cb82095b08a10c2a1f779cbdbebc53464aee34c85bb3a7382cad7",
-        ),
-        (
-            "odmdtbo.img",
-            37120,
-            "a5cf1159f6e8c0a95bd1d3b8c1edaca3b2c9704642df50912dfe52df277f0575",
-        ),
-        (
-            "scatter.txt",
-            455,
-            "531f0807ea065bed1c97a8a7d06284fa521749eadf3a6c0b149f0f2c72f8015d",
-        ),
-    ] {
+    for (name, size, sha) in BOOTSTRAP {
         member(
             &mut archive,
             name,

@@ -27,11 +27,13 @@ pub fn admit_layout(observed: &Value, cid: &str, prepared: &Path) -> Result<()> 
             && observed["runtime_cid_sha256"] == format!("{:x}", Sha256::digest(decode(cid)?)),
         "Android and download-agent storage identity differ"
     );
-    let pin: Value =
-        serde_json::from_str(include_str!("../../../release/ha100_official_runtime.json"))?;
+    let (_, scatter_size, scatter_sha) = crate::BOOTSTRAP
+        .iter()
+        .find(|v| v.0 == "scatter.txt")
+        .unwrap();
     let scatter = prepared.join("bootstrap/scatter.txt");
     ensure!(
-        digest(&scatter)? == pin["members"]["scatter.txt"]["sha256"],
+        fs::metadata(&scatter)?.len() == *scatter_size && digest(&scatter)? == *scatter_sha,
         "official layout changed"
     );
     let mut offsets = BTreeMap::new();
@@ -193,13 +195,14 @@ pub fn capture(
     Ok(hashes)
 }
 pub fn stock_prefixes(session: &SessionGuard, prepared: &Path) -> Result<()> {
-    let pin: Value =
-        serde_json::from_str(include_str!("../../../release/ha100_official_runtime.json"))?;
     for name in ["boot", "odmdtbo"] {
         let path = prepared.join(format!("bootstrap/{name}.img"));
+        let (_, size, sha) = crate::BOOTSTRAP
+            .iter()
+            .find(|v| v.0 == format!("{name}.img"))
+            .unwrap();
         ensure!(
-            fs::metadata(&path)?.len() == pin["members"][format!("{name}.img")]["size"]
-                && digest(&path)? == pin["members"][format!("{name}.img")]["sha256"],
+            fs::metadata(&path)?.len() == *size && digest(&path)? == *sha,
             "official stock input changed"
         );
         let official = fs::read(prepared.join(format!("bootstrap/{name}.img")))?;
