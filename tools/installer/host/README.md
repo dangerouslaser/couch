@@ -150,3 +150,21 @@ bounded claim failure; it does not replace drivers for other USB devices. See
 [libusb's Windows driver documentation](https://github.com/libusb/libusb/wiki/Windows#driver-installation).
 Fresh Android enrollment, OS startup, restoration and reinstall from another
 computer need separate physical acceptance records before a public-ready claim.
+
+### Offline owner-image assembly acceptance
+
+Before a release reaches USB testing, exercise the actual public archive with
+verified owner inputs through all three native RAM and boot-image assembly paths:
+
+```sh
+cargo run --locked --example verify_owner_images -- \
+  /private/installer.json /private/public-inputs.tar.gz \
+  /private/prepared-owner-inputs /private/new-assembly-check
+```
+
+The example verifies the public archive against its descriptor, checks the
+compiled owner-file pins, and assembles normal boot, recovery, and installer
+images using the same APIs as the installer. It writes private image readbacks
+and an `assembly.json` receipt. It performs no network requests, USB operations,
+or device writes. Keep its owner-derived images private. Successful public tar
+hash admission alone does not establish boot-image assembly compatibility.
