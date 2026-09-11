@@ -12,6 +12,7 @@
 //! again, in full, before it is used.
 use serde_json::json;
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -47,15 +48,17 @@ impl Candidate {
 const RECORD: &str = "enrollment-source.json";
 const RECORD_LIMIT: u64 = 8192;
 const SESSION_PREFIX: &str = "install-";
-/// Upper bound on directory entries examined, so a state root that has grown
-/// unexpectedly large cannot turn drawing a menu into an unbounded walk.
-const MAX_SCAN: usize = 4096;
 /// Upper bound on offered candidates. `Ui::choose` rejects a list longer than
 /// 128 options outright, and that rejection is a hard error that would strand
 /// the operator with no route to the manual prompt. Staying well under the
 /// limit keeps the menu readable and keeps manual entry reachable no matter
 /// how many sessions have accumulated.
 const MENU_LIMIT: usize = 32;
+/// One extra native path preserves a full menu when the remembered entry is
+/// also one of the native sessions. The set is sorted and bounded while the
+/// directory is scanned, so unrelated state files cannot influence which
+/// sessions are offered or make retained candidate memory unbounded.
+const NATIVE_CANDIDATE_LIMIT: usize = MENU_LIMIT + 1;
 
 /// Treat two spellings of one folder as the same entry where the filesystem
 /// can confirm it. Falls back to a literal comparison when it cannot.
@@ -123,22 +126,24 @@ pub fn discover(state_root: &Path, remembered: Option<PathBuf>) -> Vec<Candidate
             });
         }
     }
-    let mut sessions = Vec::new();
+    let mut sessions = BTreeSet::new();
     if let Ok(entries) = fs::read_dir(state_root) {
-        for entry in entries.flatten().take(MAX_SCAN) {
+        for entry in entries.flatten() {
             let path = entry.path();
             let named = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with(SESSION_PREFIX));
             if named && native_enrollment(&path) {
-                sessions.push(path);
+                sessions.insert(path);
+                if sessions.len() > NATIVE_CANDIDATE_LIMIT {
+                    // Keep the lexically earliest entries, which is the same
+                    // deterministic ordering shown to the operator below.
+                    sessions.pop_last();
+                }
             }
         }
     }
-    // Sort before truncating, so the cap keeps the same entries every run
-    // rather than whatever the filesystem happened to enumerate first.
-    sessions.sort();
     for path in sessions {
         if found.len() >= MENU_LIMIT {
             break;
@@ -255,6 +260,28 @@ mod tests {
         let found = discover(root.path(), None);
         assert_eq!(
             found.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),
+            vec![first, second]
+        );
+        assert_eq!(discover(root.path(), None), found);
+    }
+
+    #[test]
+    fn sessions_after_more_than_the_former_raw_scan_limit_are_discovered_deterministically() {
+        let root = TempDir::new().unwrap();
+        // This used to stop scanning after 4096 arbitrary directory entries.
+        // Create more unrelated entries first, then sessions that must still
+        // be found regardless of filesystem enumeration order.
+        for n in 0..4097 {
+            fs::write(root.path().join(format!("unrelated-{n:04}")), b"").unwrap();
+        }
+        let second = session(root.path(), "install-bbbb", &["enrollment.json"]);
+        let first = session(root.path(), "install-aaaa", &["enrollment.json"]);
+        let found = discover(root.path(), None);
+        assert_eq!(
+            found
+                .iter()
+                .map(|candidate| candidate.path.clone())
+                .collect::<Vec<_>>(),
             vec![first, second]
         );
         assert_eq!(discover(root.path(), None), found);
