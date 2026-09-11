@@ -54,6 +54,9 @@ def run(launcher, output):
         checked(init(attributes, 1, 0, C.byref(size)))
         checked(update(attributes, 0, 0x20016, console, C.sizeof(console), None, None))
         startup = Extended(); startup.startup.cb = C.sizeof(startup)
+        # Null standard handles + STARTF_USESTDHANDLES prevent the CI parent's
+        # redirected handles from bypassing the pseudoconsole (Microsoft #15814).
+        startup.startup.flags = 0x100
         startup.attributes = C.cast(attributes, C.c_void_p)
         command = C.create_unicode_buffer(subprocess.list2cmdline([
             str(Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'),

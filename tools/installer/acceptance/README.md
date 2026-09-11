@@ -21,3 +21,7 @@ refuses to run outside a GitHub-hosted Actions runner.
 The result records the admitted source/binary/config/launcher hashes, exact three
 requests, ConPTY transcript, exit status, and absence of a native session.
 Physical driver binding and installation acceptance remain separate tests.
+
+The ConPTY child explicitly clears inherited redirected standard handles, as
+[described by the Windows Terminal maintainer](https://github.com/microsoft/terminal/discussions/15814),
+so hosted runner pipes cannot replace the actual console.
