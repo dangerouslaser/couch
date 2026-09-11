@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -12,7 +13,7 @@ from contextlib import contextmanager
 from couch_install import InstallError, IDENTITY_PARTITIONS
 from mtk_adapter import Adapter, Wire, serve, MAX
 from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
-from mtk_writer import _open_image
+from mtk_writer import _open_image, _fd_stamp, ConnectedMtkWriter
 
 
 class MemoryWire:
@@ -148,6 +149,53 @@ class AdapterTests(unittest.TestCase):
                 return  # Windows without symlink privilege: reparse fixture separately.
             with self.assertRaises(InstallError):
                 _open_image(link)
+
+    def test_retained_image_name_and_descriptor_use_consistent_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "image"
+            path.write_bytes(b"\x00\r\n\x1a\xff")
+            fd = _open_image(path)
+            try:
+                writer = object.__new__(ConnectedMtkWriter)
+                writer._sources = {"boot": {"path": path, "fd": fd, "stamp": _fd_stamp(fd)}}
+                writer._unchanged("boot")
+                self.assertFalse(os.get_inheritable(fd))
+            finally:
+                os.close(fd)
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing/reparse semantics")
+    def test_windows_retained_image_blocks_writers_and_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "image"
+            path.write_bytes(b"original")
+            replacement = path.with_name("replacement")
+            replacement.write_bytes(b"different")
+            fd = _open_image(path)
+            try:
+                with self.assertRaises(OSError):
+                    path.write_bytes(b"changed")
+                with self.assertRaises(OSError):
+                    os.replace(replacement, path)
+                self.assertEqual(os.read(fd, 8), b"original")
+            finally:
+                os.close(fd)
+            os.replace(replacement, path)
+            self.assertEqual(path.read_bytes(), b"different")
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse semantics")
+    def test_windows_junction_cannot_be_opened_as_an_image(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.mkdir()
+            junction = Path(directory) / "junction"
+            subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(junction), str(target)],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                with self.assertRaises((InstallError, OSError)):
+                    _open_image(junction)
+            finally:
+                junction.rmdir()
 
 
 if __name__ == '__main__':
