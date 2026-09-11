@@ -80,3 +80,33 @@ a candidate health check to verify reboot into the previous runtime. Repeat with
 an interrupted candidate boot and confirm recovery still selects the base runtime.
 
 Update acceptance requires advancing GUI heartbeats from the same process; a recently frozen GUI or repeated process restarts cannot satisfy the boot-health gate.
+
+## Full OS compatibility
+
+Application versions do not identify the Alpine packages or stable boot scripts
+beneath them. New signed manifests therefore carry `required_os_baseline`, a
+capability ID such as `ha100-alpine321-ffmpeg612-runtimeboot2`. The updater checks
+`/opt/couch/os-baseline.json` before any payload download or staging, then checks
+it again immediately before activation. A missing, malformed, symlinked or
+mismatched marker requires a fresh full OS installation. The marker cannot be
+included in a runtime bundle or changed through its allowlist.
+
+The full OS builder (`tools/release/prepare_rootfs.py`) generates this marker
+only after checking the reviewed complete FFmpeg APK closure, installed ARM
+FFmpeg and the stable boot script against `tools/release/ha100_os_baseline.json`.
+The pin records build inputs; its capability ID stays independent of application
+release versions. Changing the supported OS capabilities requires a reviewed pin
+and ID change. Updating a reviewed package pin without changing capabilities may
+retain the ID after compatibility validation.
+
+The runtime publisher now requires that generated marker at the root of its
+`CLEAN_RUNTIME` input. It signs the ID without shipping the marker. A clean runtime
+export must preserve the marker from the matching newly built full OS; do not
+invent it or copy it onto an older installed image. Existing immutable candidate
+22/23 fixtures predate this marker and need a fresh full OS build for new updates.
+
+Legacy manifests with no requirement retain their original signing bytes and
+policy: the optional field is omitted during serialization. Old updater binaries
+reject manifests containing the new unknown field, so they cannot silently skip
+the requirement. New manifests must be published with the updated release tool;
+release notes alone are never an OS compatibility check.

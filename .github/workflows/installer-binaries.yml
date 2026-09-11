@@ -1,10 +1,14 @@
 name: Build installer binaries
 on:
   push:
+    branches: [main]
     paths: ['tools/installer/tui/**', 'tools/installer/host/**', '.github/workflows/installer-binaries.yml']
   pull_request:
     paths: ['tools/installer/tui/**', 'tools/installer/host/**', '.github/workflows/installer-binaries.yml']
   workflow_dispatch:
+concurrency:
+  group: installer-binaries-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

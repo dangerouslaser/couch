@@ -1,4 +1,5 @@
 //! Signed, explicitly selected Couch runtime updates. No partition writes.
+mod baseline;
 mod release;
 mod staging;
 pub use release::{Channel, Manifest, SignedManifest};
@@ -211,6 +212,7 @@ pub fn bundle(
     if output.exists() {
         return Err("Bundle output must be new".into());
     }
+    let required_os_baseline = Some(baseline::installed(source)?);
     let mut names = staging::required_names();
     for directory in ["www", "licenses"] {
         let mut pending = vec![source.join(directory)];
@@ -285,7 +287,7 @@ pub fn bundle(
         .map_err(|_| "Could not finish runtime archive")?
         .finish()
         .map_err(|_| "Could not compress runtime archive")?;
-    let manifest=Manifest{schema:1,model:"sanytron-ha100".into(),version:version.into(),kind:"runtime".into(),installable:true,notes:format!("Couch apps and services {version}"),url:format!("https://github.com/dangerouslaser/couch/releases/download/{version}/couch-{version}-ha100-runtime.tar.gz"),size:data.len() as u64,sha256:release::digest(&data),files};
+    let manifest=Manifest{schema:1,model:"sanytron-ha100".into(),version:version.into(),kind:"runtime".into(),installable:true,notes:format!("Couch apps and services {version}"),url:format!("https://github.com/dangerouslaser/couch/releases/download/{version}/couch-{version}-ha100-runtime.tar.gz"),size:data.len() as u64,sha256:release::digest(&data),files,required_os_baseline};
     staging::validate_inventory(&manifest)?;
     let key = ed25519_dalek::SigningKey::from_bytes(seed);
     let signature = release::hex(&key.sign(&serde_json::to_vec(&manifest).unwrap()).to_bytes());
