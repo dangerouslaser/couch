@@ -38,6 +38,20 @@ class TransitionWorkerTests(unittest.TestCase):
             backend.assert_not_called()
             worker.wire.send.assert_not_called()
 
+    def test_chained_admission_is_offline_and_requires_explicit_topology(self):
+        worker = self.worker()
+        payload = {'chain': {'parent': 'pinned-parent'}, 'bus': 1, 'ports': [2]}
+        proof = object()
+        with patch('wifi_debug_transition_worker.transition.admit_chained', return_value=proof) as admit, \
+             patch('wifi_debug_transition_worker.ExactUsbBackend') as backend:
+            worker.dispatch({'op': 'transition_admit', 'payload': payload})
+            admit.assert_called_once_with(payload['chain'], 1, [2])
+            backend.assert_not_called()
+        self.assertTrue(worker.chained)
+        self.assertIs(worker.proof, proof)
+        worker.wire.send.assert_called_once_with({'event': 'transition_admit',
+            'result': {'admitted': True, 'device_access': False}})
+
     def test_changed_evidence_fails_before_backend_and_consumes_attempt(self):
         worker = self.worker()
         worker.proof = SimpleNamespace(retained=SimpleNamespace(source='/retained',

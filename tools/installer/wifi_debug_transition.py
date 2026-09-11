@@ -23,14 +23,33 @@ class TransitionProof:
     metadata_sha256: str
 
 
-def admit(source, *, temporary_boot_sha256, original_boot_sha256,
-          snapshot_sha256, image, image_sha256, metadata, metadata_sha256):
-    for pin in (original_boot_sha256, snapshot_sha256, image_sha256, metadata_sha256):
+@dataclass(frozen=True)
+class ChainedTransitionProof:
+    """A distinct proof for updating an already verified debug boot.
+
+    The parent receipt remains the only authority for the historical failed
+    installer session.  In particular, this proof never changes the failed
+    session's temporary-image pin.
+    """
+    parent: TransitionProof
+    parent_receipt_sha256: str
+    previous_boot_sha256: str
+    image: Path
+    image_sha256: str
+    metadata: Path
+    metadata_sha256: str
+    candidate_receipt: Path
+    candidate_receipt_sha256: str
+    source_commit: str
+    stage_base_commit: str
+    probe_sha256: str
+    config: dict
+
+
+def admit_target(*, image, image_sha256, metadata, metadata_sha256):
+    """Validate a private, non-installable debug image without session state."""
+    for pin in (image_sha256, metadata_sha256):
         require(recovery.valid_hash(pin), 'Explicit transition evidence hash required')
-    retained = recovery.admit(source, temporary_boot_sha256)
-    require(retained.snapshot_sha256 == snapshot_sha256, 'Retained original snapshot differs from pin')
-    require(retained.record['originals']['boot']['sha256'] == original_boot_sha256,
-            'Original boot differs from retained baseline pin')
     image, metadata = Path(image).absolute(), Path(metadata).absolute()
     raw = recovery.read(metadata, 1024*1024)
     require(recovery.sha(raw) == metadata_sha256, 'Debug metadata differs from reviewed pin')
@@ -41,12 +60,27 @@ def admit(source, *, temporary_boot_sha256, original_boot_sha256,
             and manifest.get('sha256') == image_sha256
             and manifest.get('size') == 16*1024*1024,
             'Expected independently pinned debug-only stage metadata')
+    data = recovery.read(image, 16*1024*1024)
+    require(len(data) == manifest['size'] and data.startswith(b'ANDROID!')
+            and recovery.sha(data) == image_sha256,
+            'Debug image header/hash differs')
+    return image, metadata, manifest
+
+
+def admit(source, *, temporary_boot_sha256, original_boot_sha256,
+          snapshot_sha256, image, image_sha256, metadata, metadata_sha256):
+    for pin in (original_boot_sha256, snapshot_sha256):
+        require(recovery.valid_hash(pin), 'Explicit transition evidence hash required')
+    retained = recovery.admit(source, temporary_boot_sha256)
+    require(retained.snapshot_sha256 == snapshot_sha256, 'Retained original snapshot differs from pin')
+    require(retained.record['originals']['boot']['sha256'] == original_boot_sha256,
+            'Original boot differs from retained baseline pin')
     require(image_sha256 not in (original_boot_sha256, temporary_boot_sha256),
             'Debug transition must use a distinct debug image')
-    data = recovery.read(image, 16*1024*1024)
-    require(len(data) == manifest['size'] == retained.record['partitions']['boot']['size']
-            and data.startswith(b'ANDROID!') and recovery.sha(data) == image_sha256,
-            'Debug image size/header/hash differs')
+    image, metadata, manifest = admit_target(image=image, image_sha256=image_sha256,
+                                              metadata=metadata, metadata_sha256=metadata_sha256)
+    require(manifest['size'] == retained.record['partitions']['boot']['size'],
+            'Debug image size differs from retained boot partition')
     return TransitionProof(retained, original_boot_sha256, snapshot_sha256,
                            image, image_sha256, metadata, metadata_sha256)
 
@@ -71,8 +105,8 @@ def receipt_evidence(proof, bus, ports):
         'topology': topology(bus, ports)}
 
 
-def validate_receipt(config, bus, ports):
-    """Offline gate; pinned historical proof, not fresh stage attestation."""
+def _validated_legacy_receipt(config, bus, ports):
+    """Return the immutable parent proof after checking every receipt member."""
     require(isinstance(config, dict) and set(config) == {'receipt', 'sha256', 'inputs'},
             'Pinned completed transition receipt required')
     require(recovery.valid_hash(config['sha256']), 'Explicit completed receipt SHA-256 required')
@@ -101,6 +135,117 @@ def validate_receipt(config, bus, ports):
         require(recovery.sha(raw_ack) == value.get(name + '_sha256')
                 and json.loads(raw_ack) == {'requested': True, 'acknowledged': expected_ack},
                 'Restart evidence missing or changed')
+    return proof, value, verified
+
+
+def validate_receipt(config, bus, ports):
+    """Offline gate; pinned historical proof, not fresh stage attestation."""
+    _validated_legacy_receipt(config, bus, ports)
+    return {'validated': True, 'device_access': False, 'receipt_sha256': config['sha256']}
+
+
+def _candidate_receipt(config):
+    require(isinstance(config, dict) and set(config) == {
+        'parent', 'candidate_receipt', 'candidate_receipt_sha256', 'source_commit',
+        'stage_base_commit', 'probe_sha256', 'image', 'image_sha256', 'metadata', 'metadata_sha256'},
+        'Pinned parent receipt and complete candidate binding required')
+    for name in ('candidate_receipt_sha256', 'probe_sha256', 'image_sha256', 'metadata_sha256'):
+        require(recovery.valid_hash(config[name]), 'Explicit chained transition hash required')
+    for name in ('source_commit', 'stage_base_commit'):
+        require(isinstance(config[name], str) and len(config[name]) == 40
+                and all(c in '0123456789abcdef' for c in config[name]),
+                'Explicit chained source commit required')
+    path = Path(config['candidate_receipt'])
+    require(path.is_absolute(), 'Candidate receipt path must be absolute')
+    recovery.private_directory(path.parent)
+    raw = recovery.read(path, 256*1024)
+    require(recovery.sha(raw) == config['candidate_receipt_sha256'], 'Candidate receipt differs from pin')
+    value = json.loads(raw)
+    require(value.get('schema') == 1 and value.get('kind') == 'couch-private-wifi-debug-lifecycle-candidate'
+            and value.get('installable') is False and value.get('device_access') is False
+            and value.get('physical_boot_verified') is False,
+            'Expected private offline debug candidate receipt')
+    binding = value.get('source_binding')
+    require(isinstance(binding, dict) and binding.get('partial_overlay') is True
+            and binding.get('local_source_commit') == config['source_commit']
+            and binding.get('stage_base_commit') == config['stage_base_commit'],
+            'Candidate source binding differs from pinned chain')
+    output = value.get('outputs', {})
+    require(output.get('image', {}).get('path') == Path(config['image']).name
+            and output.get('image', {}).get('sha256') == config['image_sha256']
+            and output.get('metadata', {}).get('path') == Path(config['metadata']).name
+            and output.get('metadata', {}).get('sha256') == config['metadata_sha256'],
+            'Candidate output binding differs from pinned chain')
+    probe = value.get('approved_overlay', {}).get('files', {}).get('stage/probe', {})
+    require(probe.get('sha256') == config['probe_sha256'], 'Candidate debug probe pin differs')
+    return path, value
+
+
+def admit_chained(config, bus, ports):
+    """Admit b13-to-new-debug without redefining the failed-session proof."""
+    parent, completed, verified = _validated_legacy_receipt(config['parent'], bus, ports)
+    candidate_path, _ = _candidate_receipt(config)
+    previous = verified['debug_boot_sha256']
+    require(previous == completed['verification']['debug_boot_sha256']
+            and previous != parent.retained.temporary_boot_sha256
+            and previous != parent.original_boot_sha256,
+            'Parent receipt does not establish a distinct current debug boot')
+    image, metadata, manifest = admit_target(image=config['image'], image_sha256=config['image_sha256'],
+                                              metadata=config['metadata'], metadata_sha256=config['metadata_sha256'])
+    require(manifest['size'] == parent.retained.record['partitions']['boot']['size']
+            and config['image_sha256'] not in (previous, parent.original_boot_sha256,
+                                                parent.retained.temporary_boot_sha256),
+            'Chained debug image is not a distinct boot-sized target')
+    return ChainedTransitionProof(parent, config['parent']['sha256'], previous, image,
+                                  config['image_sha256'], metadata, config['metadata_sha256'],
+                                  candidate_path, config['candidate_receipt_sha256'],
+                                  config['source_commit'], config['stage_base_commit'],
+                                  config['probe_sha256'], copy.deepcopy(config))
+
+
+def chained_receipt_evidence(proof, bus, ports):
+    evidence = receipt_evidence(proof.parent, bus, ports)
+    evidence.update({'parent_completed_receipt_sha256': proof.parent_receipt_sha256,
+                     'parent_debug_boot_sha256': proof.previous_boot_sha256,
+                     'previous_boot_sha256': proof.previous_boot_sha256,
+                     'debug_boot_sha256': proof.image_sha256,
+                     'debug_metadata_sha256': proof.metadata_sha256,
+                     'candidate_receipt_sha256': proof.candidate_receipt_sha256,
+                     'candidate_source_commit': proof.source_commit,
+                     'candidate_stage_base_commit': proof.stage_base_commit,
+                     'candidate_probe_sha256': proof.probe_sha256})
+    return evidence
+
+
+def validate_chained_receipt(config, bus, ports):
+    require(isinstance(config, dict) and set(config) == {'chain', 'receipt', 'sha256', 'inputs'}
+            and config['chain'] is True, 'Pinned chained completed receipt required')
+    require(recovery.valid_hash(config['sha256']), 'Explicit chained completed receipt SHA-256 required')
+    path = Path(config['receipt'])
+    require(path.is_absolute(), 'Chained receipt path must be absolute')
+    recovery.private_directory(path.parent)
+    raw = recovery.read(path, 256*1024)
+    require(recovery.sha(raw) == config['sha256'], 'Chained completed receipt differs from pin')
+    proof = admit_chained(config['inputs'], bus, ports)
+    value = json.loads(raw)
+    require(value.get('schema') == 3 and value.get('kind') == 'couch-wifi-debug-chained-transition-completed'
+            and value.get('complete') is True and value.get('restart_acknowledged') is True,
+            'Incomplete chained debug transition')
+    verified_raw = recovery.read(path.parent/'verified.json', 256*1024)
+    require(recovery.sha(verified_raw) == value.get('verified_receipt_sha256'), 'Chained readback receipt changed')
+    verified = json.loads(verified_raw)
+    retained = {n: item['sha256'] for n, item in proof.parent.retained.record['originals'].items() if n != 'boot'}
+    expected = {'schema': 3, 'kind': 'couch-wifi-debug-chained-transition', 'complete': True,
+        **chained_receipt_evidence(proof, bus, ports), 'written': ['boot'],
+        'boot_sha256': proof.image_sha256, 'boot_readback_sha256': proof.image_sha256,
+        'retained_before_sha256': retained, 'retained_sha256': retained, 'restart_requested': False}
+    require(verified == expected and value.get('verification') == verified,
+            'Chained transition identity, parent, pins or retained checks differ')
+    for name, expected_ack in [('restart-requested.json', False), ('restart-acknowledged.json', True)]:
+        raw_ack = recovery.read(path.parent/name, 4096)
+        require(recovery.sha(raw_ack) == value.get(name + '_sha256')
+                and json.loads(raw_ack) == {'requested': True, 'acknowledged': expected_ack},
+                'Chained restart evidence missing or changed')
     return {'validated': True, 'device_access': False, 'receipt_sha256': config['sha256']}
 
 
@@ -182,6 +327,70 @@ def transition(proof, reader, writer_factory, output, *, bus, ports):
             'boot_readback_sha256': proof.image_sha256,
             'retained_before_sha256': retained, 'retained_sha256': retained, 'restart_requested': False,
         })
+    finally:
+        writer.close()
+    return {'written': ['boot'], 'boot_sha256': proof.image_sha256,
+            'verified': True, 'restart_requested': False}
+
+
+def complete_chained_receipt(output):
+    """Publish completion only after the chained boot request is acknowledged."""
+    output = Path(output)
+    raw = recovery.read(output/'verified.json', 256*1024)
+    value = {'schema': 3, 'kind': 'couch-wifi-debug-chained-transition-completed', 'complete': True,
+        'restart_acknowledged': True, 'verified_receipt_sha256': recovery.sha(raw),
+        'verification': json.loads(raw)}
+    for name in ('restart-requested.json', 'restart-acknowledged.json'):
+        value[name + '_sha256'] = recovery.sha(recovery.read(output/name, 4096))
+    recovery.publish(output, 'completed.json', value)
+    return recovery.sha(recovery.read(output/'completed.json', 256*1024))
+
+
+def transition_chained(proof, reader, writer_factory, output, *, bus, ports):
+    """One b13-to-new-debug boot update; no recovery/session evidence is rewritten."""
+    checked = admit_chained(proof.config, bus, ports)
+    require(checked == proof, 'Chained transition evidence changed after admission')
+    record = proof.parent.retained.record
+    evidence = chained_receipt_evidence(proof, bus, ports)
+    observed = copy.deepcopy(reader.description)
+    require(observed.get('hwcode') == 0x6580
+            and observed.get('cid_encoding') == 'mt6580-legacy-le32-registers'
+            and observed['runtime_cid_sha256'] == recovery.sha(bytes.fromhex(record['cid']))
+            and observed['capacity'] == record['capacity']
+            and observed['partitions'] == record['partitions'],
+            'Live identity/layout differs from retained parent session')
+    retained = {name: item['sha256'] for name, item in record['originals'].items() if name != 'boot'}
+
+    def check_live(device, boot):
+        require(all(device.description.get(key) == observed[key] for key in
+                    ('hwcode', 'cid_encoding', 'runtime_cid_sha256', 'capacity', 'partitions', 'storage_id')),
+                'Chained transition connection identity changed')
+        require(device.hash('boot') == boot, 'Current debug boot differs; no automatic transition retry')
+        for name, expected in sorted(retained.items()):
+            require(device.hash(name) == expected, 'Retained partition changed')
+
+    check_live(reader, proof.previous_boot_sha256)
+    output = Path(output).absolute()
+    recovery.private_directory(output.parent)
+    output.mkdir(mode=0o700)
+    recovery.publish(output, 'admitted.json', {'schema': 3, 'kind': 'couch-wifi-debug-chained-transition',
+        'complete': False, **chained_receipt_evidence(proof, bus, ports), 'write_targets': ['boot']})
+    binding = {**{k: observed[k] for k in ('storage_id', 'runtime_cid_sha256', 'partitions')},
+               'model': MODEL, 'model_verified': True,
+               'identity_sha256': fingerprint(record['identity_sha256'])}
+    image_record = {'file': proof.image.name, 'sha256': proof.image_sha256,
+                    'size': record['partitions']['boot']['size']}
+    release = {'schema': 1, 'model': MODEL, 'partitions': record['partitions'], 'images': {'boot': image_record}}
+    writer = writer_factory(release, proof.image.parent, binding)
+    try:
+        check_live(writer, proof.previous_boot_sha256)
+        writer.write('boot', proof.image)
+        check_live(writer, proof.image_sha256)
+        recovery.publish(output, 'verified.json', {
+            'schema': 3, 'kind': 'couch-wifi-debug-chained-transition', 'complete': True, **evidence,
+            'written': ['boot'], 'boot_sha256': proof.image_sha256,
+            'boot_readback_sha256': proof.image_sha256,
+            'retained_before_sha256': retained, 'retained_sha256': retained, 'restart_requested': False})
     finally:
         writer.close()
     return {'written': ['boot'], 'boot_sha256': proof.image_sha256,

@@ -122,9 +122,9 @@ pub struct Config {
     runtime_root: PathBuf,
     runtime_receipt_sha256: String,
     #[serde(default)]
-    transition: Option<crate::wifi_debug_transition::Config>,
+    transition: Option<crate::wifi_debug_transition::TransitionConfig>,
     #[serde(default)]
-    completed_transition: Option<crate::wifi_debug_transition::ReceiptConfig>,
+    completed_transition: Option<crate::wifi_debug_transition::CompletedTransitionConfig>,
 }
 impl Config {
     fn validate(&self) -> Result<()> {
@@ -812,5 +812,29 @@ mod tests {
             .is_err());
         value["write_boot"] = json!(true);
         assert!(serde_json::from_value::<Config>(value).is_err());
+    }
+
+    #[test]
+    fn chained_transition_requires_a_pinned_parent_and_target_binding() {
+        let legacy = json!({"source":"/retained", "temporary_boot_sha256":"a".repeat(64),
+            "original_boot_sha256":"b".repeat(64), "snapshot_sha256":"c".repeat(64),
+            "image":"/current-debug.img", "image_sha256":"d".repeat(64),
+            "metadata":"/current-debug.json", "metadata_sha256":"e".repeat(64)});
+        let chained = json!({"parent":{"receipt":"/completed.json", "sha256":"f".repeat(64),
+            "inputs":legacy}, "candidate_receipt":"/candidate-receipt.json",
+            "candidate_receipt_sha256":"1".repeat(64), "source_commit":"2".repeat(40),
+            "stage_base_commit":"3".repeat(40), "probe_sha256":"4".repeat(64),
+            "image":"/next-debug.img", "image_sha256":"5".repeat(64),
+            "metadata":"/next-debug.json", "metadata_sha256":"6".repeat(64)});
+        let value = json!({"schema":1,"bus":1,"ports":[2],"expected_stage":"wifi-debug-v1",
+            "runtime_root":"/runtime","runtime_receipt_sha256":"7".repeat(64),
+            "transition":chained});
+        assert!(serde_json::from_value::<Config>(value.clone())
+            .unwrap()
+            .validate()
+            .is_ok());
+        let mut missing_parent = value;
+        missing_parent["transition"]["parent"] = json!({});
+        assert!(serde_json::from_value::<Config>(missing_parent).is_err());
     }
 }
