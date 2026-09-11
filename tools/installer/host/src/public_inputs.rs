@@ -197,15 +197,54 @@ pub fn official(destination: &Path, progress: impl FnMut(u64, u64) -> Result<()>
 pub fn payload(
     release: &Release,
     session: &Path,
-    progress: impl FnMut(u64, u64) -> Result<()>,
+    local: Option<&Path>,
+    mut progress: impl FnMut(u64, u64) -> Result<()>,
 ) -> Result<BTreeMap<String, PathBuf>> {
     let archive = session.join("public-payload.tar.gz");
     let blob = Blob {
         size: release.payload.size,
         sha256: release.payload.sha256.clone(),
     };
-    download(&release.payload.url, &blob, &archive, false, progress)?;
+    if let Some(local) = local {
+        copy_local(local, &archive, &blob, &mut progress)?;
+    } else {
+        download(&release.payload.url, &blob, &archive, false, progress)?;
+    }
     extract(release, &archive, &session.join("public-inputs"))
+}
+fn copy_local(
+    source: &Path,
+    destination: &Path,
+    blob: &Blob,
+    progress: &mut impl FnMut(u64, u64) -> Result<()>,
+) -> Result<()> {
+    blob_valid(blob)?;
+    ensure!(
+        std::fs::symlink_metadata(source)?.is_file(),
+        "local OS package must be a regular file"
+    );
+    let mut input = File::open(source)?;
+    ensure!(
+        input.metadata()?.is_file() && input.metadata()?.len() == blob.size,
+        "local OS package size differs"
+    );
+    let mut output = create(destination)?;
+    let mut done = 0;
+    let mut buffer = [0; 65536];
+    progress(0, blob.size)?;
+    while done < blob.size {
+        let count = ((blob.size - done) as usize).min(buffer.len());
+        input.read_exact(&mut buffer[..count])?;
+        output.write_all(&buffer[..count])?;
+        done += count as u64;
+        progress(done, blob.size)?;
+    }
+    ensure!(
+        input.read(&mut buffer[..1])? == 0 && hash(&mut output)? == blob.sha256,
+        "local OS package digest differs"
+    );
+    output.sync_all()?;
+    Ok(())
 }
 pub fn extract(
     release: &Release,
@@ -373,6 +412,43 @@ mod tests {
             },
         };
         (root, release, path)
+    }
+    #[test]
+    fn local_payload_is_pinned_bounded_and_cancellable() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        fs::write(&source, b"public fixture").unwrap();
+        let blob = Blob {
+            size: 14,
+            sha256: digest(&source).unwrap(),
+        };
+        let output = root.path().join("copy");
+        copy_local(&source, &output, &blob, &mut |_, _| Ok(())).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"public fixture");
+        let wrong = Blob {
+            size: 14,
+            sha256: "0".repeat(64),
+        };
+        assert!(
+            copy_local(&source, &root.path().join("wrong"), &wrong, &mut |_, _| Ok(
+                ()
+            ))
+            .is_err()
+        );
+        assert!(copy_local(
+            &source,
+            &root.path().join("cancel"),
+            &blob,
+            &mut |_, _| anyhow::bail!("cancelled")
+        )
+        .is_err());
+        assert!(copy_local(
+            root.path(),
+            &root.path().join("directory"),
+            &blob,
+            &mut |_, _| Ok(())
+        )
+        .is_err());
     }
     #[test]
     fn fixed_public_inventory_excludes_owner_vendor_and_duplicate_members() {
