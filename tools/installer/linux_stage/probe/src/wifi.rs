@@ -313,6 +313,8 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
     {
         value["stage_kind"] = serde_json::json!("private-ram-wifi-debug-stage");
         value["capability"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
+        value["wifi_debug"] = serde_json::json!(true);
+        value["capabilities"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         value["debug_protocol"] = serde_json::json!(1);
     }
     value.to_string().into_bytes()
@@ -534,6 +536,11 @@ mod tests {
         let ordinary: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
         assert_eq!(ordinary["stage_kind"], "private-ram-wifi-debug-stage");
         assert_eq!(ordinary["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
+        assert_eq!(ordinary["wifi_debug"], true);
+        assert_eq!(
+            ordinary["capabilities"],
+            "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
+        );
         assert_eq!(ordinary["debug_protocol"], 1);
         fs::remove_dir_all(root).unwrap();
     }
