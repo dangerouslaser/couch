@@ -47,7 +47,15 @@ impl Candidate {
 const RECORD: &str = "enrollment-source.json";
 const RECORD_LIMIT: u64 = 8192;
 const SESSION_PREFIX: &str = "install-";
-const MAX_ENTRIES: usize = 512;
+/// Upper bound on directory entries examined, so a state root that has grown
+/// unexpectedly large cannot turn drawing a menu into an unbounded walk.
+const MAX_SCAN: usize = 4096;
+/// Upper bound on offered candidates. `Ui::choose` rejects a list longer than
+/// 128 options outright, and that rejection is a hard error that would strand
+/// the operator with no route to the manual prompt. Staying well under the
+/// limit keeps the menu readable and keeps manual entry reachable no matter
+/// how many sessions have accumulated.
+const MENU_LIMIT: usize = 32;
 
 /// Treat two spellings of one folder as the same entry where the filesystem
 /// can confirm it. Falls back to a literal comparison when it cannot.
@@ -62,15 +70,26 @@ fn same(left: &Path, right: &Path) -> bool {
 /// reinstall, never an Android enrollment. Offering one would silently
 /// substitute the wrong baseline, so it is excluded here. It would also fail
 /// admission later; this keeps it out of the operator's way entirely.
+fn couch_snapshot(dir: &Path) -> bool {
+    // symlink_metadata, not exists: a dangling or unreadable entry of that name
+    // still marks the folder as a Couch reinstall record, and `exists` would
+    // quietly report false for both.
+    fs::symlink_metadata(dir.join("current-couch-snapshot.json")).is_ok()
+}
+
 fn native_enrollment(dir: &Path) -> bool {
-    dir.join("enrollment.json").is_file() && !dir.join("current-couch-snapshot.json").exists()
+    dir.join("enrollment.json").is_file() && !couch_snapshot(dir)
 }
 
 /// Read the remembered path. Returns `None` for a missing, oversized,
 /// unparsable, wrong-schema or empty record rather than guessing.
 pub fn remembered(state_root: &Path) -> Option<PathBuf> {
     let path = state_root.join(RECORD);
-    if fs::symlink_metadata(&path).ok()?.len() > RECORD_LIMIT {
+    let meta = fs::symlink_metadata(&path).ok()?;
+    // Require a regular file before reading. A symlink reports its own length
+    // here while the read that follows would resolve the target, so accepting
+    // one would let an arbitrarily large file past the size bound.
+    if !meta.file_type().is_file() || meta.len() > RECORD_LIMIT {
         return None;
     }
     let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
@@ -87,10 +106,17 @@ pub fn remembered(state_root: &Path) -> Option<PathBuf> {
 /// Candidates to offer, remembered entry first, then installer sessions in a
 /// deterministic order. An empty result means the caller should fall back to
 /// the manual prompt.
+///
+/// The list is capped at `MENU_LIMIT`. Manual entry stays reachable, so a cap
+/// costs an operator a scroll rather than a route to the folder they wanted.
 pub fn discover(state_root: &Path, remembered: Option<PathBuf>) -> Vec<Candidate> {
     let mut found = Vec::new();
     if let Some(path) = remembered {
-        if path.is_dir() {
+        // The Couch-snapshot exclusion applies here too. A remembered entry is
+        // not re-checked for enrollment.json, because a legacy Python export
+        // legitimately lacks one, but a folder that has become a Couch
+        // reinstall record is never an Android enrollment.
+        if path.is_dir() && !couch_snapshot(&path) {
             found.push(Candidate {
                 path,
                 origin: Origin::Remembered,
@@ -99,19 +125,24 @@ pub fn discover(state_root: &Path, remembered: Option<PathBuf>) -> Vec<Candidate
     }
     let mut sessions = Vec::new();
     if let Ok(entries) = fs::read_dir(state_root) {
-        for entry in entries.flatten().take(MAX_ENTRIES) {
+        for entry in entries.flatten().take(MAX_SCAN) {
             let path = entry.path();
             let named = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .map_or(false, |name| name.starts_with(SESSION_PREFIX));
+                .is_some_and(|name| name.starts_with(SESSION_PREFIX));
             if named && native_enrollment(&path) {
                 sessions.push(path);
             }
         }
     }
+    // Sort before truncating, so the cap keeps the same entries every run
+    // rather than whatever the filesystem happened to enumerate first.
     sessions.sort();
     for path in sessions {
+        if found.len() >= MENU_LIMIT {
+            break;
+        }
         if !found.iter().any(|other| same(&other.path, &path)) {
             found.push(Candidate {
                 path,
@@ -330,6 +361,105 @@ mod tests {
         assert!(resolve(&found, 1).is_some());
         assert_eq!(resolve(&found, 2), None);
         assert_eq!(resolve(&found, 99), None);
+    }
+
+    #[test]
+    fn the_offered_list_stays_within_the_frontend_choice_limit() {
+        // Ui::choose refuses a list longer than 128 options, and that refusal
+        // is a hard error with no fallback, so an operator who has accumulated
+        // many sessions must not be locked out of the reinstall flow.
+        let root = TempDir::new().unwrap();
+        for n in 0..200 {
+            session(
+                root.path(),
+                &format!("install-{n:04}"),
+                &["enrollment.json"],
+            );
+        }
+        let found = discover(root.path(), None);
+        assert!(found.len() <= MENU_LIMIT);
+        let offered = manual_index(&found) + 1;
+        assert!(
+            offered <= 128,
+            "the menu must fit the frontend choice limit"
+        );
+        assert_eq!(resolve(&found, manual_index(&found)), None);
+    }
+
+    #[test]
+    fn the_capped_list_keeps_the_same_entries_on_every_run() {
+        let root = TempDir::new().unwrap();
+        for n in 0..200 {
+            session(
+                root.path(),
+                &format!("install-{n:04}"),
+                &["enrollment.json"],
+            );
+        }
+        let first = discover(root.path(), None);
+        assert_eq!(discover(root.path(), None), first);
+        let mut expected: Vec<_> = (0..200)
+            .map(|n| root.path().join(format!("install-{n:04}")))
+            .collect();
+        expected.sort();
+        expected.truncate(MENU_LIMIT);
+        assert_eq!(
+            first.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_remembered_folder_holding_a_couch_snapshot_is_not_offered() {
+        let root = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let stale = elsewhere.path().join("was-an-export");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("current-couch-snapshot.json"), b"{}").unwrap();
+        assert!(discover(root.path(), Some(stale)).is_empty());
+    }
+
+    #[test]
+    fn a_remembered_legacy_export_without_enrollment_json_is_still_offered() {
+        let root = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let legacy = elsewhere.path().join("python-run");
+        fs::create_dir_all(&legacy).unwrap();
+        let found = discover(root.path(), Some(legacy.clone()));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, legacy);
+        assert_eq!(found[0].origin, Origin::Remembered);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_record_cannot_slip_past_the_size_bound() {
+        let root = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let big = elsewhere.path().join("big.json");
+        fs::write(&big, vec![b'x'; 9000]).unwrap();
+        std::os::unix::fs::symlink(&big, root.path().join(RECORD)).unwrap();
+        assert_eq!(remembered(root.path()), None);
+        // Even a small, well-formed target is refused: the record must be a
+        // regular file in installer state, not a pointer out of it.
+        let small = elsewhere.path().join("small.json");
+        fs::write(&small, json!({"schema": 1, "path": "/tmp/x"}).to_string()).unwrap();
+        fs::remove_file(root.path().join(RECORD)).unwrap();
+        std::os::unix::fs::symlink(&small, root.path().join(RECORD)).unwrap();
+        assert_eq!(remembered(root.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_couch_snapshot_entry_still_excludes_the_folder() {
+        let root = TempDir::new().unwrap();
+        let dir = session(root.path(), "install-aaaa", &["enrollment.json"]);
+        std::os::unix::fs::symlink(
+            dir.join("nothing-here"),
+            dir.join("current-couch-snapshot.json"),
+        )
+        .unwrap();
+        assert!(discover(root.path(), None).is_empty());
     }
 
     #[test]
