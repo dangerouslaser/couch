@@ -150,6 +150,8 @@ class WifiRamdiskTests(unittest.TestCase):
         init = (wifi.REPO / 'tools/installer/wifi-stage/wifi-init').read_text()
         self.assertIn('/tmp/couch-wifi-debug.retry', source)
         self.assertIn('/bin/couch-wifi-init', source)
+        self.assertIn('MAX_GENERATIONS=8', source)
+        self.assertIn('debug-retry-limit', source)
         self.assertLess(init.index('/etc/couch-wifi-debug-mode'), init.index('step credentials'))
         self.assertIn('tail -c 4096 /tmp/probe.log > /tmp/couch-wifi-debug.log', init)
         for forbidden in ('stage_provision', 'mmcblk', 'eval ', 'sh -c'):

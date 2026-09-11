@@ -25,6 +25,8 @@ use std::{
 #[cfg(not(feature = "wifi-debug"))]
 use subtle::ConstantTimeEq;
 static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "wifi-debug")]
+const DEBUG_GENERATION_LIMIT: u32 = 8;
 pub fn active() -> bool {
     ACTIVE.load(std::sync::atomic::Ordering::Acquire)
 }
@@ -216,7 +218,8 @@ fn error_label(error: &str) -> &str {
         | "control-directory"
         | "dhcp-exit"
         | "supplicant-exit"
-        | "supplicant-socket-timeout" => error.trim(),
+        | "supplicant-socket-timeout"
+        | "debug-retry-limit" => error.trim(),
         _ => "unknown",
     }
 }
@@ -257,18 +260,26 @@ fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(0);
-    serde_json::json!({
-        "stage_kind": "private-ram-wifi-debug-stage",
-        "capability": "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1",
-        "debug_protocol": 1,
-        "status": serde_json::from_slice::<serde_json::Value>(&status()).ok(),
-        "step": step,
-        "generation": generation,
-        "precredential": true,
-        "log": printable,
-    })
-    .to_string()
-    .into_bytes()
+    let status = serde_json::from_slice::<serde_json::Value>(&status()).ok();
+    loop {
+        let bytes = serde_json::json!({
+            "stage_kind": "private-ram-wifi-debug-stage",
+            "capability": "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1",
+            "debug_protocol": 1,
+            "status": status.clone(),
+            "step": step,
+            "generation": generation,
+            "debug_generation_limit": DEBUG_GENERATION_LIMIT,
+            "precredential": true,
+            "log": printable,
+        })
+        .to_string()
+        .into_bytes();
+        if bytes.len() <= 4608 || printable.is_empty() {
+            return bytes;
+        }
+        printable.pop();
+    }
 }
 
 #[cfg(feature = "wifi-debug")]
@@ -311,6 +322,7 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
         value["wifi_debug"] = serde_json::json!(true);
         value["capabilities"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         value["debug_protocol"] = serde_json::json!(1);
+        value["debug_generation_limit"] = serde_json::json!(DEBUG_GENERATION_LIMIT);
         value["scan"] = serde_json::json!(false);
     }
     value.to_string().into_bytes()
@@ -335,6 +347,7 @@ mod tests {
         assert_eq!(status_label("untrusted status"), "waiting");
         assert_eq!(error_label("loader-exit\n"), "loader-exit");
         assert_eq!(error_label("control-directory\n"), "control-directory");
+        assert_eq!(error_label("debug-retry-limit\n"), "debug-retry-limit");
         assert_eq!(error_label("private network text"), "unknown");
     }
     #[test]
@@ -527,9 +540,15 @@ mod tests {
         assert_eq!(value["stage_kind"], "private-ram-wifi-debug-stage");
         assert_eq!(value["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         assert_eq!(value["debug_protocol"], 1);
+        assert_eq!(value["debug_generation_limit"], DEBUG_GENERATION_LIMIT);
         assert_eq!(value["status"]["provisioned"], false);
-        assert_eq!(value["log"].as_str().unwrap().len(), 4096);
+        assert!(value["log"].as_str().unwrap().len() <= 4096);
         assert!(raw.len() <= 4608);
+        fs::write(root.join("couch-wifi-debug.log"), vec![0xff; 8192]).unwrap();
+        let malformed = debug_status_from(&root);
+        let malformed: serde_json::Value = serde_json::from_slice(&malformed).unwrap();
+        assert!(malformed["log"].as_str().unwrap().as_bytes().len() <= 4096);
+        assert!(serde_json::to_vec(&malformed).unwrap().len() <= 4608);
         let ordinary: serde_json::Value = serde_json::from_slice(&status_from(&root)).unwrap();
         assert_eq!(ordinary["stage_kind"], "private-ram-wifi-debug-stage");
         assert_eq!(ordinary["capability"], "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
@@ -539,6 +558,7 @@ mod tests {
             "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
         );
         assert_eq!(ordinary["debug_protocol"], 1);
+        assert_eq!(ordinary["debug_generation_limit"], DEBUG_GENERATION_LIMIT);
         assert_eq!(ordinary["scan"], false);
         assert_eq!(ordinary["provisioned"], false);
         fs::remove_dir_all(root).unwrap();

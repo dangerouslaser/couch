@@ -210,7 +210,10 @@ must poll status until generation increases rather than treating the
 acknowledgement as a completed restart. There is no start, stop, PID, command,
 path, scan, or credential operation. The fixed supervisor may stop only its
 own init worker and the known `wpa_supplicant`, `wmt_launcher`, and
-`wmt_loader` processes.
+`wmt_loader` processes. `debug_generation_limit` is 8: generation 1 is the
+initial boot attempt and at most seven retries can start. At the limit the
+stage reports `failed` with `debug-retry-limit` and remains status-readable;
+it never starts another generation automatically.
 
 The retry request contains no command, path, configuration, or credentials. The
 initramfs supervisor consumes only its fixed marker, stops only its fixed

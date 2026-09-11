@@ -4,7 +4,16 @@
 BB=/bin/busybox
 umask 077
 generation=0
+MAX_GENERATIONS=8
 while true; do
+    if [ "$generation" -ge "$MAX_GENERATIONS" ]; then
+        echo debug-retry-limit > /tmp/couch-wifi.error
+        echo failed > /tmp/couch-wifi.status
+        echo 'WiFi failed: debug-retry-limit' > /tmp/couch-wifi-debug.log
+        # Keep the diagnostic FunctionFS service alive, but never start a
+        # ninth generation. A fresh reviewed debug transition is required.
+        while true; do $BB sleep 3600; done
+    fi
     generation=$((generation + 1))
     echo "$generation" > /tmp/couch-wifi-debug.generation
     $BB rm -f /tmp/couch-wifi-debug.retry /tmp/couch-wifi.status /tmp/couch-wifi.error \
