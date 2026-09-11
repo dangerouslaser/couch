@@ -528,7 +528,15 @@ fn install(
         )?;
         thread::sleep(Duration::from_millis(20));
     };
-    let connected=simple(&mut worker,json!({"op":"start","candidate":candidate}),"connected",120,ui,3).context("Could not claim the selected USB download interface. On Windows it needs a compatible WinUSB driver; do not replace drivers for other USB devices")?;
+    let connected = simple(
+        &mut worker,
+        json!({"op":"start","candidate":candidate}),
+        "connected",
+        120,
+        ui,
+        3,
+    )
+    .map_err(|error| anyhow::anyhow!("USB download startup failed: {error:#}"))?;
     let cid = connected["cid"]
         .as_str()
         .context("missing observed canonical CID")?;

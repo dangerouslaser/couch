@@ -288,10 +288,29 @@ impl Worker {
             let size = u32::from_le_bytes(self.read(4)?.try_into().unwrap()) as usize;
             ensure!(size > 0 && size <= CHUNK, "invalid worker frame size");
             let value: Value = serde_json::from_slice(&self.read(size)?)?;
-            ensure!(
-                value.is_object() && value["event"] != "error",
-                "MTK worker stopped; retain originals"
-            );
+            ensure!(value.is_object(), "invalid worker event");
+            if value["event"] == "error" {
+                let diagnostic = &value["diagnostic"];
+                let category = diagnostic["category"].as_str().unwrap_or("WorkerError");
+                let category = match category {
+                    "USBError" | "USBTimeoutError" | "InstallError" | "OSError"
+                    | "PermissionError" | "TimeoutError" | "ValueError" | "TypeError"
+                    | "AttributeError" | "RuntimeError" => category,
+                    _ => "WorkerError",
+                };
+                let source = diagnostic["source"]
+                    .as_str()
+                    .filter(|v| {
+                        matches!(
+                            *v,
+                            "mtk_adapter.py" | "mtk_usb.py" | "mtk_readonly.py" | "mtk_writer.py"
+                        )
+                    })
+                    .unwrap_or("worker");
+                anyhow::bail!("MTK worker stopped: {category} at {source}:{} (errno {:?}, backend {:?}); retain originals",
+                    diagnostic["line"].as_u64().unwrap_or(0),
+                    diagnostic["errno"].as_i64(), diagnostic["backend_error_code"].as_i64());
+            }
             if value["event"] == "deadline_end" {
                 ensure!(
                     value.as_object().unwrap().len() == 1,
@@ -363,6 +382,8 @@ use std::{io::{self,Read,Write},thread,time::Duration};
 fn emit(data:&[u8]) { let mut o=io::stdout();o.write_all(&(data.len() as u32).to_le_bytes()).unwrap();o.write_all(data).unwrap();o.flush().unwrap(); }
 fn ack() { let mut h=[0;4];io::stdin().read_exact(&mut h).unwrap();let mut b=vec![0;u32::from_le_bytes(h) as usize];io::stdin().read_exact(&mut b).unwrap(); }
 fn main() { match std::env::args().nth(1).unwrap().as_str() {
+"safe_error" => emit(br#"{"event":"error","diagnostic":{"category":"USBError","source":"mtk_usb.py","line":242,"errno":13,"backend_error_code":-3,"message":"secret"}}"#),
+"untrusted_error" => emit(br#"{"event":"error","diagnostic":{"category":"secret","source":"/private/secret","line":"secret","errno":"secret"}}"#),
 "hang" => thread::sleep(Duration::from_secs(60)),
 "oversize" => { io::stdout().write_all(&u32::MAX.to_le_bytes()).unwrap(); },
 "deadline" => { emit(br#"{"event":"deadline","seconds":0.05}"#);ack();thread::sleep(Duration::from_secs(60)); },
@@ -378,6 +399,24 @@ _ => panic!()
     }
     fn worker(mode: &str) -> Worker {
         Worker::spawn(Command::new(fixture()).arg(mode)).unwrap()
+    }
+    #[test]
+    fn worker_errors_retain_only_allowlisted_diagnostic_fields() {
+        let mut good = worker("safe_error");
+        let error = good
+            .operation(Duration::from_secs(5), |w| w.event())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("USBError at mtk_usb.py:242"));
+        assert!(error.contains("Some(13)"));
+        assert!(!error.contains("secret"));
+        let mut bad = worker("untrusted_error");
+        let error = bad
+            .operation(Duration::from_secs(5), |w| w.event())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("WorkerError at worker:0"));
+        assert!(!error.contains("secret"));
     }
     #[test]
     fn expired_read_kills_and_poisons_worker() {

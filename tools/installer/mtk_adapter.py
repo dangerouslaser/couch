@@ -285,6 +285,28 @@ def serve(wire, factory=Adapter):
         adapter.close()
 
 
+def failure_diagnostic(error):
+    """Expose only numeric codes and reviewed source locations, never error text."""
+    category = type(error).__name__
+    if category not in {'USBError', 'USBTimeoutError', 'InstallError', 'OSError',
+                        'PermissionError', 'TimeoutError', 'ValueError', 'TypeError',
+                        'AttributeError', 'RuntimeError'}:
+        category = 'WorkerError'
+    result = {'category': category}
+    for name in ('errno', 'backend_error_code'):
+        value = getattr(error, name, None)
+        if type(value) is int and -65536 <= value <= 65536:
+            result[name] = value
+    trace = error.__traceback__
+    while trace is not None:
+        filename = Path(trace.tb_frame.f_code.co_filename).name
+        if filename in {'mtk_adapter.py', 'mtk_usb.py', 'mtk_readonly.py', 'mtk_writer.py'}:
+            result['source'] = filename
+            result['line'] = trace.tb_lineno
+        trace = trace.tb_next
+    return result
+
+
 def serve_stdio(factory=Adapter):
     # Keep the RPC pipe on its own descriptor. The pinned MTK library detaches
     # and re-wraps stdout/stderr independently while importing utils.py; aliasing
@@ -298,9 +320,10 @@ def serve_stdio(factory=Adapter):
         try:
             serve(wire, factory)
             return 0
-        except BaseException:
+        except BaseException as error:
             try:
-                wire.send({'event': 'error', 'preserve_originals': True})
+                wire.send({'event': 'error', 'preserve_originals': True,
+                           'diagnostic': failure_diagnostic(error)})
             except BaseException:
                 pass
             return 1

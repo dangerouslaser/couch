@@ -11,7 +11,7 @@ from unittest.mock import patch
 from contextlib import contextmanager
 
 from couch_install import InstallError, IDENTITY_PARTITIONS
-from mtk_adapter import Adapter, Wire, serve, MAX
+from mtk_adapter import Adapter, Wire, serve, MAX, failure_diagnostic
 from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
 from mtk_writer import _open_image, _fd_stamp, _read_at, ConnectedMtkWriter
 
@@ -28,6 +28,16 @@ class MemoryWire:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_failure_diagnostic_never_contains_exception_text_or_unknown_names(self):
+        try:
+            raise PermissionError(13, 'secret password /private/device-id')
+        except PermissionError as error:
+            result = failure_diagnostic(error)
+        self.assertEqual(result, {'category': 'PermissionError', 'errno': 13})
+        PrivateDeviceName = type('private-device-secret', (Exception,), {})
+        result = failure_diagnostic(PrivateDeviceName('secret'))
+        self.assertEqual(result, {'category': 'WorkerError'})
+
     def test_real_stdio_survives_independent_library_rewrap_and_hides_output(self):
         import subprocess
         import sys
