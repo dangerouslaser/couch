@@ -2,9 +2,28 @@
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::time::Instant;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_FRAME: usize = 65536;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressUnit {
+    Bytes,
+    Items,
+    Seconds,
+}
+
+struct RateSample {
+    phase: usize,
+    label: String,
+    total: u64,
+    done: u64,
+    at: Instant,
+    last_done: u64,
+    rate: f64,
+}
 
 #[derive(Clone, Serialize)]
 pub struct Choice {
@@ -35,6 +54,7 @@ struct State {
     result: String,
     log_path: String,
     measurement: Option<(u64, u64, f64)>,
+    measurement_unit: ProgressUnit,
 }
 
 pub struct Ui {
@@ -43,6 +63,7 @@ pub struct Ui {
     sequence: u64,
     poisoned: bool,
     state: State,
+    rate_sample: Option<RateSample>,
 }
 impl Ui {
     pub fn new(input: Box<dyn Read>, output: Box<dyn Write>) -> Self {
@@ -51,6 +72,7 @@ impl Ui {
             output,
             sequence: 0,
             poisoned: false,
+            rate_sample: None,
             state: State {
                 event: "state",
                 step: 0,
@@ -60,6 +82,7 @@ impl Ui {
                 result: "active".into(),
                 log_path: String::new(),
                 measurement: None,
+                measurement_unit: ProgressUnit::Bytes,
             },
         }
     }
@@ -122,6 +145,7 @@ impl Ui {
             !steps.is_empty() && steps.len() <= 32,
             "invalid installer steps"
         );
+        self.clear_progress();
         self.state.steps = steps;
         self.state.step = 0;
         self.state()
@@ -131,13 +155,72 @@ impl Ui {
         self.state()
     }
     pub fn progress(&mut self, phase: usize, label: &str, done: u64, total: u64) -> Result<()> {
+        self.progress_with_unit(phase, label, done, total, ProgressUnit::Bytes)
+    }
+    pub fn progress_with_unit(
+        &mut self,
+        phase: usize,
+        label: &str,
+        done: u64,
+        total: u64,
+        unit: ProgressUnit,
+    ) -> Result<()> {
+        self.progress_at(phase, label, done, total, unit, Instant::now())
+    }
+    fn clear_progress(&mut self) {
+        self.rate_sample = None;
+        self.state.measurement = None;
+    }
+    fn progress_at(
+        &mut self,
+        phase: usize,
+        label: &str,
+        done: u64,
+        total: u64,
+        unit: ProgressUnit,
+        now: Instant,
+    ) -> Result<()> {
         ensure!(
             phase < self.state.steps.len() && done <= total,
             "invalid installer progress"
         );
+        let mut rate = 0.0;
+        if unit == ProgressUnit::Bytes && total > 0 {
+            let reset = self.rate_sample.as_ref().is_none_or(|sample| {
+                sample.phase != phase
+                    || sample.label != label
+                    || sample.total != total
+                    || done < sample.last_done
+                    || done == 0
+            });
+            if reset {
+                self.rate_sample = Some(RateSample {
+                    phase,
+                    label: label.into(),
+                    total,
+                    done,
+                    last_done: done,
+                    at: now,
+                    rate: 0.0,
+                });
+            } else if let Some(sample) = &mut self.rate_sample {
+                let elapsed = now.saturating_duration_since(sample.at).as_secs_f64();
+                // Avoid unstable sub-millisecond samples while still reporting the final chunk.
+                if elapsed >= 0.25 || (done == total && elapsed > 0.0) {
+                    sample.rate = (done - sample.done) as f64 / elapsed;
+                    sample.done = done;
+                    sample.at = now;
+                }
+                sample.last_done = done;
+                rate = sample.rate;
+            }
+        } else {
+            self.rate_sample = None;
+        }
         self.state.step = phase;
         self.state.detail = label.into();
-        self.state.measurement = (total > 0).then_some((done, total, 0.0));
+        self.state.measurement = (total > 0).then_some((done, total, rate));
+        self.state.measurement_unit = unit;
         self.state()
     }
     fn request(
@@ -147,6 +230,7 @@ impl Ui {
         kind: &str,
         options: serde_json::Value,
     ) -> Result<Zeroizing<String>> {
+        self.clear_progress();
         self.state.detail = body.into();
         self.state.action.clear();
         self.state()?;
@@ -215,12 +299,14 @@ impl Ui {
         )
     }
     pub fn error(&mut self, message: &str) -> Result<()> {
+        self.clear_progress();
         self.state.result = "error".into();
         self.state.detail = message.into();
         self.state.action = "Preserve the saved originals and installation log.".into();
         self.state()
     }
     pub fn finish(&mut self, code: i32) -> Result<()> {
+        self.clear_progress();
         self.state.result = if code == 0 { "ok" } else { "error" }.into();
         self.state()?;
         self.send(&serde_json::json!({"event":"finished", "code":code}))?;
@@ -253,6 +339,132 @@ mod tests {
             ),
             output,
         )
+    }
+    #[test]
+    fn transfer_rate_tracks_elapsed_bytes_and_resets_between_operations() {
+        use std::time::Duration;
+        let (mut ui, output) = fixture(b"");
+        ui.set_steps(vec!["Transfer".into(), "Verify".into()])
+            .unwrap();
+        let now = Instant::now();
+        let mib = 1048576;
+        let mut update = |phase, label: &str, done, total, millis, unit| {
+            ui.progress_at(
+                phase,
+                label,
+                done,
+                total,
+                unit,
+                now + Duration::from_millis(millis),
+            )
+            .unwrap();
+            ui.state.measurement.map(|(_, _, rate)| rate).unwrap_or(0.0)
+        };
+        assert_eq!(
+            update(0, "Write boot", 0, 10 * mib, 0, ProgressUnit::Bytes),
+            0.0
+        );
+        assert_eq!(
+            update(0, "Write boot", mib, 10 * mib, 1000, ProgressUnit::Bytes),
+            mib as f64
+        );
+        assert_eq!(
+            update(
+                0,
+                "Write boot",
+                3 * mib,
+                10 * mib,
+                2000,
+                ProgressUnit::Bytes
+            ),
+            2.0 * mib as f64
+        );
+        assert_eq!(
+            update(
+                0,
+                "Write boot",
+                3 * mib,
+                10 * mib,
+                3000,
+                ProgressUnit::Bytes
+            ),
+            0.0
+        );
+        assert_eq!(
+            update(
+                0,
+                "Write boot",
+                4 * mib,
+                10 * mib,
+                4000,
+                ProgressUnit::Bytes
+            ),
+            mib as f64
+        );
+        // New phase/label, even with the same total, must not borrow transfer speed.
+        assert_eq!(
+            update(1, "Verify boot", mib, 10 * mib, 5000, ProgressUnit::Bytes),
+            0.0
+        );
+        assert_eq!(
+            update(
+                1,
+                "Verify boot",
+                2 * mib,
+                10 * mib,
+                5500,
+                ProgressUnit::Bytes
+            ),
+            2.0 * mib as f64
+        );
+        // A rewind within the sampling interval starts a fresh operation.
+        update(
+            1,
+            "Verify boot",
+            3 * mib,
+            10 * mib,
+            5600,
+            ProgressUnit::Bytes,
+        );
+        assert_eq!(
+            update(
+                1,
+                "Verify boot",
+                2 * mib,
+                10 * mib,
+                5650,
+                ProgressUnit::Bytes
+            ),
+            0.0
+        );
+        assert_eq!(
+            update(
+                1,
+                "Verify boot",
+                3 * mib,
+                20 * mib,
+                6000,
+                ProgressUnit::Bytes
+            ),
+            0.0
+        );
+        assert_eq!(update(1, "Files", 3, 4, 7000, ProgressUnit::Items), 0.0);
+        assert_eq!(update(1, "Wait", 1, 120, 8000, ProgressUnit::Seconds), 0.0);
+        assert_eq!(update(1, "Unknown", 0, 0, 9000, ProgressUnit::Bytes), 0.0);
+        assert!(ui.state.measurement.is_none());
+        let frames = String::from_utf8(output.0.borrow().clone()).unwrap();
+        assert!(frames.contains("\"measurement_unit\":\"items\""));
+        assert!(frames.contains("\"measurement_unit\":\"seconds\""));
+    }
+    #[test]
+    fn prompts_and_errors_clear_transfer_measurements() {
+        let (mut ui, _) = fixture(b"{\"id\":1,\"value\":\"0\"}\n");
+        ui.progress(0, "Transfer", 1, 10).unwrap();
+        ui.input("Continue", "Wait for user", false).unwrap();
+        assert!(ui.state.measurement.is_none() && ui.rate_sample.is_none());
+        ui.progress(0, "Transfer", 2, 10).unwrap();
+        ui.error("Stopped").unwrap();
+        assert!(ui.state.measurement.is_none() && ui.rate_sample.is_none());
     }
     #[test]
     fn secret_reply_is_not_echoed_in_events() {

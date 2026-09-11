@@ -15,6 +15,11 @@ pub enum Error {
     Invalid,
     Timeout,
     Protocol,
+    /// Reading or writing the private settings file failed. Separate from
+    /// [`Error::Io`] because that variant's message sends the user to the
+    /// receiver's network settings, and a full or read-only flash has nothing
+    /// to do with the receiver. Every network path still uses `Io`.
+    Storage(io::Error),
 }
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
@@ -30,16 +35,21 @@ impl From<io::Error> for Error {
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Storage(_) = self {
+            return f.write_str("Cannot read or write the AVR connection settings");
+        }
         f.write_str(match self {
             Self::Io(_) => "Cannot reach the AVR. Check its address and Network Control setting.",
             Self::Invalid => "Invalid AVR command or setting",
             Self::Timeout => "AVR did not confirm the request before the deadline",
             Self::Protocol => "Invalid AVR response",
+            Self::Storage(_) => unreachable!("handled above"),
         })
     }
 }
 impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
+mod sdk;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub host: String,
@@ -59,30 +69,31 @@ impl Settings {
         }
         Ok(())
     }
+    /// The atomic 0600 write is the shared implementation in
+    /// `couch_sdk::settings` - one copy of it instead of five. The file's name,
+    /// JSON schema, permissions, temporary-file cleanup and validation are
+    /// untouched.
+    ///
+    /// The error split is the one thing here that is deliberately *not* what it
+    /// was: a file that cannot be read or written is [`Error::Storage`], not
+    /// [`Error::Io`], because `Io` renders as "Cannot reach the AVR. Check its
+    /// address and Network Control setting." and a full flash is not a network
+    /// problem. An unparseable or unusable file remains [`Error::Invalid`], as
+    /// before. Every network path still reports `Io`.
     pub fn load(path: &std::path::Path) -> Result<Self> {
-        let s: Self = serde_json::from_slice(&std::fs::read(path)?).map_err(|_| Error::Invalid)?;
+        let s: Self = couch_sdk::load_private(path).map_err(|e| {
+            if e.kind() == io::ErrorKind::InvalidData {
+                Error::Invalid
+            } else {
+                Error::Storage(e)
+            }
+        })?;
         s.validate()?;
         Ok(s)
     }
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
-        use std::os::unix::fs::OpenOptionsExt;
         self.validate()?;
-        let tmp = path.with_extension(format!("{}.new", std::process::id()));
-        let result = (|| -> std::io::Result<()> {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            f.write_all(&serde_json::to_vec(self)?)?;
-            f.sync_all()?;
-            std::fs::rename(&tmp, path)?;
-            std::fs::File::open(path.parent().unwrap())?.sync_all()
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(tmp);
-        }
-        result.map_err(Into::into)
+        couch_sdk::save_private(path, self).map_err(Error::Storage)
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -358,6 +369,114 @@ mod tests {
         }
         assert!(Command::Input("BD\rMV98".into()).wire().is_err());
     }
+    /// Everything about this file is a contract with an installed device: its
+    /// name, its JSON, its permissions and what happens when a write fails
+    /// halfway. Moving the write into `couch-sdk` must change none of it.
+    #[test]
+    fn the_private_settings_file_keeps_its_schema_permissions_and_failure_behaviour() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("couch-denon-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("denon-connection.json");
+        let settings = Settings {
+            host: "avr.local".into(),
+            port: DEFAULT_PORT,
+        };
+
+        settings.save(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"host":"avr.local","port":23}"#,
+            "the on-disk schema is read by installed devices"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!((loaded.host.as_str(), loaded.port), ("avr.local", 23));
+
+        // A rejected save leaves the previous file byte for byte.
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            Settings {
+                host: String::new(),
+                port: 23
+            }
+            .save(&path),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+
+        // A write that fails after the temporary file exists still cleans up:
+        // a stray half-written credential is worse than no credential.
+        let occupied = dir.join("occupied.json");
+        std::fs::create_dir(&occupied).unwrap();
+        assert!(settings.save(&occupied).is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".new"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+
+        // The error split predates the shared helper and is preserved: absent
+        // is an I/O failure, unparseable or unusable is a settings failure.
+        // An absent file is a storage condition, and must not tell the user to
+        // go and check the receiver's network settings.
+        let absent = Settings::load(&dir.join("absent.json"));
+        assert!(matches!(absent, Err(Error::Storage(_))));
+        assert!(absent
+            .unwrap_err()
+            .to_string()
+            .starts_with("Cannot read or write the AVR connection settings"));
+        let unwritable = settings.save(&dir.join("no-such-dir").join("denon-connection.json"));
+        assert!(matches!(unwritable, Err(Error::Storage(_))));
+        assert!(
+            !unwritable.unwrap_err().to_string().contains("Network"),
+            "a failed write must not be reported as a network failure"
+        );
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(matches!(Settings::load(&path), Err(Error::Invalid)));
+        std::fs::write(&path, br#"{"host":"avr.local","port":0}"#).unwrap();
+        assert!(matches!(Settings::load(&path), Err(Error::Invalid)));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn settings_validation_still_rejects_exactly_what_it_rejected_before() {
+        for host in ["avr.local", "10.0.0.5", "a"] {
+            assert!(Settings {
+                host: host.into(),
+                port: DEFAULT_PORT
+            }
+            .validate()
+            .is_ok());
+        }
+        let long = "a".repeat(254);
+        for (host, port) in [
+            ("", 23),
+            ("avr.local", 0),
+            ("avr local", 23),
+            ("user@avr.local", 23),
+            ("avr.local/path", 23),
+            ("avr\\local", 23),
+            ("avr\n.local", 23),
+            (long.as_str(), 23),
+        ] {
+            assert!(
+                Settings {
+                    host: host.into(),
+                    port
+                }
+                .validate()
+                .is_err(),
+                "{host:?}:{port} must stay rejected"
+            );
+        }
+    }
+
     #[test]
     fn fragmented_push_frames_do_not_confuse_status_queries() {
         use std::net::TcpListener;

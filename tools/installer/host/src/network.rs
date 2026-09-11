@@ -25,7 +25,13 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
             start.elapsed() < Duration::from_secs(120),
             "Wi-Fi did not become ready"
         );
-        ui.progress(4, "Starting remote Wi-Fi", start.elapsed().as_secs(), 120)?;
+        ui.progress_with_unit(
+            4,
+            "Starting remote Wi-Fi",
+            start.elapsed().as_secs(),
+            120,
+            crate::frontend::ProgressUnit::Seconds,
+        )?;
         let status = rpc(worker, "stage_status", Value::Null)?;
         ensure!(
             status["provisioned"] != true,
