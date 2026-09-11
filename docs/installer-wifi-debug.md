@@ -145,3 +145,20 @@ the earlier transition, not that nobody has changed the device since then.
 
 Offline checks use mocked USB and the native private event channel; successful
 builds/tests do not establish hardware Wi-Fi success.
+
+## Debug worker failures
+
+A failed debug operation closes and poisons its worker; it never automatically
+retries, reconnects, or repeats a transition. The native UI and private
+`debug_stopped` checkpoint retain the operation, a fixed error category and
+phase, and bounded numeric OS/USB error codes when available. Exception text,
+paths, USB payloads and traceback contents are not exposed. Cleanup failure
+does not replace the original diagnostic. The error travels in a bounded IPC
+frame, not stderr. An unavailable or malformed worker response is reported as
+`WorkerUnavailable`, which does not by itself prove a USB disconnection.
+
+These records distinguish an observed transport exception from identity or
+JSON rejection; they do not establish why the stage failed. In particular,
+valid `initializing` diagnostics at generation 2 are accepted. Existing sessions
+from older hosts contain only `debug_stopped`; their original failure category
+cannot be reconstructed from that event alone.
