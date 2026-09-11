@@ -364,3 +364,44 @@ class UsbBackendTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PermissionSettleTests(unittest.TestCase):
+    def test_exact_device_access_denied_then_granted(self):
+        from mtk_usb import configuration_after_permissions
+        denied = PermissionError(13, 'denied')
+        denied.backend_error_code = -3
+        calls = []
+        config = object()
+        def get():
+            calls.append(1)
+            if len(calls) == 1:
+                raise denied
+            return config
+        clock = [0.0]
+        def sleep(seconds): clock[0] += seconds
+        self.assertIs(configuration_after_permissions(NS(get_active_configuration=get),
+            platform='linux', now=lambda: clock[0], sleep=sleep), config)
+        self.assertEqual(len(calls), 2)
+
+    def test_persistent_access_is_bounded_and_other_errors_never_retry(self):
+        from mtk_usb import configuration_after_permissions
+        for platform, number, backend in [('linux', 13, -3), ('linux', 5, -1), ('win32', 13, -3)]:
+            error = OSError(number, 'not forwarded')
+            error.backend_error_code = backend
+            calls = []
+            clock = [0.0]
+            def get():
+                calls.append(1)
+                raise error
+            def sleep(seconds): clock[0] += seconds
+            with self.assertRaises(OSError) as caught:
+                configuration_after_permissions(NS(get_active_configuration=get),
+                    platform=platform, now=lambda: clock[0], sleep=sleep)
+            self.assertIs(caught.exception, error)
+            if platform == 'linux' and number == 13:
+                self.assertGreater(len(calls), 1)
+                self.assertLessEqual(len(calls), 42)
+                self.assertLessEqual(clock[0], 1.0)
+            else:
+                self.assertEqual(len(calls), 1)
