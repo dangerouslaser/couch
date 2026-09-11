@@ -188,9 +188,18 @@ fn status_label(status: &str) -> &str {
 }
 fn error_label(error: &str) -> &str {
     match error.trim() {
-        "detect-node" | "loader-exit" | "transport-node" | "wifi-node" | "launcher-exit"
-        | "transport-timeout" | "power-on" | "interface-timeout" | "interface-up" | "dhcp-exit"
-        | "supplicant-exit" | "supplicant-socket-timeout" => error.trim(),
+        "detect-node"
+        | "loader-exit"
+        | "transport-node"
+        | "wifi-node"
+        | "launcher-exit"
+        | "transport-timeout"
+        | "power-on"
+        | "interface-timeout"
+        | "interface-up"
+        | "dhcp-exit"
+        | "supplicant-exit"
+        | "supplicant-socket-timeout" => error.trim(),
         _ => "unknown",
     }
 }
@@ -244,14 +253,18 @@ mod tests {
         // reach the operator looking exactly like the one it was split from.
         // Read the reasons the stage actually writes, then drive them through
         // error_label rather than asserting on the source text.
-        let stage = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../wifi-stage/wifi-init"),
-        )
+        let stage = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../wifi-stage/wifi-init"
+        ))
         .expect("stage script");
         let mut written: Vec<&str> = stage
             .split("fail ")
             .skip(1)
-            .filter_map(|rest| rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').next())
+            .filter_map(|rest| {
+                rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .next()
+            })
             .filter(|token| !token.is_empty() && *token != "reason")
             .collect();
         written.sort_unstable();
