@@ -836,6 +836,31 @@ pub fn host_platform() -> Result<&'static str> {
     }
 }
 
+/// Use ordinary absolute Windows paths at Python's import boundary. PyCryptodome
+/// joins package paths with `..`, which Windows verbatim paths do not normalize.
+/// The underlying prepared files and receipt verification retain their original paths.
+pub fn python_path(path: &Path) -> Result<String> {
+    let text = path.to_str().context("non-UTF8 Python path")?;
+    if cfg!(windows) {
+        return ordinary_windows_path(text);
+    }
+    Ok(text.into())
+}
+
+fn ordinary_windows_path(text: &str) -> Result<String> {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Ok(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        ensure!(
+            rest.as_bytes().get(1) == Some(&b':') && rest.as_bytes().get(2) == Some(&b'\\'),
+            "unsupported verbatim Python path"
+        );
+        return Ok(rest.into());
+    }
+    Ok(text.into())
+}
+
 /// Read-only executable/import check. Every invocation is preceded by full receipt
 /// verification; discovery is prohibited and the environment contains no tool PATH.
 pub fn smoke(prepared: &PreparedDependencies) -> Result<Value> {
@@ -845,6 +870,11 @@ pub fn smoke(prepared: &PreparedDependencies) -> Result<Value> {
         let mut command = Command::new(executable);
         command
             .args(args)
+            .current_dir(
+                executable
+                    .parent()
+                    .context("smoke executable parent absent")?,
+            )
             .env_clear()
             .env("PATH", "")
             .stdin(Stdio::null())
@@ -944,17 +974,9 @@ print(json.dumps({"imports":"passed","libusb_load":"passed","usb_opened":False})
             "-S".into(),
             "-c".into(),
             code.into(),
-            site.to_str().context("non-UTF8 smoke site path")?.into(),
-            prepared
-                .mtk_root
-                .to_str()
-                .context("non-UTF8 MTK path")?
-                .into(),
-            prepared
-                .libusb
-                .to_str()
-                .context("non-UTF8 libusb path")?
-                .into(),
+            python_path(&site)?,
+            python_path(&prepared.mtk_root)?,
+            python_path(&prepared.libusb)?,
         ],
     )?;
     let imports: Value =
@@ -993,6 +1015,22 @@ mod tests {
     }
     fn no_progress(_: &str, _: u64, _: u64) -> Result<()> {
         Ok(())
+    }
+    #[test]
+    fn python_windows_paths_allow_package_parent_joins_without_verbatim_semantics() {
+        assert_eq!(
+            ordinary_windows_path(r"\\?\C:\private\runtime").unwrap(),
+            r"C:\private\runtime"
+        );
+        assert_eq!(
+            ordinary_windows_path(r"\\?\UNC\server\share\runtime").unwrap(),
+            r"\\server\share\runtime"
+        );
+        assert_eq!(
+            ordinary_windows_path(r"C:\private\runtime").unwrap(),
+            r"C:\private\runtime"
+        );
+        assert!(ordinary_windows_path(r"\\?\GLOBALROOT\Device").is_err());
     }
     #[test]
     fn receipt_parser_uses_only_authenticated_snapshot_and_file_reads_are_bounded() {
