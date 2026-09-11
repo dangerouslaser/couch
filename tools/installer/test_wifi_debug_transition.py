@@ -139,23 +139,25 @@ class TransitionTests(unittest.TestCase):
 
     def chained_inputs(self):
         parent = self.completed()
-        self.next_image = self.root/'next-debug.img'
+        candidate = self.root/'candidate'
+        candidate.mkdir(mode=0o700)
+        bundle = candidate/'stage-bundle'
+        bundle.mkdir()
+        self.next_image = bundle/'next-debug.img'
         self.next_image.write_bytes(b'ANDROID!' + b'n' + bytes(16*1024*1024-9))
         next_hash = recovery.sha(self.next_image.read_bytes())
-        next_metadata = self.root/'next-debug.json'
+        next_metadata = bundle/'next-debug.json'
         next_metadata.write_text(json.dumps({'schema': 1, 'kind': 'private-ram-wifi-debug-stage',
             'private_only': True, 'installable': False, 'storage_operations': [],
             'sha256': next_hash, 'size': self.next_image.stat().st_size}))
-        candidate = self.root/'candidate'
-        candidate.mkdir(mode=0o700)
         receipt = candidate/'candidate-receipt.json'
         receipt.write_text(json.dumps({'schema': 1,
             'kind': 'couch-private-wifi-debug-lifecycle-candidate',
             'installable': False, 'device_access': False, 'physical_boot_verified': False,
             'source_binding': {'partial_overlay': True, 'local_source_commit': 'a'*40,
                                'stage_base_commit': 'b'*40},
-            'outputs': {'image': {'path': self.next_image.name, 'sha256': next_hash},
-                        'metadata': {'path': next_metadata.name,
+            'outputs': {'image': {'path': 'stage-bundle/'+self.next_image.name, 'sha256': next_hash},
+                        'metadata': {'path': 'stage-bundle/'+next_metadata.name,
                                      'sha256': recovery.sha(next_metadata.read_bytes())}},
             'approved_overlay': {'files': {'stage/probe': {'sha256': 'e'*64}}}}))
         return {'parent': parent, 'candidate_receipt': str(receipt),

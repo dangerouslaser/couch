@@ -171,9 +171,13 @@ def _candidate_receipt(config):
             and binding.get('stage_base_commit') == config['stage_base_commit'],
             'Candidate source binding differs from pinned chain')
     output = value.get('outputs', {})
-    require(output.get('image', {}).get('path') == Path(config['image']).name
+    image_name = Path(output.get('image', {}).get('path', ''))
+    metadata_name = Path(output.get('metadata', {}).get('path', ''))
+    require(not image_name.is_absolute() and '..' not in image_name.parts
+            and not metadata_name.is_absolute() and '..' not in metadata_name.parts
+            and path.parent / image_name == Path(config['image'])
             and output.get('image', {}).get('sha256') == config['image_sha256']
-            and output.get('metadata', {}).get('path') == Path(config['metadata']).name
+            and path.parent / metadata_name == Path(config['metadata'])
             and output.get('metadata', {}).get('sha256') == config['metadata_sha256'],
             'Candidate output binding differs from pinned chain')
     probe = value.get('approved_overlay', {}).get('files', {}).get('stage/probe', {})
