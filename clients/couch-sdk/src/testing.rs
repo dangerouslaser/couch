@@ -95,8 +95,9 @@ impl Script {
 /// A scripted device on loopback.
 ///
 /// Stops when dropped. Every request it received is available from
-/// [`MockHost::requests`], so a test can assert that a refused command cost no
-/// round trip at all.
+/// [`MockHost::requests`]. Pass this host to [`contract_findings`] and it will
+/// observe those requests directly while it checks that a refused command
+/// costs no round trip.
 pub struct MockHost {
     port: u16,
     requests: Arc<Mutex<Vec<String>>>,
@@ -217,11 +218,18 @@ fn serve(
 /// Everything wrong with a client, as a list of sentences.
 ///
 /// Empty means the client keeps the contract: its declarations parse, it
-/// refuses what it never declared, it refuses nonsense without touching the
-/// network, and its settings survive being written to disk and read back.
+/// refuses what it never declared, it refuses nonsense *without touching the
+/// network*, and its settings survive being written to disk and read back.
 ///
 /// `settings` must address a reachable host - in a test, a [`MockHost`].
-pub fn contract_findings<C: DeviceClient>(settings: &C::Settings) -> Vec<String> {
+///
+/// `host` is the [`MockHost`] addressed by `settings`. Checking the return
+/// value alone cannot prove the gate held: a client that pings the device and
+/// *then* refuses returns the right error and is still wrong, because a stale
+/// button mapping would reach a device it was never allowed to touch. Taking
+/// the host itself, rather than an arbitrary counter callback, makes the
+/// no-round-trip assertion part of this checker rather than an optional claim.
+pub fn contract_findings<C: DeviceClient>(settings: &C::Settings, host: &MockHost) -> Vec<String> {
     let mut findings = Vec::new();
     if C::KIND.is_empty()
         || !C::KIND
@@ -288,28 +296,44 @@ pub fn contract_findings<C: DeviceClient>(settings: &C::Settings) -> Vec<String>
             return findings;
         }
     };
-    if client.command("this-is-not-a-function") != Err(Error::Unsupported) {
-        findings.push(
-            "command() must answer Unsupported for text that is not a Function, without any I/O"
-                .into(),
-        );
-    }
+    // The gate is checked twice over: the answer, and the silence.
+    let quiet = |client: &mut C, command: &str, findings: &mut Vec<String>| {
+        let before = host.requests().len();
+        let answer = client.command(command);
+        if answer != Err(Error::Unsupported) {
+            findings.push(format!(
+                "command({command:?}) must answer Unsupported; it answered {answer:?}"
+            ));
+        }
+        // The host counts requests on its own thread, so a probe sent a
+        // microsecond ago may not be logged yet. Wait for the count to move
+        // rather than reading it once and calling the client innocent.
+        let deadline = std::time::Instant::now() + Duration::from_millis(100);
+        let mut reached = 0;
+        while std::time::Instant::now() < deadline {
+            reached = host.requests().len().saturating_sub(before);
+            if reached > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if reached > 0 {
+            findings.push(format!(
+                "command({command:?}) was refused but still sent {reached} request(s) to the device; the gate must come first"
+            ));
+        }
+    };
+    quiet(&mut client, "this-is-not-a-function", &mut findings);
     if let Some(undeclared) = ["power-off", "mute", "stop", "home", "yellow"]
         .into_iter()
         .find(|id| !C::capabilities().iter().any(|(name, _)| name == id))
     {
-        if client.command(undeclared) != Err(Error::Unsupported) {
-            findings.push(format!(
-                "`{undeclared}` is not declared, so command() must answer Unsupported without contacting the device"
-            ));
-        }
+        quiet(&mut client, undeclared, &mut findings);
     }
-    // Short-circuits before any I/O for a client that does support apps: this
-    // check is about the gate, not about launching something on a real device.
-    if !C::supports_app("definitely-not-installed")
-        && client.command("app:definitely-not-installed") == Ok(())
-    {
-        findings.push("command() ran an app: function that supports_app refuses".into());
+    // Skipped entirely for a client that does support apps: this check is about
+    // the gate, not about launching something on a real device.
+    if !C::supports_app("definitely-not-installed") {
+        quiet(&mut client, "app:definitely-not-installed", &mut findings);
     }
     findings
 }
@@ -323,7 +347,8 @@ fn roundtrip_settings<C: DeviceClient>(settings: &C::Settings) -> std::result::R
     let connection = "contract-check";
     std::fs::create_dir_all(dir.join("connections").join(connection))
         .map_err(|e| format!("cannot create a temporary connection directory: {e}"))?;
-    let path = C::Settings::path_in(&dir, connection);
+    let path = C::Settings::path_in(&dir, connection)
+        .map_err(|e| format!("cannot construct a temporary credential path: {e}"))?;
     let result = (|| {
         settings
             .save(&path)
@@ -340,12 +365,97 @@ fn roundtrip_settings<C: DeviceClient>(settings: &C::Settings) -> std::result::R
 }
 
 /// [`contract_findings`], as an assertion. Panics listing everything at once.
-pub fn assert_contract<C: DeviceClient>(settings: &C::Settings) {
-    let findings = contract_findings::<C>(settings);
+pub fn assert_contract<C: DeviceClient>(settings: &C::Settings, host: &MockHost) {
+    let findings = contract_findings::<C>(settings, host);
     assert!(
         findings.is_empty(),
         "{} does not keep the client contract:\n- {}",
         C::KIND,
         findings.join("\n- ")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Capability, Result, Status};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Settings {
+        host: String,
+        port: u16,
+    }
+    impl ClientSettings for Settings {
+        const FILE_PREFIX: &'static str = "prober";
+        fn validate(&self) -> Result<()> {
+            if self.host.is_empty() || self.port == 0 {
+                return Err(Error::Invalid);
+            }
+            Ok(())
+        }
+    }
+
+    /// A client that keeps every rule the harness used to check and is still
+    /// wrong: it touches the device *before* the gate, so a stale button
+    /// mapping reaches a device it was never allowed to touch. It returns the
+    /// correct error afterwards, which is exactly why the return value alone
+    /// cannot catch it.
+    struct Prober {
+        socket: std::net::TcpStream,
+    }
+    impl DeviceClient for Prober {
+        type Settings = Settings;
+        const KIND: &'static str = "prober";
+        const LABEL: &'static str = "Prober";
+        fn capabilities() -> &'static [Capability] {
+            &[("on", "On"), ("off", "Off")]
+        }
+        fn connect(settings: &Settings) -> Result<Self> {
+            settings.validate()?;
+            Ok(Self {
+                socket: std::net::TcpStream::connect((settings.host.as_str(), settings.port))?,
+            })
+        }
+        fn execute(&mut self, _: &Function) -> Result<()> {
+            Ok(())
+        }
+        fn status(&mut self) -> Result<Status> {
+            Ok(Status::on(true))
+        }
+        fn command(&mut self, command: &str) -> Result<()> {
+            use std::io::Write;
+            let _ = self
+                .socket
+                .write_all(format!("PROBE {command}\r").as_bytes());
+            let function = Function::parse(command).ok_or(Error::Unsupported)?;
+            if !Self::supports(&function) {
+                return Err(Error::Unsupported);
+            }
+            self.execute(&function)
+        }
+    }
+
+    #[test]
+    fn a_client_that_pings_before_refusing_is_caught_even_though_it_answers_correctly() {
+        let host = MockHost::start(Script::new().otherwise(Reply::line("OK")));
+        let settings = Settings {
+            host: host.host().into(),
+            port: host.port(),
+        };
+        let findings = contract_findings::<Prober>(&settings, &host);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("still sent") && f.contains("this-is-not-a-function")),
+            "the harness must notice the probe: {findings:?}"
+        );
+        assert!(
+            host.requests()
+                .iter()
+                .any(|r| r.starts_with("PROBE this-is-not-a-function")),
+            "the device really did see it: {:?}",
+            host.requests()
+        );
+    }
 }

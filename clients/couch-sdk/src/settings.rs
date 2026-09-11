@@ -13,6 +13,8 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{de::DeserializeOwned, Serialize};
@@ -38,8 +40,10 @@ pub fn load_private<T: DeserializeOwned>(path: &Path) -> std::io::Result<T> {
 
 /// Write a JSON credential file atomically, mode 0600.
 ///
-/// The temporary file carries this process's ID so two writers cannot collide,
-/// and both the file and its directory are synced before the call returns -
+/// Each temporary file has a process-local sequence number and a clock value,
+/// so a save does not collide with another thread or with a stale temporary
+/// file left by an interrupted earlier process. Both the file and its
+/// directory are synced before the call returns -
 /// this device loses power by having its battery run out, and a half-written
 /// pairing key is indistinguishable from a revoked one. A failed write leaves
 /// the previous file untouched.
@@ -49,13 +53,8 @@ pub fn save_private<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()>
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent directory")
     })?;
-    let temporary = path.with_extension(format!("{}.new", std::process::id()));
+    let (temporary, mut file) = open_temporary(path)?;
     let result = (|| -> std::io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
         file.write_all(&serde_json::to_vec(value)?)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
@@ -73,14 +72,58 @@ pub fn save_private<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()>
 /// `home` is the directory holding `config.json`. An empty `connection_id` is
 /// the pre-connections singleton layout, which both readers still honour; new
 /// code should always pass a real ID.
-pub fn connection_file(home: &Path, connection_id: &str, prefix: &str) -> PathBuf {
+pub fn connection_file(home: &Path, connection_id: &str, prefix: &str) -> Result<PathBuf> {
     if connection_id.is_empty() {
-        home.join(format!("{prefix}-connection.json"))
+        Ok(home.join(format!("{prefix}-connection.json")))
     } else {
-        home.join("connections")
-            .join(connection_id)
-            .join(format!("{prefix}-connection.json"))
+        let components = Path::new(connection_id).components().collect::<Vec<_>>();
+        let valid = components.len() == 1
+            && matches!(components[0], std::path::Component::Normal(_))
+            && !connection_id
+                .chars()
+                .any(|character| character.is_control() || character == '\\');
+        if valid {
+            Ok(home
+                .join("connections")
+                .join(connection_id)
+                .join(format!("{prefix}-connection.json")))
+        } else {
+            Err(Error::Invalid)
+        }
     }
+}
+
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    path.with_extension(format!("{}.{}.{}.new", std::process::id(), nanos, sequence))
+}
+
+/// Open a name owned by this invocation. If an unlikely clock/sequence clash
+/// finds an old file, leave that file alone and try another name.
+fn open_temporary(path: &Path) -> std::io::Result<(PathBuf, fs::File)> {
+    for _ in 0..16 {
+        let temporary = temporary_path(path);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary credential file",
+    ))
 }
 
 /// What a client needs to reach one device, and where that is kept.
@@ -111,11 +154,15 @@ pub trait ClientSettings: Serialize + DeserializeOwned + Sized {
     fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
         save_private(path, self)
-            .map_err(|e| Error::Remote(format!("Cannot save {}: {e}", path.display())))
+            .map_err(|_| Error::Remote("Could not save the connection settings".into()))
     }
 
     /// `<home>/connections/<connection-id>/<prefix>-connection.json`.
-    fn path_in(home: &Path, connection_id: &str) -> PathBuf {
+    ///
+    /// Rejects path separators, `.` and `..` in `connection_id`; it becomes a
+    /// directory name owned by the daemon, not a path fragment supplied by a
+    /// browser request.
+    fn path_in(home: &Path, connection_id: &str) -> Result<PathBuf> {
         connection_file(home, connection_id, Self::FILE_PREFIX)
     }
 }
@@ -145,7 +192,7 @@ mod tests {
     fn saved_credentials_are_private_and_a_rejected_save_keeps_the_old_file() {
         let dir = std::env::temp_dir().join(format!("couch-sdk-settings-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = Example::path_in(&dir, "");
+        let path = Example::path_in(&dir, "").unwrap();
         let good = Example {
             host: "10.0.0.5".into(),
             token: "secret".into(),
@@ -171,6 +218,14 @@ mod tests {
         fs::write(&path, b"not json at all").unwrap();
         assert_eq!(Example::load(&path), Err(Error::Invalid));
         assert_eq!(Example::load(&dir.join("absent.json")), Err(Error::Invalid));
+        let occupied = dir.join("occupied");
+        fs::create_dir(&occupied).unwrap();
+        assert_eq!(
+            good.save(&occupied),
+            Err(Error::Remote(
+                "Could not save the connection settings".into()
+            ))
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -216,12 +271,41 @@ mod tests {
     fn connection_paths_match_the_layout_the_daemon_and_gui_compute() {
         let home = Path::new("/home/couch");
         assert_eq!(
-            Example::path_in(home, "abc123"),
+            Example::path_in(home, "abc123").unwrap(),
             home.join("connections/abc123/example-connection.json")
         );
         assert_eq!(
-            Example::path_in(home, ""),
+            Example::path_in(home, "").unwrap(),
             home.join("example-connection.json")
         );
+        for bad in [
+            ".",
+            "..",
+            "../outside",
+            "nested/id",
+            "/absolute",
+            r"nested\id",
+        ] {
+            assert_eq!(Example::path_in(home, bad), Err(Error::Invalid), "{bad}");
+        }
+    }
+
+    #[test]
+    fn stale_temporary_files_do_not_block_a_later_save() {
+        let dir = std::env::temp_dir().join(format!("couch-sdk-stale-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("example-connection.json");
+        fs::write(
+            path.with_extension(format!("{}.old.new", std::process::id())),
+            b"partial",
+        )
+        .unwrap();
+        let value = Example {
+            host: "10.0.0.5".into(),
+            token: "secret".into(),
+        };
+        save_private(&path, &value).unwrap();
+        assert_eq!(load_private::<Example>(&path).unwrap(), value);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

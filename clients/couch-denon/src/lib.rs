@@ -15,6 +15,11 @@ pub enum Error {
     Invalid,
     Timeout,
     Protocol,
+    /// Reading or writing the private settings file failed. Separate from
+    /// [`Error::Io`] because that variant's message sends the user to the
+    /// receiver's network settings, and a full or read-only flash has nothing
+    /// to do with the receiver. Every network path still uses `Io`.
+    Storage(io::Error),
 }
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
@@ -30,11 +35,15 @@ impl From<io::Error> for Error {
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Storage(_) = self {
+            return f.write_str("Cannot read or write the AVR connection settings");
+        }
         f.write_str(match self {
             Self::Io(_) => "Cannot reach the AVR. Check its address and Network Control setting.",
             Self::Invalid => "Invalid AVR command or setting",
             Self::Timeout => "AVR did not confirm the request before the deadline",
             Self::Protocol => "Invalid AVR response",
+            Self::Storage(_) => unreachable!("handled above"),
         })
     }
 }
@@ -61,16 +70,22 @@ impl Settings {
         Ok(())
     }
     /// The atomic 0600 write is the shared implementation in
-    /// `couch_sdk::settings` - one copy of it instead of five - but the error
-    /// mapping stays here, unchanged: an unreadable file is an I/O failure and
-    /// an unparseable or unusable one is [`Error::Invalid`], exactly as before.
-    /// The file's name, JSON schema, permissions and validation are untouched.
+    /// `couch_sdk::settings` - one copy of it instead of five. The file's name,
+    /// JSON schema, permissions, temporary-file cleanup and validation are
+    /// untouched.
+    ///
+    /// The error split is the one thing here that is deliberately *not* what it
+    /// was: a file that cannot be read or written is [`Error::Storage`], not
+    /// [`Error::Io`], because `Io` renders as "Cannot reach the AVR. Check its
+    /// address and Network Control setting." and a full flash is not a network
+    /// problem. An unparseable or unusable file remains [`Error::Invalid`], as
+    /// before. Every network path still reports `Io`.
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let s: Self = couch_sdk::load_private(path).map_err(|e| {
             if e.kind() == io::ErrorKind::InvalidData {
                 Error::Invalid
             } else {
-                Error::from(e)
+                Error::Storage(e)
             }
         })?;
         s.validate()?;
@@ -78,7 +93,7 @@ impl Settings {
     }
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         self.validate()?;
-        couch_sdk::save_private(path, self).map_err(Error::from)
+        couch_sdk::save_private(path, self).map_err(Error::Storage)
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -408,10 +423,20 @@ mod tests {
 
         // The error split predates the shared helper and is preserved: absent
         // is an I/O failure, unparseable or unusable is a settings failure.
-        assert!(matches!(
-            Settings::load(&dir.join("absent.json")),
-            Err(Error::Io(_))
-        ));
+        // An absent file is a storage condition, and must not tell the user to
+        // go and check the receiver's network settings.
+        let absent = Settings::load(&dir.join("absent.json"));
+        assert!(matches!(absent, Err(Error::Storage(_))));
+        assert!(absent
+            .unwrap_err()
+            .to_string()
+            .starts_with("Cannot read or write the AVR connection settings"));
+        let unwritable = settings.save(&dir.join("no-such-dir").join("denon-connection.json"));
+        assert!(matches!(unwritable, Err(Error::Storage(_))));
+        assert!(
+            !unwritable.unwrap_err().to_string().contains("Network"),
+            "a failed write must not be reported as a network failure"
+        );
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(matches!(Settings::load(&path), Err(Error::Invalid)));
         std::fs::write(&path, br#"{"host":"avr.local","port":0}"#).unwrap();

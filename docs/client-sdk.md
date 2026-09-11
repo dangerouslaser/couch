@@ -19,7 +19,7 @@ It **is** a crate the configuration daemon and the device GUI link directly.
 It is **not** a plugin. There is no runtime loading, no stable ABI, no
 `couch install <client>`, and no published package: `couch-sdk` is an in-tree
 crate at version 0.1.0 that has never been released to crates.io. Adding a new
-integration means seven manual edits across four workspaces, and they are
+integration means seven manual edits across five workspaces, and they are
 listed under [Registering a provider](#registering-a-provider). The
 SDK makes the client itself correct, testable and consistent. It does not make
 it discoverable, installable, or shippable by anyone but a maintainer building
@@ -100,7 +100,7 @@ cargo doc -p couch-sdk --features testing --no-deps   # rustdoc, harness include
 ```
 
 `cargo run -p couch-echo --example demo` prints a success, a refusal by the
-device, two refusals by the client, and a timeout, then lists every request the
+device, three refusals by the client, and a timeout, then lists every request the
 fake television actually received:
 
 ```
@@ -109,6 +109,7 @@ status             -> Ok(Status { on: Some(true), muted: Some(false), volume: So
 inputs             -> Ok([Selectable { id: "hdmi1", name: "Blu-ray" }, ...])
 power-off          -> Err(Remote("the TV is locked"))
 fast-forward       -> Err(Unsupported)
+not-a-function     -> Err(Unsupported)
 input:../escape    -> Err(Unsupported)
 home (no reply)    -> Err(Timeout)
 ```
@@ -133,7 +134,8 @@ impl ClientSettings for Settings {
 `validate` runs before every save and after every load, so a file edited by
 hand into an unusable state never reaches a socket. The provided `load`/`save`
 write the file atomically at mode 0600 and fsync both the file and its
-directory, and the temporary file is removed whichever step fails. Do not
+directory. Temporary names are unique across concurrent saves and stale files,
+and the temporary file is removed whichever step fails. Do not
 reimplement this: losing power mid-write is how a pairing key becomes
 indistinguishable from a revoked one.
 
@@ -144,6 +146,10 @@ directly - `couch-denon` does, and a test pins it. The trait's `load`/`save`
 are the opinionated wrapper: unreadable and unparseable are both
 `Error::Invalid`, because to someone setting up a connection they mean the same
 thing.
+
+`ClientSettings::path_in` returns `Result<PathBuf>`: connection IDs are one
+directory component, never a path fragment. An empty ID remains the legacy
+singleton layout; nonempty IDs containing `/`, `.` or `..` are rejected.
 
 Reject anything that could break your wire format here - a hostname containing
 whitespace, a token containing a control character - rather than at the point
@@ -217,8 +223,9 @@ let host = MockHost::start(
         .on("CMD home", Reply::Silence)      // the client must time out
         .on("CMD ok", Reply::Close)          // and survive a hang-up
 );
-assert_contract::<EchoTv>(&settings(&host));
-assert!(host.requests().is_empty());         // a refusal costs no round trip
+// The second argument is the actual host that observes every refusal the
+// harness tries, so a client cannot claim to be silent with a made-up counter.
+assert_contract::<EchoTv>(&settings(&host), &host);
 ```
 
 `Reply::Silence` and `Reply::Close` are there because those are the two failure
@@ -227,6 +234,10 @@ often: it proves what your client did *not* send.
 
 `contract_findings::<C>()` returns every problem at once rather than failing on
 the first, and `assert_contract::<C>()` is the same check as an assertion.
+Checking the returned error is not enough on its own - a client that pings the
+device and *then* refuses returns exactly the right error and is still wrong -
+so both inspect the mock host's request log and fail the client if a refusal
+appears in it.
 It also round-trips your settings through a real file to confirm they survive
 being written at 0600 and read back.
 
@@ -246,7 +257,8 @@ The SDK does not wire your client into the product. Until you make these edits,
 your crate compiles and its tests pass, and nothing else in the repository can
 reach it. Five subsystems have to learn about a new provider - the model, the
 control broker, the daemon, the device GUI and the web UI - which is seven
-concrete edits: `couch_sdk::catalog_differences::<YourClient>(&integration)` reports
+concrete edits spread across the five Rust workspaces `AGENTS.md` lists
+(`model/`, `clients/`, `daemon/`, `ui/`, `web/`): `couch_sdk::catalog_differences::<YourClient>(&integration)` reports
 the state of step 3 and is worth a test either way - `couch-echo` asserts that
 it is *unregistered*, and `couch-denon` asserts that it matches exactly.
 
@@ -361,7 +373,7 @@ Host tests, all passing, on the Linux build host and on macOS:
 
 | Workspace | Result |
 |---|---|
-| `clients/` (`cargo test --workspace`) | 178 passed, 0 failed |
+| `clients/` (`cargo test --workspace`) | 179 passed, 0 failed |
 | `model/` | 41 passed, 0 failed |
 | `daemon/` | 44 passed, 0 failed |
 | `ui/` | 109 passed, 0 failed |
@@ -371,6 +383,15 @@ on-disk JSON schema and filename, mode 0600, a rejected save leaving the
 previous file byte for byte, a write that fails after the temporary file exists
 cleaning up after itself, the absent-versus-corrupt error split, and the
 settings validation table. Its transport tests are unchanged.
+
+One behaviour there is deliberately *not* preserved. Before this change, a
+failed read or write of the settings file produced `couch_denon::Error::Io`,
+whose message is "Cannot reach the AVR. Check its address and Network Control
+setting." - so a full or read-only flash sent the user to their receiver's
+network settings. Those two paths now return a separate `Error::Storage` with
+a storage-specific, credential-safe message. Every network path still returns
+`Io` with its original message, and nothing outside the crate reads or writes
+that file.
 
 Also run: `cargo fmt -p couch-sdk -p couch-echo -p couch-denon -- --check`
 clean on both machines; `cargo doc -p couch-sdk --no-deps` with and without

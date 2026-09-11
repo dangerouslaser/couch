@@ -26,8 +26,14 @@ impl From<Error> for couch_sdk::Error {
             Error::Invalid => Self::Invalid,
             Error::Timeout => Self::Timeout,
             Error::Protocol => Self::Protocol,
+            // Not Transport: the receiver is not the thing that failed.
+            Error::Storage(e) => Self::Remote(alloc_message(e)),
         }
     }
+}
+
+fn alloc_message(_: std::io::Error) -> String {
+    "Cannot read or write the AVR connection settings".into()
 }
 
 impl ClientSettings for Settings {
@@ -141,7 +147,7 @@ mod tests {
     #[test]
     fn the_denon_client_keeps_the_contract() {
         let host = avr(Script::new());
-        assert_contract::<Client>(&settings(&host));
+        assert_contract::<Client>(&settings(&host), &host);
     }
 
     #[test]

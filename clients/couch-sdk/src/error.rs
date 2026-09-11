@@ -90,7 +90,7 @@ impl From<std::io::Error> for Error {
         use std::io::ErrorKind::*;
         match e.kind() {
             TimedOut | WouldBlock => Self::Timeout,
-            PermissionDenied => Self::Remote(format!("Permission denied: {e}")),
+            PermissionDenied => Self::Remote("Permission denied while accessing the device".into()),
             _ => Self::Transport,
         }
     }
@@ -116,10 +116,16 @@ mod tests {
         let refused: Error = std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into();
         assert_eq!(refused, Error::Transport);
         assert!(refused.retryable());
-        assert!(matches!(
-            Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
-            Error::Remote(_)
-        ));
+        let denied: Error = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "/home/couch/connections/living-room/secret.json",
+        )
+        .into();
+        assert_eq!(
+            denied,
+            Error::Remote("Permission denied while accessing the device".into()),
+            "a user-facing error must not reveal a credential path"
+        );
         let bad: Error = serde_json::from_str::<u32>("{").unwrap_err().into();
         assert_eq!(bad, Error::Protocol);
         assert_eq!(

@@ -23,7 +23,8 @@ fn settings(host: &MockHost) -> Settings {
 #[test]
 fn the_client_keeps_the_contract() {
     let host = MockHost::start(script().otherwise(Reply::line("OK")));
-    assert_contract::<EchoTv>(&settings(&host));
+    // The mock host itself observes every request, including prohibited ones.
+    assert_contract::<EchoTv>(&settings(&host), &host);
 }
 
 #[test]
@@ -131,7 +132,7 @@ fn a_malformed_reading_is_a_protocol_error_rather_than_an_invented_number() {
 fn a_client_whose_provider_is_not_registered_is_told_so() {
     // couch-echo is deliberately not registered in couch-model, so the catalog
     // the button picker reads offers none of its functions. This is exactly
-    // what a contributor sees before they make the five wiring edits in
+    // what a contributor sees before they make the seven wiring edits in
     // docs/client-sdk.md, and the check names every one of them.
     let differences = catalog_differences::<EchoTv>(&Integration::None);
     assert_eq!(differences.len(), EchoTv::capabilities().len());
@@ -151,7 +152,10 @@ fn an_unreachable_host_is_reported_rather_than_retried() {
         Some(Error::Transport),
         "a refused connection is a transport failure the user can act on"
     );
-    let findings = contract_findings::<EchoTv>(&settings);
+    // The checker observes this separate host; the connection failure is the
+    // result under test, so no request reaches either host.
+    let observer = MockHost::start(script());
+    let findings = contract_findings::<EchoTv>(&settings, &observer);
     assert!(findings.iter().any(|f| f.contains("connect failed")));
 }
 
