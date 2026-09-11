@@ -31,10 +31,13 @@ remote; it does not transfer a full partition of unused zeros.
 
 The [Ratatui terminal](../tools/installer/tui/README.md) provides the host UI.
 The [native Rust host](../tools/installer/host/README.md) implements verified
-input preparation, private sessions and authenticated stage transport. Migration
-of the complete transaction and USB adapter into this flow is ongoing. The
-private reference installer still uses Python orchestration around the reviewed
-MediaTek adapter. The Linux stage's storage writer and verifier are Rust.
+input preparation, private sessions, fresh Android enrollment, retained-enrollment
+reinstallation, USB supervision,
+Wi-Fi selection and the complete authenticated installation transaction. Python
+is retained only for the reviewed MediaTek transport and fixed USB setup bridge;
+its runtime is downloaded and verified by Rust. The Linux stage's storage writer
+and verifier are Rust. Hardware acceptance of this newly connected native path
+remains separate from passing fixtures and platform builds.
 
 [Owner-side inputs](installer-public-inputs.md) are extracted from the pinned
 official firmware archive; device originals come from the actual remote.

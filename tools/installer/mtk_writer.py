@@ -30,6 +30,107 @@ def _stamp(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
+def _windows_information(handle):
+    import ctypes
+    from ctypes import wintypes
+
+    class Information(ctypes.Structure):
+        _fields_ = [("attributes", wintypes.DWORD),
+                    ("created", wintypes.FILETIME), ("accessed", wintypes.FILETIME),
+                    ("written", wintypes.FILETIME), ("volume", wintypes.DWORD),
+                    ("size_high", wintypes.DWORD), ("size_low", wintypes.DWORD),
+                    ("links", wintypes.DWORD), ("index_high", wintypes.DWORD),
+                    ("index_low", wintypes.DWORD)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(Information)]
+    kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+    info = Information()
+    if not kernel.GetFileInformationByHandle(handle, ctypes.byref(info)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return info
+
+
+def _fd_stamp(fd):
+    if os.name != "nt":
+        return _stamp(os.fstat(fd))
+    import msvcrt
+    info = _windows_information(msvcrt.get_osfhandle(fd))
+    # Use one native identity/time representation throughout; neither zero/dummy
+    # CRT inode fields nor pathname-vs-handle timestamp precision are authority.
+    return (info.volume, (info.index_high << 32) | info.index_low,
+            (info.size_high << 32) | info.size_low,
+            (info.written.dwHighDateTime << 32) | info.written.dwLowDateTime,
+            (info.created.dwHighDateTime << 32) | info.created.dwLowDateTime)
+
+
+def _open_windows_image(path):
+    # CPython pathname stat and CRT fstat need not expose identical identity or
+    # timestamp fields. Open the object atomically without following its final
+    # reparse point instead. Denying write/delete sharing holds the admitted file
+    # against modification/replacement for the lifetime of the returned fd.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.GetFileType.argtypes = [wintypes.HANDLE]
+    kernel.GetFileType.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, OPEN_REPARSE_POINT.
+    handle = kernel.CreateFileW(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = _windows_information(handle)
+        require(kernel.GetFileType(handle) == 1 and not (info.attributes & (0x400 | 0x10)),
+                "Image is not a regular file or is a reparse point")
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        handle = None  # CRT now owns the native handle, including on close.
+        try:
+            os.set_inheritable(fd, False)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+    finally:
+        if handle is not None:
+            kernel.CloseHandle(handle)
+
+
+def _open_image(path):
+    if os.name == "nt":
+        return _open_windows_image(path)
+    # Native sessions provide a private parent. On Unix compare the opened
+    # object with the no-follow pathname observation to reject replacement.
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and not
+            (getattr(before, "st_file_attributes", 0) & 0x400), "Image is a link or reparse point")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    try:
+        require(_stamp(os.fstat(fd)) == _stamp(before), "Image changed while opening")
+        os.set_inheritable(fd, False)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_at(fd, count, offset):
+    if hasattr(os, "pread"):
+        return os.pread(fd, count, offset)
+    # The Windows private adapter executes one synchronous command at a time and
+    # owns these descriptors exclusively. No other thread shares their offsets.
+    os.lseek(fd, offset, os.SEEK_SET)
+    return os.read(fd, count)
+
+
 def _sha(value):
     return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
 
@@ -79,12 +180,12 @@ class ConnectedMtkWriter(ConnectedMtkReader):
                         and filename not in ("", ".", "..") and _sha(image.get("sha256")),
                         "Invalid verified image entry")
                 path = self._bundle / filename
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                fd = _open_image(path)
                 self._sources[name] = {"path": path, "fd": fd, "sha256": image["sha256"]}
                 info = os.fstat(fd)
                 require(stat.S_ISREG(info.st_mode) and info.st_size == self.description["partitions"][name]["size"],
                         f"Expected raw full-partition regular image: {name}")
-                self._sources[name]["stamp"] = _stamp(info)
+                self._sources[name]["stamp"] = _fd_stamp(fd)
             self._validate_all()
             # Read exact endpoint counts directly: upstream usbwrite's bool
             # hides retries and partial transfers. Keep the buffered DA input.
@@ -122,10 +223,16 @@ class ConnectedMtkWriter(ConnectedMtkReader):
 
     def _unchanged(self, name):
         source = self._sources[name]
-        require(_stamp(os.fstat(source["fd"])) == source["stamp"], f"Verified image changed: {name}")
-        info = source["path"].lstat()
-        require(stat.S_ISREG(info.st_mode) and _stamp(info) == source["stamp"],
-                f"Verified image path changed: {name}")
+        require(_fd_stamp(source["fd"]) == source["stamp"], f"Verified image changed: {name}")
+        # Compare native descriptor metadata consistently on Windows. The
+        # reopened name is independently checked against reparse points too.
+        check = _open_image(source["path"])
+        try:
+            info = os.fstat(check)
+            require(stat.S_ISREG(info.st_mode) and _fd_stamp(check) == source["stamp"],
+                    f"Verified image path changed: {name}")
+        finally:
+            os.close(check)
 
     def _validate_source(self, name):
         self._unchanged(name)
@@ -136,7 +243,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         self._report("Verify image", name, 0, total)
         for offset in range(0, source["stamp"][2], CHUNK):
             count = min(CHUNK, source["stamp"][2] - offset)
-            data = os.pread(source["fd"], count, offset)
+            data = _read_at(source["fd"], count, offset)
             require(len(data) == count, f"Short verified image: {name}")
             full.update(data)
             chunks.append(hashlib.sha256(data).digest())
@@ -189,7 +296,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
             for index, offset in enumerate(range(0, region["size"], CHUNK)):
                 self._unchanged(name)
                 count = min(CHUNK, region["size"] - offset)
-                data = os.pread(image["fd"], count, offset)
+                data = _read_at(image["fd"], count, offset)
                 require(len(data) == count and hashlib.sha256(data).digest() == image["chunks"][index],
                         f"Image changed during transfer: {name}")
                 with bounded_operation(10):

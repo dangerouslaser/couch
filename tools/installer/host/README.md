@@ -4,14 +4,14 @@ The `frontend` module communicates directly with the Ratatui terminal over its
 private inherited socket (Unix) or pipes (Windows). Prompts use increasing IDs;
 invalid, stale, cancelled, truncated or oversized replies stop the channel.
 Input buffers are zeroized and secret replies are never echoed as display state.
-The `--ui-smoke` command is an explicit device-free interface fixture. The full
-installation orchestrator remains a separate integration step.
+The `--ui-smoke` command is an explicit device-free interface fixture. The native installation orchestrator uses the same channel for the complete
+fresh-Android and retained-enrollment reinstall flows described below.
 
-This independent Rust workspace begins the host-backend migration with complete
+The independent `prepare-official` command performs complete
 owner-side official input preparation. It verifies the pinned ZIP, bounded
 full-OTA transfer lists and Brotli streams, then reads the approved files through
 a [read-only Rust ext4 parser](https://docs.rs/ext4-view/0.9.3/ext4_view/).
-It executes no subprocess, requires no Python or debugfs, mounts no filesystem
+That input-preparation command executes no subprocess, requires no Python or debugfs, mounts no filesystem
 and opens no USB/device handles. It uses ordinary private scratch files.
 
 ```sh
@@ -34,13 +34,11 @@ executes the real pipeline on all three hosts without uploading vendor outputs.
 The original vendor URL uses HTTP; the reviewed repository SHA-256 pin checks
 its bytes before parsing, but does not create an independent vendor signature.
 
-This component is not the complete native installer. USB adapter isolation,
-session ownership/deadlines, enrollment UX and the write-capable transfer policy
-still need migration/integration. Filesystem personalization should move to the
-reviewed Linux stage so other hosts do not need native e2fsprogs. The default
-public installation gate remains disabled until those flows and recovery are
-validated. Native input preparation or native terminal builds alone cannot
-establish full macOS/Windows installation support.
+The native orchestrator now connects these inputs to supervised USB startup,
+Wi-Fi setup, backups and the Linux-stage writer. Filesystem expansion and
+personalization run on the remote, so host e2fsprogs are unnecessary. Public
+release readiness still requires a verified release payload and separate physical
+acceptance; native builds and preparation tests alone do not certify installation.
 
 ## Session journals
 
@@ -95,3 +93,60 @@ consumption, boot assembly, the selected MTK adapter and its platform dependenci
 and TUI admission/wiring remain to be connected. Callers must verify the release,
 enrollment evidence, selected device and USB plan binding before the transaction
 API; it deliberately does not infer admission from a caller-supplied plan alone.
+
+## Native installation orchestration
+
+`couch-installer-tui --native-backend /path/to/couch-installer-host --config
+/path/to/installer.json` now enters the native installation flow. Use the
+release-specific launcher to verify these files together; an arbitrary local
+configuration is not a trusted release. Selecting Cancel happens before
+configuration loading, downloads, private-session creation or USB access.
+
+Rust owns dependency preparation, owner-side OTA extraction, fixed public payload
+admission, session/USB locks, Android enrollment, progress, Wi-Fi selection and
+TLS installation. The embedded Python worker retains only the reviewed MTK
+handshake and a fixed USB setup protocol. It uses the independently verified
+owner-local Python/MTK/libusb bundle, never a system-library fallback. Pipe reads,
+writes and nested USB operations have finite deadlines; cancellation kills the
+worker. Windows uses a kill-on-close job, Linux a parent-death signal, and macOS
+inherits the TUI's process group.
+
+Fresh enrollment requires authorized Android ADB, canonical storage CID, exact
+physical USB selection, the pinned HA100 partition boundaries and matching stock
+boot/device-tree prefixes. Original calibration, boot, recovery, device tree and
+logo are read, saved, independently read back and journaled before the sole USB
+boot write. Device ID and unavailable MAC addresses are entered from Android;
+Android ID or serial is never substituted for the vendor Device ID. Free space
+for the selected backups is checked before bootstrap. No preloader or LK write
+operation exists in the worker.
+
+Reinstallation imports a [saved enrollment](../../../docs/installer-saved-enrollment.md)
+into a new private session. The selected Couch USB port is queried using a
+nonce-framed fixed CID command; only a matching retained CID permits one fixed
+USB reboot. An unavailable serial interface offers manual restart, while a CID
+mismatch or ambiguous reboot stops without retry. Download-mode CID, full layout,
+calibration and retained device-tree identity are checked again before writing.
+Current Couch originals are saved separately and marked Couch; imported Android
+originals are preserved for Android recovery and never replaced by Couch backups.
+
+The public payload contains only `manifest.json`, `userdata.ext4`,
+`installer.cpio.gz`, `boot.cpio.gz`, `recovery.cpio.gz`, `zImage` and `logo.bgra`.
+The manifest uses schema 1, kind `couch-public-os-inputs`, release `version`,
+`source_commit`, and a `files` map of exact size/SHA-256 pairs. Owner vendor data,
+stock kernel/header material and retained logo frames are assembled locally.
+Non-files, unknown paths, duplicate entries, changed hashes and trailing payload
+data are rejected. No private device baseline is a public input.
+
+After USB-bound Wi-Fi credentials and TLS identity are provisioned, Rust performs
+all requested backups, transfers the 33 pinned owner vendor files, and writes the
+compact filesystem. The stage expands it, installs and reads back vendor/Wi-Fi
+files, checks calibration, and commits normal boot last. The final restart is an
+explicit choice after verification. YOLO omits only the userdata backup.
+
+These source paths and fixtures do not certify a physical installation on every
+host. Windows additionally requires a usable driver binding for the selected
+MTK download interface and installer vendor interface. The installer reports a
+bounded claim failure; it does not replace drivers for other USB devices. See
+[libusb's Windows driver documentation](https://github.com/libusb/libusb/wiki/Windows#driver-installation).
+Fresh Android enrollment, OS startup, restoration and reinstall from another
+computer need separate physical acceptance records before a public-ready claim.
