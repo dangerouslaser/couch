@@ -85,6 +85,10 @@ while [ ! -d /sys/class/net/wlan0 ]; do
 done
 $BB ifconfig wlan0 up || fail interface-up
 # Start one supplicant with no networks. Scans and provisioning share its PID.
+# v2.10 initializes the control interface after driver setup; make its private
+# directory explicit before launch instead of relying on that later setup.
+$BB mkdir -p -m 700 /tmp/couch-wpa || fail control-directory
+$BB chmod 700 /tmp/couch-wpa || fail control-directory
 printf 'ctrl_interface=/tmp/couch-wpa\nupdate_config=0\n' > /tmp/couch-wpa_supplicant.conf
 starting_supplicant=1
 /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf >/tmp/couch-wpa-startup.log 2>&1 &

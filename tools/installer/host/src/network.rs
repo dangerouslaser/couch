@@ -33,6 +33,7 @@ fn failure_reason(status: &Value) -> &str {
                     | "power-on"
                     | "interface-timeout"
                     | "interface-up"
+                    | "control-directory"
                     | "dhcp-exit"
                     | "supplicant-exit"
                     | "supplicant-socket-timeout"
@@ -229,6 +230,11 @@ mod tests {
             "error": "supplicant-socket-timeout",
         });
         assert_eq!(failure_reason(&stalled), "supplicant-socket-timeout");
+        let control_directory = json!({
+            "status": "failed",
+            "error": "control-directory",
+        });
+        assert_eq!(failure_reason(&control_directory), "control-directory");
         let unknown = json!({"status": "failed", "error": "untrusted detail"});
         assert_eq!(failure_reason(&unknown), "unknown");
     }

@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import stat
 import tarfile
 import tempfile
 import subprocess
@@ -18,7 +19,6 @@ class WifiRamdiskTests(unittest.TestCase):
             with self.subTest(starting=starting), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / 'couch-wpa-startup.log').write_text('x' * 5000)
-                (root / 'couch-wpa').mkdir()
                 # Do not execute a temporary fake busybox here: hardened CI
                 # runners may mount temporary directories noexec, which would
                 # suppress tail's output through fail()'s stderr redirection.
@@ -48,6 +48,31 @@ class WifiRamdiskTests(unittest.TestCase):
                 # capped kernel tail, so the whole remainder has a hard ceiling.
                 remainder = log.split('WiFi control directory:\n', 1)[1]
                 self.assertLessEqual(len(remainder.encode()), 1024 + 4096)
+
+    def test_startup_creates_private_control_directory_before_supplicant(self):
+        source = (wifi.REPO / 'tools/installer/wifi-stage/wifi-init').read_text()
+        startup = source.split('$BB ifconfig wlan0 up || fail interface-up\n', 1)[1]
+        startup = startup.split('/sbin/wpa_supplicant', 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = root / 'couch-wpa'
+            # Exercise actual shell setup without pre-creating the required
+            # directory. The separate exact-binary test covers control-socket
+            # behavior; this portable shell regression pins its prerequisite.
+            fixture = startup.replace('/tmp/', str(root) + '/')
+            fixture = fixture.replace('BB=/bin/busybox', 'BB=/usr/bin/env')
+            fixture += (
+                "\npython3 -c \"import os, stat; assert stat.S_IMODE(os.stat('"
+                + str(control) + "').st_mode) == 0o700\"\n"
+            )
+            result = subprocess.run(['sh'], input=fixture, text=True,
+                                    capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(stat.S_IMODE(control.stat().st_mode), 0o700)
+            self.assertEqual(
+                (root / 'couch-wpa_supplicant.conf').read_text(),
+                'ctrl_interface=' + str(control) + '\nupdate_config=0\n',
+            )
 
     def test_loader_android_exit_requires_detected_transport(self):
         for detected in (False, True):
