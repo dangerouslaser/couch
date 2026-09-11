@@ -148,6 +148,9 @@ fn require_debug_identity(status: &Value) -> Result<()> {
     ensure!(
         status["wifi_debug"] == true
             && status["capabilities"] == "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
+            && status["stage_kind"] == "private-ram-wifi-debug-stage"
+            && status["debug_protocol"].as_u64() == Some(1)
+            && status["scan"] == false
             && status["debug_generation_limit"].as_u64() == Some(8)
             && status["provisioned"] == false,
         "Expected dedicated unprovisioned Wi-Fi debug stage; transition the stage before retrying"
@@ -389,6 +392,7 @@ mod tests {
     fn debug_identity_and_diagnostics_are_required_before_actions() {
         assert!(require_debug_identity(&json!({"status":"ready","provisioned":false})).is_err());
         let mut status = json!({"status":"failed","provisioned":false,"wifi_debug":true,
+            "stage_kind":"private-ram-wifi-debug-stage","debug_protocol":1,"scan":false,
             "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_generation_limit":8});
         assert!(require_debug_identity(&status).is_ok());
         let mut diagnostic = json!({"status":status,"generation":1,"step":"power",
@@ -411,6 +415,7 @@ mod tests {
             "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
             "precredential":true, "generation":1, "debug_generation_limit":8, "step":"power", "log":"",
             "status":{"status":"ready", "provisioned":false, "wifi_debug":true,
+                "stage_kind":"private-ram-wifi-debug-stage","debug_protocol":1,"scan":false,
                 "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_generation_limit":8}});
         assert!(diagnostic_summary(&diagnostic).is_ok());
         for key in [
@@ -450,6 +455,30 @@ mod tests {
         );
         assert!(status_summary(&json!({"status":"made-up","provisioned":false})).is_err());
         assert!(status_summary(&json!({"status":"ready"})).is_err());
+    }
+    #[test]
+    fn op5_identity_requires_exact_kind_integer_protocol_and_no_scan() {
+        let valid = json!({"wifi_debug":true,"capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1",
+            "stage_kind":"private-ram-wifi-debug-stage","debug_protocol":1,"scan":false,
+            "debug_generation_limit":8,"provisioned":false});
+        assert!(require_debug_identity(&valid).is_ok());
+        for key in ["stage_kind", "debug_protocol", "scan"] {
+            let mut invalid = valid.clone();
+            invalid.as_object_mut().unwrap().remove(key);
+            assert!(require_debug_identity(&invalid).is_err());
+        }
+        for (key, wrong) in [
+            ("stage_kind", json!("private-install")),
+            ("debug_protocol", json!(true)),
+            ("debug_protocol", json!(1.0)),
+            ("debug_protocol", json!(2)),
+            ("scan", json!(true)),
+            ("scan", json!(0)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = wrong;
+            assert!(require_debug_identity(&invalid).is_err());
+        }
     }
     #[test]
     fn configuration_rejects_unsafe_or_ambiguous_attachment() {

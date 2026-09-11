@@ -45,7 +45,10 @@ its current protocol. This mode cannot be combined with a boot transition.
 `completed_transition` configuration. A capability-only attachment is refused
 before USB access. It also requires opcode 5 to advertise
 `wifi_debug: true`, `capabilities: "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"`, and
-`provisioned: false` and `debug_generation_limit: 8`. Only then can the host request bounded pre-credential
+`provisioned: false`, `debug_generation_limit: 8`,
+`stage_kind: "private-ram-wifi-debug-stage"`, integer `debug_protocol: 1`,
+and `scan: false`. Missing or wrong fields stop before opcode 8 or 9 is sent.
+Only then can the host request bounded pre-credential
 diagnostics (opcode 8) or an explicit startup retry (opcode 9). Both requests
 have empty payloads. The worker repeats the identity check for each operation.
 The dedicated debug stage must reject provisioning: this host never prompts

@@ -23,6 +23,9 @@ CAPABILITY = 'COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1'
 def debug_identity(status):
     return (isinstance(status, dict) and status.get('wifi_debug') is True
             and status.get('capabilities') == CAPABILITY
+            and status.get('stage_kind') == 'private-ram-wifi-debug-stage'
+            and type(status.get('debug_protocol')) is int and status['debug_protocol'] == 1
+            and status.get('scan') is False
             and type(status.get('debug_generation_limit')) is int and status['debug_generation_limit'] == 8
             and status.get('provisioned') is False)
 
