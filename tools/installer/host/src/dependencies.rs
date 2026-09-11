@@ -271,12 +271,19 @@ mod debug_runtime_tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("python"), b"inert fixture").unwrap();
         fs::write(root.path().join("libusb"), b"inert library").unwrap();
+        let platform = host_platform();
         let receipt = json!({"schema":1,"kind":"couch-owner-mtk-runtime","complete":true,
-            "platform":host_platform().unwrap(),"files":file_inventory(root.path()).unwrap(),
+            "platform":platform.as_ref().copied().unwrap_or("unsupported"),"files":file_inventory(root.path()).unwrap(),
             "executables":{"python":"python"},"native_libraries":{"libusb":"libusb"}});
         let data = serde_json::to_vec(&receipt).unwrap();
         fs::write(root.path().join("runtime.json"), &data).unwrap();
         let pin = digest(&data);
+        if platform.is_err() {
+            // The binary build matrix also includes Linux ARM64, for which
+            // native dependency preparation has no reviewed runtime pin.
+            assert!(debug_runtime(root.path(), &pin).is_err());
+            return;
+        }
         assert_eq!(
             debug_runtime(root.path(), &pin).unwrap(),
             (root.path().join("python"), root.path().join("libusb"))
