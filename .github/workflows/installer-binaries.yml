@@ -40,6 +40,24 @@ jobs:
       - name: Build native host
         working-directory: tools/installer/host
         run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Verify Windows binaries do not require the VC redistributable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: .
+        run: |
+          rustup component add llvm-tools
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install LLVM inspection tools' }
+          $couchToolchain = rustc --print sysroot
+          $couchReader = Join-Path $couchToolchain 'lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-readobj.exe'
+          foreach ($component in @('host', 'tui')) {
+            $binary = "tools/installer/$component/target/x86_64-pc-windows-msvc/release/couch-installer-$component.exe"
+            $imports = & $couchReader --coff-imports $binary
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect $component imports" }
+            if ($imports -match '(?i)Name: (VCRUNTIME|MSVCP|MSVCR|CONCRT)[^ ]*\.dll') {
+              throw "$component still requires the Visual C++ redistributable"
+            }
+            Write-Host "$component imports verified"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: couch-installer-tui-${{ matrix.platform }}
