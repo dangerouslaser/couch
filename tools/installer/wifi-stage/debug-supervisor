@@ -19,7 +19,7 @@ while true; do
         if [ -f /tmp/couch-wifi-debug.retry ]; then
             # Fixed process names only; no host-provided command or path.
             $BB kill "$worker" 2>/dev/null
-            $BB killall wpa_supplicant wmt_launcher 2>/dev/null
+            $BB killall wpa_supplicant wmt_launcher wmt_loader 2>/dev/null
             break
         fi
         $BB sleep 1

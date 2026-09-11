@@ -197,6 +197,21 @@ zero-length USB-only requests:
 | 8 | at most 4608 bytes of printable JSON | Current Wi-Fi status, allowlisted step, generation and capped (4096-byte) pre-credential startup log |
 | 9 | empty acknowledgement | Request one fixed local restart of the credential-free Wi-Fi init sequence |
 
+Operation 0 remains the common `CBP1` hello and intentionally carries no
+identity. Before using either debug operation, a host queries operation 5 and
+requires all of `wifi_debug: true`,
+`capabilities: "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"`,
+`stage_kind: "private-ram-wifi-debug-stage"`, and `debug_protocol: 1`.
+Otherwise it may display status only and must not issue operation 8 or 9.
+
+Each debug boot starts generation 1. Operation 9 is idempotent and accepts no
+payload; its acknowledgement only records the fixed retry marker. The host
+must poll status until generation increases rather than treating the
+acknowledgement as a completed restart. There is no start, stop, PID, command,
+path, scan, or credential operation. The fixed supervisor may stop only its
+own init worker and the known `wpa_supplicant`, `wmt_launcher`, and
+`wmt_loader` processes.
+
 The retry request contains no command, path, configuration, or credentials. The
 initramfs supervisor consumes only its fixed marker, stops only its fixed
 supplicant/launcher process names, clears RAM-only startup state, then starts a

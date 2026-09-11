@@ -251,12 +251,7 @@ fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
     let step = fs::read_to_string(root.join("couch-wifi.step"))
         .ok()
         .map(|value| value.trim().to_owned())
-        .filter(|value| {
-            matches!(
-                value.as_str(),
-                "detect" | "loader" | "transport" | "power" | "credentials" | "connect"
-            )
-        })
+        .filter(|value| matches!(value.as_str(), "detect" | "loader" | "transport" | "power"))
         .unwrap_or_else(|| "unknown".into());
     let generation = fs::read_to_string(root.join("couch-wifi-debug.generation"))
         .ok()
@@ -316,6 +311,7 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
         value["wifi_debug"] = serde_json::json!(true);
         value["capabilities"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         value["debug_protocol"] = serde_json::json!(1);
+        value["scan"] = serde_json::json!(false);
     }
     value.to_string().into_bytes()
 }
@@ -542,6 +538,7 @@ mod tests {
             "COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1"
         );
         assert_eq!(ordinary["debug_protocol"], 1);
+        assert_eq!(ordinary["scan"], false);
         fs::remove_dir_all(root).unwrap();
     }
 }
