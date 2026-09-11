@@ -11,7 +11,7 @@ from unittest.mock import patch
 from contextlib import contextmanager
 
 from couch_install import InstallError, IDENTITY_PARTITIONS
-from mtk_adapter import Adapter, Wire, serve, MAX
+from mtk_adapter import Adapter, Wire, serve, MAX, failure_diagnostic
 from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
 from mtk_writer import _open_image, _fd_stamp, _read_at, ConnectedMtkWriter
 
@@ -28,6 +28,54 @@ class MemoryWire:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_failure_diagnostic_never_contains_exception_text_or_unknown_names(self):
+        try:
+            raise PermissionError(13, 'secret password /private/device-id')
+        except PermissionError as error:
+            result = failure_diagnostic(error)
+        self.assertEqual(result, {'category': 'PermissionError', 'errno': 13})
+        PrivateDeviceName = type('private-device-secret', (Exception,), {})
+        result = failure_diagnostic(PrivateDeviceName('secret'))
+        self.assertEqual(result, {'category': 'WorkerError'})
+
+    def test_real_stdio_survives_independent_library_rewrap_and_hides_output(self):
+        import subprocess
+        import sys
+        code = r"""
+import io, os, sys
+sys.path.insert(0, sys.argv[1])
+from mtk_adapter import serve_stdio
+class Fixture:
+    def __init__(self, wire): self.wire = wire
+    def dispatch(self, command):
+        assert command == {'op': 'prepare'}
+        # Exact pinned upstream behavior, followed by both Python and raw output.
+        sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding='utf-8')
+        print('must not enter RPC', flush=True)
+        print('must not leak stderr', file=sys.stderr, flush=True)
+        os.write(1, b'raw stdout must also be hidden')
+        os.write(2, b'raw stderr must also be hidden')
+        self.wire.send({'event': 'prepared'})
+        self.wire.chunk(bytes([0, 10, 13, 26, 255]))
+        return False
+    def close(self): pass
+raise SystemExit(serve_stdio(Fixture))
+"""
+        command = json.dumps({'op': 'prepare'}).encode()
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(Path(__file__).resolve().parent)],
+                                input=struct.pack('<I', len(command)) + command,
+                                capture_output=True, timeout=15, check=True)
+        size, = struct.unpack('<I', result.stdout[:4])
+        self.assertEqual(json.loads(result.stdout[4:4 + size]), {'event': 'prepared'})
+        rest = result.stdout[4 + size:]
+        chunk_size, = struct.unpack('<I', rest[:4])
+        self.assertEqual(json.loads(rest[4:4 + chunk_size]), {'event': 'chunk', 'size': 5})
+        raw = rest[4 + chunk_size:]
+        self.assertEqual(struct.unpack('<III', raw[:12]), (5, 5, 0))
+        self.assertEqual(raw[12:], bytes([0, 10, 13, 26, 255]))
+        self.assertEqual(result.stderr, b'')
+
     def test_unprepared_worker_never_reaches_hardware(self):
         wire = MemoryWire()
         def forbidden(*args, **kwargs):

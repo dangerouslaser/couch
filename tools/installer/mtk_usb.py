@@ -188,6 +188,21 @@ def strict_handshake(cdc, *, sleep=time.sleep):
         check(byte, cdc.EP_IN.read(1, timeout=500))
 
 
+def configuration_after_permissions(dev, *, platform=sys.platform, now=time.monotonic, sleep=time.sleep):
+    # Linux can enumerate a fresh usbfs node before udev grants the existing
+    # group policy. Retry only libusb ACCESS while opening this exact object,
+    # before interface claims or any handshake. Never rediscover or reset.
+    deadline = now() + 1.0
+    while True:
+        try:
+            return dev.get_active_configuration()
+        except Exception as error:
+            if (platform != 'linux' or getattr(error, 'errno', None) != errno.EACCES
+                    or getattr(error, 'backend_error_code', None) != -3 or now() >= deadline):
+                raise
+            sleep(min(0.025, max(0.0, deadline - now())))
+
+
 class ExactUsbBackend:
     def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None, libusb_path=None):
         self.checkout = checkout
@@ -232,7 +247,7 @@ class ExactUsbBackend:
         dev = next(dev for dev in devices if descriptor(dev) == expected)
         self.device = dev  # Retain this exact descriptor; never rediscover on an error.
         dev.default_timeout = 1000
-        config = dev.get_active_configuration()  # No reset or set_configuration fallback.
+        config = configuration_after_permissions(dev)  # No reset or set_configuration fallback.
         self.configuration = config
         candidates = []
         for interface in config:

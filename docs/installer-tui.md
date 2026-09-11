@@ -128,3 +128,13 @@ dependency preparation. Physical driver and installation acceptance remain
 separate requirements; see the [installer guide](installer.md). Windows uses
 private anonymous pipes; Unix uses an inherited local socket. Native subprocess
 output is redirected away from both transports.
+
+### Native progress measurements
+
+Native byte transfers report throughput from changes in byte counters over a
+monotonic clock interval (at least 250 ms, or the final chunk). Each partition,
+verification pass, changed total, or restarted counter begins a fresh sample.
+Dependency extraction reports item counts; USB/Wi-Fi waits report elapsed seconds.
+Neither is presented as MiB/s. Initial samples show “measuring speed”; after two
+seconds without a byte-progress event, an incomplete transfer hides stale speed
+and ETA and shows “waiting for progress”. Prompts and errors clear measurements.
