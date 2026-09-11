@@ -197,6 +197,7 @@ fn error_label(error: &str) -> &str {
         | "power-on"
         | "interface-timeout"
         | "interface-up"
+        | "control-directory"
         | "dhcp-exit"
         | "supplicant-exit"
         | "supplicant-socket-timeout" => error.trim(),
@@ -244,6 +245,7 @@ mod tests {
         assert_eq!(status_label("failed"), "failed");
         assert_eq!(status_label("untrusted status"), "waiting");
         assert_eq!(error_label("loader-exit\n"), "loader-exit");
+        assert_eq!(error_label("control-directory\n"), "control-directory");
         assert_eq!(error_label("private network text"), "unknown");
     }
     #[test]
