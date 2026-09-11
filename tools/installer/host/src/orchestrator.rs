@@ -104,7 +104,8 @@ fn identity_input(
             .to_string();
         let valid = if mac {
             let bytes = decode(&value.to_ascii_lowercase().replace(':', ""));
-            value.len() == 17
+            value.to_ascii_lowercase() != "02:00:00:00:00:00"
+                && value.len() == 17
                 && value.as_bytes().iter().enumerate().all(|(i, c)| {
                     if i % 3 == 2 {
                         *c == b':'
@@ -154,16 +155,18 @@ fn plan_images(paths: &BTreeMap<String, PathBuf>, device: &Value, ui: &mut Ui) -
         let mut full = Sha256::new();
         let mut buffer = vec![0; crate::stage::CHUNK];
         let mut done = 0;
-        loop {
-            let n = file.read(&mut buffer)?;
-            if n == 0 {
-                break;
-            }
+        while done < size {
+            let n = (size - done).min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..n])?;
             full.update(&buffer[..n]);
             chunks.push(format!("{:x}", Sha256::digest(&buffer[..n])));
             done += n as u64;
             ui.progress(4, &format!("Verifying {name} image"), done, size)?;
         }
+        ensure!(
+            file.read(&mut [0u8; 1])? == 0 && file.metadata()?.len() == size,
+            "image changed during hashing"
+        );
         images.insert(
             name.clone(),
             json!({"size":size,"sha256":format!("{:x}",full.finalize()),"chunks":chunks}),
@@ -286,6 +289,7 @@ fn install(
         0,
         0,
     )?;
+    dependencies.verify()?;
     let devices = android::discover(&dependencies.adb)?;
     ensure!(
         !devices.is_empty(),
@@ -345,6 +349,7 @@ fn install(
         &json!({"event":"android_bound","cid":cid,"usb":bound,"android_identity":identity}),
     )?;
     ui.progress(3, "Restarting the selected remote through USB", 0, 0)?;
+    dependencies.verify()?;
     android::reboot(&dependencies.adb, &android.serial)?;
     let start = Instant::now();
     let candidate = loop {
@@ -380,6 +385,17 @@ fn install(
     enrollment::admit_layout(device, cid, &prepared)?;
     let originals = enrollment::capture(&mut worker, device, session, ui)?;
     enrollment::stock_prefixes(session, &prepared)?;
+    let logo = assembly::logo_image(
+        &fs::read(session.path().join("bootstrap-logo.img"))?,
+        &fs::read(
+            public
+                .get("logo.bgra")
+                .context("public Couch logo frame missing")?,
+        )?,
+    )?;
+    let logo_path = session.path().join("logo.img");
+    write(&logo_path, &logo)?;
+    images.insert("logo".into(), logo_path);
     let identity_hashes: BTreeMap<_, _> = enrollment::IDENTITY
         .into_iter()
         .map(|n| (n, originals[n].clone()))

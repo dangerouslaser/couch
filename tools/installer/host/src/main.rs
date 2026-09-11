@@ -36,6 +36,12 @@ fn main() -> Result<()> {
     if args.first().is_some_and(|value| value == "--ui-smoke") {
         return ui_smoke(&args[1..]);
     }
+    if args
+        .iter()
+        .any(|v| v == "--events-fd" || v == "--events-stdio")
+    {
+        return installer(&args);
+    }
     if args.len() != 3 || args[0] != "prepare-official" {
         bail!("usage: couch-installer-host prepare-official OFFICIAL_ZIP NEW_PRIVATE_DIRECTORY");
     }
@@ -81,4 +87,37 @@ fn ui_smoke(args: &[std::ffi::OsString]) -> Result<()> {
         1,
     )?;
     ui.finish(0)
+}
+
+fn installer(args: &[std::ffi::OsString]) -> Result<()> {
+    use couch_installer_host::frontend::Ui;
+    let mut config = None;
+    let mut events = false;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--config" && config.is_none() && index + 1 < args.len() {
+            config = Some(PathBuf::from(&args[index + 1]));
+            index += 2;
+        } else if cfg!(unix)
+            && args[index] == "--events-fd"
+            && !events
+            && args.get(index + 1).is_some_and(|v| v == "3")
+        {
+            events = true;
+            index += 2;
+        } else if cfg!(windows) && args[index] == "--events-stdio" && !events {
+            events = true;
+            index += 1;
+        } else {
+            bail!("unsupported native installer arguments");
+        }
+    }
+    anyhow::ensure!(events, "private installer event channel missing");
+    #[cfg(unix)]
+    let mut ui = Ui::inherited_socket(3)?;
+    #[cfg(windows)]
+    let mut ui = Ui::stdio();
+    let result = couch_installer_host::orchestrator::run(&mut ui, config.as_deref());
+    let _ = ui.finish(if result.is_ok() { 0 } else { 1 });
+    result
 }

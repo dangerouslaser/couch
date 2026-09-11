@@ -225,6 +225,7 @@ fn extract(
         "boot.cpio.gz",
         "recovery.cpio.gz",
         "zImage",
+        "logo.bgra",
     ]
     .into_iter()
     .collect();
