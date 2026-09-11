@@ -95,3 +95,51 @@ consumption, boot assembly, the selected MTK adapter and its platform dependenci
 and TUI admission/wiring remain to be connected. Callers must verify the release,
 enrollment evidence, selected device and USB plan binding before the transaction
 API; it deliberately does not infer admission from a caller-supplied plan alone.
+
+## Native installation orchestration
+
+`couch-installer-tui --native-backend /path/to/couch-installer-host --config
+/path/to/installer.json` now enters the native installation flow. Use the
+release-specific launcher to verify these files together; an arbitrary local
+configuration is not a trusted release. Selecting Cancel happens before
+configuration loading, downloads, private-session creation or USB access.
+
+Rust owns dependency preparation, owner-side OTA extraction, fixed public payload
+admission, session/USB locks, Android enrollment, progress, Wi-Fi selection and
+TLS installation. The embedded Python worker retains only the reviewed MTK
+handshake and a fixed USB setup protocol. It uses the independently verified
+owner-local Python/MTK/libusb bundle, never a system-library fallback. Pipe reads,
+writes and nested USB operations have finite deadlines; cancellation kills the
+worker. Windows uses a kill-on-close job, Linux a parent-death signal, and macOS
+inherits the TUI's process group.
+
+Fresh enrollment requires authorized Android ADB, canonical storage CID, exact
+physical USB selection, the pinned HA100 partition boundaries and matching stock
+boot/device-tree prefixes. Original calibration, boot, recovery, device tree and
+logo are read, saved, independently read back and journaled before the sole USB
+boot write. Device ID and unavailable MAC addresses are entered from Android;
+Android ID or serial is never substituted for the vendor Device ID. Free space
+for the selected backups is checked before bootstrap. No preloader or LK write
+operation exists in the worker.
+
+The public payload contains only `manifest.json`, `userdata.ext4`,
+`installer.cpio.gz`, `boot.cpio.gz`, `recovery.cpio.gz`, `zImage` and `logo.bgra`.
+The manifest uses schema 1, kind `couch-public-os-inputs`, release `version`,
+`source_commit`, and a `files` map of exact size/SHA-256 pairs. Owner vendor data,
+stock kernel/header material and retained logo frames are assembled locally.
+Non-files, unknown paths, duplicate entries, changed hashes and trailing payload
+data are rejected. No private device baseline is a public input.
+
+After USB-bound Wi-Fi credentials and TLS identity are provisioned, Rust performs
+all requested backups, transfers the 33 pinned owner vendor files, and writes the
+compact filesystem. The stage expands it, installs and reads back vendor/Wi-Fi
+files, checks calibration, and commits normal boot last. The final restart is an
+explicit choice after verification. YOLO omits only the userdata backup.
+
+These source paths and fixtures do not certify a physical installation on every
+host. Windows additionally requires a usable driver binding for the selected
+MTK download interface and installer vendor interface. The installer reports a
+bounded claim failure; it does not replace drivers for other USB devices. See
+[libusb's Windows driver documentation](https://github.com/libusb/libusb/wiki/Windows#driver-installation).
+Fresh Android enrollment, OS startup, restoration and reinstall from another
+computer need separate physical acceptance records before a public-ready claim.

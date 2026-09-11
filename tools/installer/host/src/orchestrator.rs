@@ -375,6 +375,29 @@ fn install(
     let connected=simple(&mut worker,json!({"op":"start","candidate":candidate}),"connected",120,ui,3).context("Could not claim the selected USB download interface. On Windows it needs a compatible WinUSB driver; do not replace drivers for other USB devices")?;
     let device = &connected["device"];
     enrollment::admit_layout(device, cid, &prepared)?;
+    let mut required = 256 * 1024 * 1024u64;
+    for name in enrollment::IDENTITY
+        .into_iter()
+        .chain(enrollment::ORIGINALS)
+    {
+        let size = device["partitions"][name]["size"]
+            .as_u64()
+            .context("missing original size")?;
+        required = required
+            .checked_add(size.checked_mul(2).context("backup size overflow")?)
+            .context("backup size overflow")?;
+    }
+    if !skip_userdata {
+        required = required
+            .checked_add(
+                device["partitions"]["userdata"]["size"]
+                    .as_u64()
+                    .context("missing userdata size")?,
+            )
+            .context("backup size overflow")?;
+    }
+    ensure!(crate::space::available(session.path())? >= required, "Not enough free space for selected original backups and safety margin; no boot write occurred");
+
     let originals = enrollment::capture(&mut worker, device, session, ui)?;
     enrollment::stock_prefixes(session, &prepared)?;
     let logo = assembly::logo_image(
