@@ -6,6 +6,7 @@ use crate::{
     frontend::{Choice, Ui},
     network,
     public_inputs::{self, create, decode, digest, hex},
+    saved_enrollment,
     session::{self, Phase, SessionGuard},
     stage::Channel,
     stage_tls,
@@ -76,6 +77,14 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
         "private artifact readback differs"
     );
     Ok(())
+}
+fn input_path(ui: &mut Ui, title: &str, body: &str) -> Result<PathBuf> {
+    let value = ui.input(title, body, false)?;
+    if let Some(rest) = value.strip_prefix("~/") {
+        Ok(PathBuf::from(std::env::var_os("HOME").context("missing home directory")?).join(rest))
+    } else {
+        Ok(PathBuf::from(value.as_str()))
+    }
 }
 fn identity_input(
     ui: &mut Ui,
@@ -171,7 +180,7 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
     ui.set_steps(
         [
             "Prepare",
-            "Android",
+            "Device",
             "Originals",
             "Start installer",
             "Wi-Fi",
@@ -194,10 +203,14 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
                 "YOLO — skip Android data backup",
                 "Device calibration and recovery originals are still preserved.",
             ),
+            choice(
+                "Reinstall existing Couch",
+                "Import retained Android enrollment and back up the current Couch installation.",
+            ),
             choice("Cancel", "Leave the device unchanged."),
         ],
     )?;
-    if mode == 2 {
+    if mode == 3 {
         return Ok(());
     }
     #[cfg(windows)]
@@ -214,7 +227,25 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
             .to_str()
             .context("invalid private session path")?,
     )?;
-    let result = install(ui, &release, mode == 1, &mut session);
+    let skip_userdata = if mode == 2 {
+        ui.choose(
+            "Current Couch data backup",
+            "The imported Android originals remain separate from this new installation's backups.",
+            &[
+                choice(
+                    "Back up current Couch data",
+                    "Preserve current data before replacing the OS.",
+                ),
+                choice(
+                    "YOLO — skip current Couch data",
+                    "Calibration and boot/recovery originals are still saved.",
+                ),
+            ],
+        )? == 1
+    } else {
+        mode == 1
+    };
+    let result = install(ui, &release, skip_userdata, mode == 2, &mut session);
     if let Err(error) = &result {
         if !matches!(session.phase(), Phase::Failed | Phase::Complete) {
             let _ = session.transition(
@@ -233,6 +264,7 @@ fn install(
     ui: &mut Ui,
     release: &public_inputs::Release,
     skip_userdata: bool,
+    reinstall: bool,
     session: &mut SessionGuard,
 ) -> Result<()> {
     let _usb_lease = UsbLease::acquire(session)?;
@@ -277,37 +309,68 @@ fn install(
     images.insert("userdata".into(), public["userdata.ext4"].clone());
     let vendor = vendor_transfer::prepare(&prepared)?;
     session.transition(Phase::InputsVerified,&json!({"event":"inputs_verified","release":release.version,"payload_sha256":release.payload.sha256,"stage_sha256":stage_hash}))?;
-    ui.progress(
+    let (saved, serial, expected_cid, identity) = if reinstall {
+        let source = input_path(
+            ui,
+            "Saved Android enrollment directory",
+            "Choose the retained native enrollment or older verified Python backup folder.",
+        )?;
+        let imported = if source.join("enrollment.json").is_file() {
+            saved_enrollment::import(&source, session)?
+        } else {
+            let profile = input_path(
+                ui,
+                "Trusted stock manifest",
+                "Select the independently retained stock manifest used with these originals.",
+            )?;
+            let hash=ui.input("Trusted stock manifest SHA-256","Enter its independently recorded SHA-256. Do not take a new trust pin from the backup being imported.",false)?;
+            saved_enrollment::import_legacy(
+                &source,
+                &profile,
+                &hash,
+                session,
+                |name, done, total| {
+                    ui.progress(1, &format!("Verifying retained {name}"), done, total)
+                },
+            )?
+        };
+        let cid = imported.record().cid.clone();
+        let identity = serde_json::to_value(&imported.record().android_identity)?;
+        (Some(imported), None, cid, identity)
+    } else {
+        ui.progress(
         1,
         "Enable USB debugging, connect the remote, and accept Android's USB authorization prompt.",
         0,
         0,
     )?;
-    dependencies.verify()?;
-    let devices = android::discover(&dependencies.adb)?;
-    ensure!(
-        !devices.is_empty(),
-        "No Android remote found. Enable USB debugging and connect USB"
-    );
-    let selected = ui.choose(
-        "Choose your Android remote",
-        "Only USB-connected Android devices are listed.",
-        &devices
-            .iter()
-            .map(|d| {
-                choice(
-                    &d.serial,
-                    &format!("{} · {}", d.model.as_deref().unwrap_or("Android"), d.state),
-                )
-            })
-            .collect::<Vec<_>>(),
-    )?;
-    let android = android::capture(&dependencies.adb, &devices[selected].serial)?;
-    let cid = android
-        .cid
-        .as_deref()
-        .context("Android did not expose a usable eMMC identity; no write is permitted")?;
-    let identity = json!({"device_id":identity_input(ui,"Android Device ID",android.device_id,false)?,"wifi_mac":identity_input(ui,"Android Wi-Fi MAC",android.wifi_mac,true)?,"bt_mac":identity_input(ui,"Android Bluetooth MAC",android.bt_mac,true)?});
+        dependencies.verify()?;
+        let devices = android::discover(&dependencies.adb)?;
+        ensure!(
+            !devices.is_empty(),
+            "No Android remote found. Enable USB debugging and connect USB"
+        );
+        let selected = ui.choose(
+            "Choose your Android remote",
+            "Only USB-connected Android devices are listed.",
+            &devices
+                .iter()
+                .map(|d| {
+                    choice(
+                        &d.serial,
+                        &format!("{} · {}", d.model.as_deref().unwrap_or("Android"), d.state),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let android = android::capture(&dependencies.adb, &devices[selected].serial)?;
+        let cid = android
+            .cid
+            .as_deref()
+            .context("Android did not expose a usable eMMC identity; no write is permitted")?;
+        let identity = json!({"device_id":identity_input(ui,"Android Device ID",android.device_id,false)?,"wifi_mac":identity_input(ui,"Android Wi-Fi MAC",android.wifi_mac,true)?,"bt_mac":identity_input(ui,"Android Bluetooth MAC",android.bt_mac,true)?});
+        (None, Some(android.serial), cid.to_string(), identity)
+    };
     dependencies.verify()?;
     let script = adapter::materialize(session)?;
     let mut command = Command::new(&dependencies.python);
@@ -326,25 +389,59 @@ fn install(
         ui,
         1,
     )?;
-    let bound = simple(
-        &mut worker,
-        json!({"op":"android_bind","serial":android.serial}),
-        "android_bound",
-        30,
-        ui,
-        1,
-    )?;
-    ensure!(
-        bound["serial_sha256"] == format!("{:x}", Sha256::digest(android.serial.as_bytes())),
-        "Android USB serial binding differs"
-    );
-    session.transition(
-        Phase::AndroidBound,
-        &json!({"event":"android_bound","cid":cid,"usb":bound,"android_identity":identity}),
-    )?;
-    ui.progress(3, "Restarting the selected remote through USB", 0, 0)?;
-    dependencies.verify()?;
-    android::reboot(&dependencies.adb, &android.serial)?;
+    let bound = if let Some(serial) = &serial {
+        let bound = simple(
+            &mut worker,
+            json!({"op":"android_bind","serial":serial}),
+            "android_bound",
+            30,
+            ui,
+            1,
+        )?;
+        ensure!(
+            bound["serial_sha256"] == format!("{:x}", Sha256::digest(serial.as_bytes())),
+            "Android USB serial binding differs"
+        );
+        session.transition(Phase::AndroidBound,&json!({"event":"android_bound","cid":expected_cid,"usb":bound,"android_identity":identity}))?;
+        ui.progress(1, "Restarting the selected remote through USB", 0, 0)?;
+        dependencies.verify()?;
+        android::reboot(&dependencies.adb, serial)?;
+        bound
+    } else {
+        let bound = loop {
+            let result = simple(
+                &mut worker,
+                json!({"op":"enumerate"}),
+                "candidates",
+                20,
+                ui,
+                1,
+            )?;
+            let candidates = result["devices"]
+                .as_array()
+                .context("invalid USB inventory")?
+                .iter()
+                .filter(|d| d["pid"] == 0x201c)
+                .collect::<Vec<_>>();
+            if candidates.is_empty() {
+                ui.choose("Connect the Couch remote", "Keep Couch powered on and connected through USB so its physical port can be selected.",&[choice("Check USB again","No write or reboot has been requested.")])?;
+                continue;
+            }
+            let options = candidates
+                .iter()
+                .map(|d| {
+                    choice(
+                        &format!("USB bus {} · ports {}", d["bus"], d["ports"]),
+                        "Select the connected Couch remote.",
+                    )
+                })
+                .collect::<Vec<_>>();
+            let selected=ui.choose("Select the connected Couch remote","Its stored CID and calibration must match the imported enrollment before any write.",&options)?;
+            break candidates[selected].clone();
+        };
+        ui.choose("Restart the selected remote", "Keep USB connected. After selecting Continue, hold the side Power button until the remote turns off, then release it. If needed, hold Power until it starts again; the installer is watching the selected port.",&[choice("Continue and watch USB","Only this selected physical USB port can be captured.")])?;
+        bound
+    };
     let start = Instant::now();
     let candidate = loop {
         ensure!(start.elapsed()<Duration::from_secs(120),"Remote did not enter download mode. No boot write occurred; check USB driver binding and power");
@@ -381,9 +478,12 @@ fn install(
         thread::sleep(Duration::from_millis(20));
     };
     let connected=simple(&mut worker,json!({"op":"start","candidate":candidate}),"connected",120,ui,3).context("Could not claim the selected USB download interface. On Windows it needs a compatible WinUSB driver; do not replace drivers for other USB devices")?;
+    let cid = connected["cid"]
+        .as_str()
+        .context("missing observed canonical CID")?;
     ensure!(
-        connected["cid"] == cid,
-        "Canonical download-agent CID differs from Android"
+        cid == expected_cid,
+        "Canonical download-agent CID differs from enrollment"
     );
     let device = &connected["device"];
     enrollment::admit_layout(device, cid, &prepared)?;
@@ -411,7 +511,36 @@ fn install(
     ensure!(crate::space::available(session.path())? >= required, "Not enough free space for selected original backups and safety margin; no boot write occurred");
 
     let originals = enrollment::capture(&mut worker, device, session, ui)?;
-    enrollment::stock_prefixes(session, &prepared)?;
+    let imported_proof = if let Some(saved) = saved {
+        let observation = saved_enrollment::ObservedHardware {
+            cid: cid.to_string(),
+            capacity: device["capacity"].as_u64().context("missing capacity")?,
+            hwcode: device["hwcode"]
+                .as_u64()
+                .context("missing hardware code")?
+                .try_into()?,
+            cid_encoding: device["cid_encoding"]
+                .as_str()
+                .context("missing CID encoding")?
+                .into(),
+            partitions: serde_json::from_value(device["partitions"].clone())?,
+            identity_sha256: enrollment::IDENTITY
+                .into_iter()
+                .map(|name| (name.to_string(), originals[name].clone()))
+                .collect(),
+            retained_sha256: originals.clone(),
+        };
+        let proof = saved.rebind(&observation, session)?;
+        session.transition(Phase::AndroidBound,&json!({"event":"retained_enrollment_bound","cid":cid,"original_os":"Couch","enrollment_sha256":proof.enrollment().sha256(),"usb":bound}))?;
+        Some(proof)
+    } else {
+        enrollment::stock_prefixes(session, &prepared)?;
+        None
+    };
+    ensure!(
+        imported_proof.is_some() == reinstall,
+        "missing retained enrollment admission"
+    );
     let logo = assembly::logo_image(
         &fs::read(session.path().join("bootstrap-logo.img"))?,
         &fs::read(
@@ -432,11 +561,15 @@ fn install(
         .map(|n| (n, originals[n].clone()))
         .collect();
     let entries:BTreeMap<_,_>=originals.iter().map(|(name,sha)|(name,json!({"file":format!("bootstrap-{name}.img"),"size":device["partitions"][name]["size"],"sha256":sha}))).collect();
-    let enrollment_path = session.path().join("enrollment.json");
+    let enrollment_path = session.path().join(if reinstall {
+        "current-couch-snapshot.json"
+    } else {
+        "enrollment.json"
+    });
     write(
         &enrollment_path,
         &serde_json::to_vec(
-            &json!({"schema":1,"kind":"couch-device-enrollment","model":"sanytron-ha100","cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"android_identity":identity,"original_os":"Android","originals":entries}),
+            &json!({"schema":1,"kind":"couch-device-enrollment","model":"sanytron-ha100","cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"android_identity":identity,"original_os":if reinstall {"Couch"} else {"Android"},"originals":entries}),
         )?,
     )?;
     session.transition(
@@ -571,7 +704,11 @@ fn install(
         &plan,
         &images,
         &enrollment::original_boot(session),
-        OriginalOs::Android,
+        if reinstall {
+            OriginalOs::Couch
+        } else {
+            OriginalOs::Android
+        },
         session,
         Some(vendor),
         |phase, target, done, total| {
@@ -614,7 +751,7 @@ mod tests {
     #[test]
     fn cancel_never_requires_release_config_or_creates_session() {
         let mut ui = Ui::new(
-            Box::new(Cursor::new(b"{\"id\":1,\"value\":\"2\"}\n".to_vec())),
+            Box::new(Cursor::new(b"{\"id\":1,\"value\":\"3\"}\n".to_vec())),
             Box::new(Vec::new()),
         );
         run(&mut ui, None).unwrap();
