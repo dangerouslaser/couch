@@ -5,7 +5,7 @@ private inherited socket (Unix) or pipes (Windows). Prompts use increasing IDs;
 invalid, stale, cancelled, truncated or oversized replies stop the channel.
 Input buffers are zeroized and secret replies are never echoed as display state.
 The `--ui-smoke` command is an explicit device-free interface fixture. The native installation orchestrator uses the same channel for the complete
-fresh-Android flow described below.
+fresh-Android and retained-enrollment reinstall flows described below.
 
 The independent `prepare-official` command performs complete
 owner-side official input preparation. It verifies the pinned ZIP, bounded
@@ -34,13 +34,11 @@ executes the real pipeline on all three hosts without uploading vendor outputs.
 The original vendor URL uses HTTP; the reviewed repository SHA-256 pin checks
 its bytes before parsing, but does not create an independent vendor signature.
 
-This component is not the complete native installer. USB adapter isolation,
-session ownership/deadlines, enrollment UX and the write-capable transfer policy
-still need migration/integration. Filesystem personalization should move to the
-reviewed Linux stage so other hosts do not need native e2fsprogs. The default
-public installation gate remains disabled until those flows and recovery are
-validated. Native input preparation or native terminal builds alone cannot
-establish full macOS/Windows installation support.
+The native orchestrator now connects these inputs to supervised USB startup,
+Wi-Fi setup, backups and the Linux-stage writer. Filesystem expansion and
+personalization run on the remote, so host e2fsprogs are unnecessary. Public
+release readiness still requires a verified release payload and separate physical
+acceptance; native builds and preparation tests alone do not certify installation.
 
 ## Session journals
 
@@ -121,6 +119,15 @@ boot write. Device ID and unavailable MAC addresses are entered from Android;
 Android ID or serial is never substituted for the vendor Device ID. Free space
 for the selected backups is checked before bootstrap. No preloader or LK write
 operation exists in the worker.
+
+Reinstallation imports a [saved enrollment](../../../docs/installer-saved-enrollment.md)
+into a new private session. The selected Couch USB port is queried using a
+nonce-framed fixed CID command; only a matching retained CID permits one fixed
+USB reboot. An unavailable serial interface offers manual restart, while a CID
+mismatch or ambiguous reboot stops without retry. Download-mode CID, full layout,
+calibration and retained device-tree identity are checked again before writing.
+Current Couch originals are saved separately and marked Couch; imported Android
+originals are preserved for Android recovery and never replaced by Couch backups.
 
 The public payload contains only `manifest.json`, `userdata.ext4`,
 `installer.cpio.gz`, `boot.cpio.gz`, `recovery.cpio.gz`, `zImage` and `logo.bgra`.

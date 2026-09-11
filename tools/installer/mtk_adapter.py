@@ -22,6 +22,7 @@ from mtk_session import Candidate, ReadPolicy, loader_bytes, source_pin
 from mtk_usb import ExactUsbBackend, supervised_operations
 from mtk_writer import ConnectedMtkWriter
 from stage_usb import StageUsb
+from couch_serial import CouchSerial, Unavailable
 
 MAX = 1024 * 1024
 READABLE = IDENTITY_PARTITIONS | {'boot', 'recovery', 'odmdtbo', 'logo'}
@@ -163,6 +164,30 @@ class Adapter:
             self.wire.send({'event': 'android_bound', 'bus': matches[0].bus,
                 'ports': list(matches[0].port_numbers),
                 'serial_sha256': hashlib.sha256(command['serial'].encode()).hexdigest()})
+        elif op == 'couch_reboot':
+            require(set(command) == {'op', 'candidate', 'cid'} and self.backend is not None
+                    and self.reader is None and not getattr(self, 'couch_reboot_consumed', False),
+                    'Invalid Couch reboot state')
+            raw = command['candidate']
+            require(isinstance(raw, dict) and set(raw) == {'bus', 'address', 'ports', 'vid', 'pid'}
+                    and raw['vid'] == 0x0e8d and raw['pid'] == 0x201c
+                    and type(raw['bus']) is int and raw['bus'] > 0
+                    and isinstance(raw['ports'], list) and raw['ports']
+                    and all(type(n) is int and 0 < n <= 255 for n in raw['ports']), 'Invalid Couch port')
+            self.couch_reboot_consumed = True
+            serial = None
+            try:
+                with self.wire.deadline(15):
+                    serial = CouchSerial(self.backend.usb, self.backend.usb_backend,
+                        Candidate(raw['bus'], raw['address'], tuple(raw['ports']), raw['vid'], raw['pid']))
+                    serial.restart(command['cid'])
+                result = 'requested'
+            except Unavailable:
+                result = 'unavailable'
+            finally:
+                if serial is not None:
+                    serial.close()
+            self.wire.send({'event': 'couch_reboot', 'result': result})
         elif op == 'enumerate':
             require(self.backend is not None and self.reader is None and set(command) == {'op'}, 'Unexpected enumeration')
             with self.wire.deadline(10):

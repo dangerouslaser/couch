@@ -31,7 +31,8 @@ remote; it does not transfer a full partition of unused zeros.
 
 The [Ratatui terminal](../tools/installer/tui/README.md) provides the host UI.
 The [native Rust host](../tools/installer/host/README.md) implements verified
-input preparation, private sessions, fresh Android enrollment, USB supervision,
+input preparation, private sessions, fresh Android enrollment, retained-enrollment
+reinstallation, USB supervision,
 Wi-Fi selection and the complete authenticated installation transaction. Python
 is retained only for the reviewed MediaTek transport and fixed USB setup bridge;
 its runtime is downloaded and verified by Rust. The Linux stage's storage writer

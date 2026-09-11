@@ -24,6 +24,10 @@ pub fn materialize(session: &SessionGuard) -> Result<std::path::PathBuf> {
     }
     for (name, bytes) in [
         (
+            "couch_serial.py",
+            include_bytes!("../../couch_serial.py").as_slice(),
+        ),
+        (
             "stage_usb.py",
             include_bytes!("../../stage_usb.py").as_slice(),
         ),

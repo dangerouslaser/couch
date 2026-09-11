@@ -193,7 +193,7 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
     )?;
     let mode = ui.choose(
         "Install Couch",
-        "Start with Android running. Enable USB debugging and connect your remote via USB.",
+        "For a fresh installation, start Android, enable USB debugging and connect USB. To reinstall Couch, keep it running and have your saved Android enrollment ready.",
         &[
             choice(
                 "Install with Android backup",
@@ -439,7 +439,29 @@ fn install(
             let selected=ui.choose("Select the connected Couch remote","Its stored CID and calibration must match the imported enrollment before any write.",&options)?;
             break candidates[selected].clone();
         };
-        ui.choose("Restart the selected remote", "Keep USB connected. After selecting Continue, hold the side Power button until the remote turns off, then release it. If needed, hold Power until it starts again; the installer is watching the selected port.",&[choice("Continue and watch USB","Only this selected physical USB port can be captured.")])?;
+        ui.progress(
+            1,
+            "Checking Couch identity and requesting USB restart",
+            0,
+            0,
+        )?;
+        let restart = simple(
+            &mut worker,
+            json!({"op":"couch_reboot","candidate":bound,"cid":expected_cid}),
+            "couch_reboot",
+            20,
+            ui,
+            1,
+        )?;
+        session
+            .checkpoint(&json!({"event":"couch_restart","usb":bound,"result":restart["result"]}))?;
+        match restart["result"].as_str() {
+            Some("requested") => {}
+            Some("unavailable") => {
+                ui.choose("Restart the selected remote", "USB serial restart is unavailable; no reboot command was sent. Keep USB connected. After Continue, hold the side Power button until the remote turns off, then release it. If needed, hold Power until it starts again.",&[choice("Continue and watch USB","Only the selected physical USB port can be captured.")])?;
+            }
+            _ => anyhow::bail!("Invalid Couch restart result"),
+        }
         bound
     };
     let start = Instant::now();
