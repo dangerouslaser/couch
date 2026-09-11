@@ -9,6 +9,7 @@ pub mod network;
 pub mod orchestrator;
 pub mod public_inputs;
 pub mod session;
+pub mod space;
 pub mod stage;
 pub mod stage_files;
 pub mod stage_tls;
