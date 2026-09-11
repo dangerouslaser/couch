@@ -9,6 +9,35 @@ step() {
     echo "$1" > /tmp/couch-wifi.step
     echo "WiFi step: $1" >> /tmp/probe.log
 }
+debug_startup_evidence() {
+    # This path is reachable only while the empty-network supplicant is
+    # starting. It deliberately prefers its detailed startup and liveness
+    # record over noisy kernel history, while retaining a small kernel tail.
+    {
+        echo "WiFi failed: $1"
+        $BB tail -c 2048 /tmp/couch-wpa-startup.log 2>/dev/null
+        if $BB kill -0 "$supplicant" 2>/dev/null; then
+            echo "WiFi supplicant pid $supplicant still running at failure"
+        else
+            echo "WiFi supplicant pid $supplicant no longer running at failure"
+        fi
+        echo "WiFi control directory:"
+        { $BB ls -la /tmp/couch-wpa 2>&1 || \
+            echo 'WiFi control directory absent'; } | $BB head -c 512
+        $BB dmesg | $BB tail -c 512 2>/dev/null
+    } | $BB tail -c 4096 > /tmp/couch-wifi-debug.log
+}
+
+start_supplicant() {
+    if [ -f /etc/couch-wifi-debug-mode ]; then
+        # The debug image has no provisioning opcode or networks, so detailed
+        # nl80211/control-interface output stays strictly pre-credential.
+        /sbin/wpa_supplicant -dd -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
+    else
+        /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
+    fi
+}
+
 fail() {
     echo "$1" > /tmp/couch-wifi.error
     echo failed > /tmp/couch-wifi.status
@@ -30,10 +59,13 @@ fail() {
         { $BB ls -la /tmp/couch-wpa 2>&1 || \
             echo 'WiFi control directory absent'; } | $BB head -c 1024 >> /tmp/probe.log
         $BB dmesg | $BB tail -c 4096 >> /tmp/probe.log 2>/dev/null
+        if [ -f /etc/couch-wifi-debug-mode ]; then
+            debug_startup_evidence "$1"
+        fi
     fi
     # The debug binary has no provisioning opcode. Preserve only this bounded
     # startup record for its USB status operation, never arbitrary log files.
-    if [ -f /etc/couch-wifi-debug-mode ]; then
+    if [ -f /etc/couch-wifi-debug-mode ] && [ "$starting_supplicant" != 1 ]; then
         $BB tail -c 4096 /tmp/probe.log > /tmp/couch-wifi-debug.log 2>/dev/null
     fi
     exit 1
@@ -96,7 +128,7 @@ $BB mkdir -p -m 700 /tmp/couch-wpa || fail control-directory
 $BB chmod 700 /tmp/couch-wpa || fail control-directory
 printf 'ctrl_interface=/tmp/couch-wpa\nupdate_config=0\n' > /tmp/couch-wpa_supplicant.conf
 starting_supplicant=1
-/sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf >/tmp/couch-wpa-startup.log 2>&1 &
+start_supplicant >/tmp/couch-wpa-startup.log 2>&1 &
 supplicant=$!
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
