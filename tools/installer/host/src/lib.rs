@@ -4,6 +4,7 @@ pub mod android;
 pub mod assembly;
 pub mod dependencies;
 pub mod enrollment;
+pub mod enrollment_sources;
 pub mod frontend;
 pub mod network;
 pub mod orchestrator;
