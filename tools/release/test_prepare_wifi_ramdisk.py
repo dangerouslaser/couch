@@ -12,6 +12,23 @@ import prepare_wifi_ramdisk as wifi
 
 
 class WifiRamdiskTests(unittest.TestCase):
+    def test_only_precredential_supplicant_failure_exposes_bounded_log(self):
+        script = (wifi.REPO / 'tools/installer/wifi-stage/wifi-init').read_text().split('step detect\n')[0]
+        for starting in (0, 1):
+            with self.subTest(starting=starting), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                busybox = root / 'busybox'
+                busybox.write_text('#!/bin/sh\nexec "$@"\n')
+                busybox.chmod(0o700)
+                (root / 'couch-wpa-startup.log').write_text('x' * 5000)
+                fixture = script.replace('BB=/bin/busybox', 'BB=' + str(busybox))
+                fixture = fixture.replace('/tmp/', str(root) + '/')
+                fixture += f'\nstarting_supplicant={starting}\nfail supplicant-exit\n'
+                result = subprocess.run(['sh'], input=fixture, text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 1)
+                log = (root / 'probe.log').read_text()
+                self.assertEqual(log, 'WiFi failed: supplicant-exit\n' + ('x' * 4096 if starting else ''))
+
     def test_loader_android_exit_requires_detected_transport(self):
         for detected in (False, True):
             with self.subTest(detected=detected), tempfile.TemporaryDirectory() as temporary:
