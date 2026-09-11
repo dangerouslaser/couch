@@ -9,8 +9,8 @@ import shutil
 import subprocess
 import sys
 
-SOURCE = 'c09bb5a26cd22fbfa6425e8ec20872e37d673345'
-VERSION = 'v0.1.0-alpha.24'
+SOURCE = os.environ.get('SOURCE_COMMIT', 'c09bb5a26cd22fbfa6425e8ec20872e37d673345')
+VERSION = 'v0.1.0-alpha.20260910.24'
 PLATFORMS = ('linux-x64', 'macos-universal', 'windows-x64')
 
 
@@ -22,6 +22,7 @@ def digest(path):
 
 
 def prepare(downloads, frozen, output):
+    if not re.fullmatch('[0-9a-f]{40}', SOURCE): raise ValueError('Invalid independently pinned source')
     if not re.fullmatch('[0-9]{1,20}', os.environ['BINARY_RUN_ID']): raise ValueError('Invalid build run ID')
     for name in ('CONFIG_SHA256', 'LAUNCHER_SHA256'):
         if not re.fullmatch('[0-9a-f]{64}', os.environ[name]): raise ValueError('Invalid trusted hash')

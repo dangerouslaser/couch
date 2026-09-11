@@ -4,8 +4,12 @@ on:
     paths: ['tools/installer/acceptance/**', '.github/workflows/installer-windows-launcher-acceptance.yml']
   workflow_dispatch:
     inputs:
+      source_commit:
+        description: Independently recorded frozen source SHA (must match run, receipts and config)
+        required: true
+        default: c09bb5a26cd22fbfa6425e8ec20872e37d673345
       binary_run_id:
-        description: Successful frozen c09bb5a Build installer binaries run ID
+        description: Successful frozen Build installer binaries run ID
         required: true
       config_base64:
         description: Exact public installer.json bytes, base64 encoded
@@ -47,6 +51,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
       BINARY_RUN_ID: ${{ inputs.binary_run_id }}
       CONFIG_BASE64: ${{ inputs.config_base64 }}
       CONFIG_SHA256: ${{ inputs.config_sha256 }}
@@ -58,7 +63,7 @@ jobs:
           sparse-checkout: tools/installer/acceptance
       - uses: actions/checkout@v6
         with:
-          ref: c09bb5a26cd22fbfa6425e8ec20872e37d673345
+          ref: ${{ inputs.source_commit }}
           path: frozen
           sparse-checkout: |
             tools/release/installer_launchers.py

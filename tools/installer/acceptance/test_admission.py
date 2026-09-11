@@ -47,7 +47,7 @@ class AdmissionTests(unittest.TestCase):
 Add-Type -AssemblyName System.Net.Http
 $client=[Net.Http.HttpClient]::new()
 foreach ($name in @('couch-installer-host-windows-x64.exe','couch-installer-tui-windows-x64.exe','installer.json')) {
- $bytes=$client.GetByteArrayAsync("https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.24/$name").GetAwaiter().GetResult()
+ $bytes=$client.GetByteArrayAsync("https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260910.24/$name").GetAwaiter().GetResult()
  if ([Text.Encoding]::UTF8.GetString($bytes) -ne 'fixture') { throw 'Fixture bytes differ' }
 }
 $client.Dispose()
