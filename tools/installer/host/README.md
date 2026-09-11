@@ -4,14 +4,14 @@ The `frontend` module communicates directly with the Ratatui terminal over its
 private inherited socket (Unix) or pipes (Windows). Prompts use increasing IDs;
 invalid, stale, cancelled, truncated or oversized replies stop the channel.
 Input buffers are zeroized and secret replies are never echoed as display state.
-The `--ui-smoke` command is an explicit device-free interface fixture. The full
-installation orchestrator remains a separate integration step.
+The `--ui-smoke` command is an explicit device-free interface fixture. The native installation orchestrator uses the same channel for the complete
+fresh-Android flow described below.
 
-This independent Rust workspace begins the host-backend migration with complete
+The independent `prepare-official` command performs complete
 owner-side official input preparation. It verifies the pinned ZIP, bounded
 full-OTA transfer lists and Brotli streams, then reads the approved files through
 a [read-only Rust ext4 parser](https://docs.rs/ext4-view/0.9.3/ext4_view/).
-It executes no subprocess, requires no Python or debugfs, mounts no filesystem
+That input-preparation command executes no subprocess, requires no Python or debugfs, mounts no filesystem
 and opens no USB/device handles. It uses ordinary private scratch files.
 
 ```sh

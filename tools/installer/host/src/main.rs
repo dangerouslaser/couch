@@ -33,6 +33,23 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|value| value == "verify-public") {
+        anyhow::ensure!(
+            args.len() == 4,
+            "usage: couch-installer-host verify-public CONFIG ARCHIVE NEW_OUTPUT"
+        );
+        let release = couch_installer_host::public_inputs::release(&PathBuf::from(&args[1]))?;
+        let files = couch_installer_host::public_inputs::extract(
+            &release,
+            &PathBuf::from(&args[2]),
+            &PathBuf::from(&args[3]),
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({"verified_public_files":files.len(),"device_access":false})
+        );
+        return Ok(());
+    }
     if args.first().is_some_and(|value| value == "--ui-smoke") {
         return ui_smoke(&args[1..]);
     }
@@ -118,6 +135,9 @@ fn installer(args: &[std::ffi::OsString]) -> Result<()> {
     #[cfg(windows)]
     let mut ui = Ui::stdio();
     let result = couch_installer_host::orchestrator::run(&mut ui, config.as_deref());
+    if let Err(error) = &result {
+        let _ = ui.error(&error.to_string());
+    }
     let _ = ui.finish(if result.is_ok() { 0 } else { 1 });
     result
 }

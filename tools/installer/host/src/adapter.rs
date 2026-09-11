@@ -120,7 +120,7 @@ impl Drop for UsbLease {
 }
 enum Request {
     Read(usize),
-    Write(Vec<u8>),
+    Write(zeroize::Zeroizing<Vec<u8>>),
 }
 struct Pipe {
     requests: SyncSender<Request>,
@@ -128,12 +128,12 @@ struct Pipe {
 }
 impl Pipe {
     fn exchange(&self, request: Request, deadline: Instant) -> Result<Vec<u8>> {
-        self.requests
-            .try_send(request)
-            .context("worker pipe busy")?;
         let left = deadline
             .checked_duration_since(Instant::now())
             .context("worker deadline expired")?;
+        self.requests
+            .try_send(request)
+            .context("worker pipe busy")?;
         Ok(self
             .responses
             .recv_timeout(left)
@@ -273,7 +273,10 @@ impl Worker {
         );
         let mut frame = (bytes.len() as u32).to_le_bytes().to_vec();
         frame.extend(bytes);
-        self.input.exchange(Request::Write(frame), self.deadline)?;
+        self.input.exchange(
+            Request::Write(zeroize::Zeroizing::new(frame)),
+            self.deadline,
+        )?;
         Ok(())
     }
     pub fn event(&mut self) -> Result<Value> {

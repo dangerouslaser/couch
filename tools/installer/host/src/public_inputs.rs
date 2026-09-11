@@ -207,7 +207,7 @@ pub fn payload(
     download(&release.payload.url, &blob, &archive, false, progress)?;
     extract(release, &archive, &session.join("public-inputs"))
 }
-fn extract(
+pub fn extract(
     release: &Release,
     archive: &Path,
     destination: &Path,
