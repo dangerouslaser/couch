@@ -94,6 +94,7 @@ class ConnectedMtkReader:
         # order. This fixed conversion matched the same unit's runtime CID;
         # never search byte permutations to make an identity check pass.
         runtime_cid = struct.pack(">IIII", *struct.unpack("<IIII", wire_cid))
+        self.runtime_cid = runtime_cid.hex()  # Private native enrollment, never public release metadata.
         self.description = {"schema": 1, "transport": "mtkclient-connected-readonly", "revision": revision,
                             "hwcode": 0x6580, "model_verified": False, "capacity": capacity,
                             # Stable within this adapter; never infer the vendor Device ID from it.

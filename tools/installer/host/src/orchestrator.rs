@@ -360,7 +360,13 @@ fn install(
             .as_array()
             .context("invalid USB inventory")?
             .iter()
-            .filter(|d| d["bus"] == bound["bus"] && d["ports"] == bound["ports"])
+            .filter(|d| {
+                d["bus"] == bound["bus"]
+                    && d["ports"] == bound["ports"]
+                    && d["pid"].as_u64().is_some_and(|pid| {
+                        [0x0003, 0x6000, 0x2000, 0x2001, 0x20ff, 0x3000].contains(&pid)
+                    })
+            })
             .collect::<Vec<_>>();
         ensure!(found.len() <= 1, "ambiguous selected USB port");
         if let Some(device) = found.first() {
@@ -372,9 +378,13 @@ fn install(
             start.elapsed().as_secs(),
             120,
         )?;
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(20));
     };
     let connected=simple(&mut worker,json!({"op":"start","candidate":candidate}),"connected",120,ui,3).context("Could not claim the selected USB download interface. On Windows it needs a compatible WinUSB driver; do not replace drivers for other USB devices")?;
+    ensure!(
+        connected["cid"] == cid,
+        "Canonical download-agent CID differs from Android"
+    );
     let device = &connected["device"];
     enrollment::admit_layout(device, cid, &prepared)?;
     let mut required = 256 * 1024 * 1024u64;

@@ -108,7 +108,7 @@ class Adapter:
         require(self.backend.claimed_candidate() == selected, 'Claimed USB selection differs')
         mtk = self.backend.start_readonly(self.loader, ReadPolicy())
         self.reader = self.reader_factory(mtk, REVIEWED_REVISION)
-        self.wire.send({'event': 'connected', 'device': self.reader.description})
+        self.wire.send({'event': 'connected', 'device': self.reader.description, 'cid': self.reader.runtime_cid})
 
     def hash_partition(self, name):
         total = self.reader.description['partitions'][name]['size']
