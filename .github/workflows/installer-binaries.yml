@@ -2,9 +2,9 @@ name: Build installer binaries
 on:
   push:
     branches: [main]
-    paths: ['tools/installer/tui/**', 'tools/installer/host/**', '.github/workflows/installer-binaries.yml']
+    paths: ['tools/installer/tui/**', 'tools/installer/host/**', 'tools/installer/binary_receipt.py', 'tools/installer/test_binary_receipt.py', '.github/workflows/installer-binaries.yml']
   pull_request:
-    paths: ['tools/installer/tui/**', 'tools/installer/host/**', '.github/workflows/installer-binaries.yml']
+    paths: ['tools/installer/tui/**', 'tools/installer/host/**', 'tools/installer/binary_receipt.py', 'tools/installer/test_binary_receipt.py', '.github/workflows/installer-binaries.yml']
   workflow_dispatch:
 concurrency:
   group: installer-binaries-${{ github.event.pull_request.number || github.ref }}
@@ -58,6 +58,16 @@ jobs:
             }
             Write-Host "$component imports verified"
           }
+      - name: Record compiler and binary provenance
+        working-directory: .
+        run: |
+          python tools/installer/test_binary_receipt.py
+          python tools/installer/binary_receipt.py --platform ${{ matrix.platform }} --output installer-build/build.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: couch-installer-build-${{ matrix.platform }}
+          path: installer-build/build.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: couch-installer-tui-${{ matrix.platform }}
@@ -72,6 +82,7 @@ jobs:
     needs: native
     runs-on: macos-15
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with:
           pattern: couch-installer-*-macos-*
@@ -87,6 +98,13 @@ jobs:
             codesign --force --sign - "universal/$name"
             codesign --verify --strict "universal/$name"
           done
+      - name: Bind universal binaries to native build receipts
+        run: python tools/installer/binary_receipt.py --platform macos-universal --output universal/build.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: couch-installer-build-macos-universal
+          path: universal/build.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: couch-installer-tui-macos-universal

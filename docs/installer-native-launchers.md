@@ -51,3 +51,20 @@ Tests exercise native dispatch with a controlling terminal, reject corrupted
 downloads before execution, preserve existing outputs, reject private fields in
 public configuration, and parse the generated script with Windows PowerShell.
 Actual installation and Windows USB-driver acceptance remain separate checks.
+
+## Downloadable build receipts
+
+The installer binary workflow uploads `couch-installer-build-PLATFORM/build.json`
+alongside each host/TUI artifact. Each receipt records the exact checked-out Git
+commit, platform and Rust target, `rustc -vV`, `cargo -vV`, selected toolchain name,
+compiler/Cargo hashes, target sysroot file hashes, and host/TUI SHA-256 and size.
+It contains explicit build fields, not an environment dump or private host paths.
+Keep these receipts with release inputs so mutable `stable` runners do not erase
+which compiler and standard-library inputs produced an artifact.
+
+The macOS universal receipt embeds both native receipts, binds their original
+JSON and binary hashes, and records the combined, signed host/TUI hashes. The
+workflow rejects mixed source commits, architectures or changed downloaded
+binaries before uploading the universal artifacts. These are build records;
+they do not replace release signatures, corresponding-source collection or
+physical installer acceptance.
