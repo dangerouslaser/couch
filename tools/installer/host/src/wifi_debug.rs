@@ -26,9 +26,18 @@ pub struct Config {
     expected_stage: String,
     runtime_root: PathBuf,
     runtime_receipt_sha256: String,
+    #[serde(default)]
+    transition: Option<crate::wifi_debug_transition::Config>,
 }
 impl Config {
     fn validate(&self) -> Result<()> {
+        if let Some(transition) = &self.transition {
+            ensure!(
+                self.expected_stage == "wifi-debug-v1",
+                "transition requires dedicated debug stage mode"
+            );
+            transition.validate()?;
+        }
         ensure!(
             self.schema == 1
                 && self.bus != 0
@@ -196,6 +205,29 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
     ui.progress(0, "Verifying the existing debug runtime", 0, 0)?;
     let (python, libusb) =
         dependencies::debug_runtime(&config.runtime_root, &config.runtime_receipt_sha256)?;
+    let transitioned = if let Some(transition) = &config.transition {
+        let transition_result = crate::wifi_debug_transition::run(
+            ui,
+            &mut session,
+            transition,
+            &python,
+            &config.runtime_root,
+            &libusb,
+            config.bus,
+            &config.ports,
+        );
+        if transition_result.is_err() {
+            let _ = session
+                .checkpoint(&json!({"event":"debug_transition_stopped","preserve_originals":true}));
+        }
+        if !transition_result? {
+            session.checkpoint(&json!({"event":"debug_transition_cancelled"}))?;
+            return Ok(());
+        }
+        true
+    } else {
+        false
+    };
     let script = materialize(&session)?;
     session.checkpoint(
         &json!({"event":"debug_attach_requested","bus":config.bus,"ports":config.ports,
@@ -211,7 +243,7 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
         network::rpc(
             &mut worker,
             "debug_open",
-            json!({"bus":config.bus,"ports":config.ports,
+            json!({"bus":config.bus,"ports":config.ports,"wait_seconds":if transitioned {60} else {0},
             "libusb":dependencies::python_path(&libusb)?}),
         )?;
         loop {

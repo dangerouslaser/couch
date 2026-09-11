@@ -28,7 +28,7 @@ class DebugTests(unittest.TestCase):
         return worker, calls
 
     def open(self, worker):
-        worker.dispatch({'op': 'debug_open', 'payload': {'bus': 1, 'ports': [2], 'libusb': '/pinned/library'}})
+        worker.dispatch({'op': 'debug_open', 'payload': {'bus': 1, 'ports': [2], 'libusb': '/pinned/library', 'wait_seconds': 0}})
 
     def test_only_fixed_stage_operations_and_no_boot_or_binding(self):
         for forbidden in ('prepare', 'start', 'authorize_boot', 'boot', 'stage_bind', 'stage_provision', 'stage_scan', 'write', 'exec', 'restart'):
@@ -44,7 +44,7 @@ class DebugTests(unittest.TestCase):
         for bus, ports in ((0, [1]), (True, [1]), (1, []), (1, [0]), (1, [True]), (1, [1] * 8)):
             worker, calls = self.fixture()
             with self.assertRaises(InstallError):
-                worker.dispatch({'op': 'debug_open', 'payload': {'bus': bus, 'ports': ports, 'libusb': '/x'}})
+                worker.dispatch({'op': 'debug_open', 'payload': {'bus': bus, 'ports': ports, 'libusb': '/x', 'wait_seconds': 0}})
             self.assertEqual(calls, [])
 
     def test_status_and_close_use_one_retained_connection(self):

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import struct
 import sys
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,7 +60,9 @@ class DebugWorker:
             op, payload = command['op'], command['payload']
             if op == 'debug_open':
                 require(self.stage is None and isinstance(payload, dict)
-                        and set(payload) == {'bus', 'ports', 'libusb'}, 'Invalid debug attachment')
+                        and set(payload) == {'bus', 'ports', 'libusb', 'wait_seconds'}, 'Invalid debug attachment')
+                require(type(payload['wait_seconds']) is int and payload['wait_seconds'] in (0, 60),
+                        'Invalid stage enumeration wait')
                 require(type(payload['bus']) is int and 0 < payload['bus'] <= 255
                         and isinstance(payload['ports'], list) and 1 <= len(payload['ports']) <= 7
                         and all(type(n) is int and 0 < n <= 255 for n in payload['ports']),
@@ -103,6 +106,15 @@ def attach(payload):
     import usb.backend.libusb1
     backend = usb.backend.libusb1.get_backend(find_library=lambda _: payload['libusb'])
     require(backend is not None, 'Pinned libusb is unavailable')
+    deadline = time.monotonic() + payload['wait_seconds']
+    while payload['wait_seconds']:
+        matches = [d for d in usb.core.find(find_all=True, idVendor=0x0e8d, idProduct=0x201c, backend=backend)
+                   if d.bus == payload['bus'] and tuple(d.port_numbers or ()) == tuple(payload['ports'])]
+        require(len(matches) <= 1, 'Multiple stages match selected physical port')
+        if matches:
+            break
+        require(time.monotonic() < deadline, 'Debug stage did not appear after transition')
+        time.sleep(0.2)
     return DebugStageUsb(usb, backend, SimpleNamespace(bus=payload['bus'], ports=tuple(payload['ports'])))
 
 
