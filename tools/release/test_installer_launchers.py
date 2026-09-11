@@ -70,6 +70,15 @@ class Launchers(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'POSIX controlling-terminal fixture')
     def test_shell_checks_all_downloads_before_starting_native_terminal(self):
         import pty
+        import shlex
+        import sys
+        # Real polling catches macOS rejecting the /dev/tty alias with EINVAL.
+        probe = "import os,select,sys; assert os.ttyname(0) != '/dev/tty'; "
+        if sys.platform == 'darwin':
+            probe += "select.kqueue().control([select.kevent(0,filter=select.KQ_FILTER_READ,flags=select.KQ_EV_ADD)],0,0); "
+        probe += "print('NATIVE-FRONTEND')"
+        for path in self.assets.glob('couch-installer-tui-*'):
+            path.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -c ' + shlex.quote(probe) + '\n')
         launchers.generate(self.assets, self.output, self.version)
         fake = self.root / 'bin'
         fake.mkdir()

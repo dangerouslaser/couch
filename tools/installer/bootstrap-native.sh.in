@@ -14,8 +14,11 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     echo 'A SHA-256 utility (sha256sum or shasum) is required.' >&2; exit 2
 fi
-# curl | sh consumes stdin; prompts read the controlling terminal.
-if ! { exec 3</dev/tty; } 2>/dev/null; then
+# curl | sh consumes stdin. Resolve the real terminal from stdout: macOS
+# kqueue cannot register the /dev/tty alias used as the TUI input descriptor.
+if ! [ -t 1 ] || ! { exec 3<&1; } 2>/dev/null ||
+    ! installer_terminal=$(tty <&3) ||
+    ! { exec 3<"$installer_terminal"; } 2>/dev/null; then
     echo 'Run this command in an interactive terminal.' >&2; exit 2
 fi
 umask 077
