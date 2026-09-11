@@ -730,7 +730,7 @@ impl Worker {
                 "--python" => python = Some(value.clone()),
                 "--backend" => backend = Some(value.clone()),
                 "--native-backend" => native_backend = Some(value.clone()),
-                "--config" | "--wifi-retry-from" | "--wifi-restore-from" => {
+                "--config" | "--local-payload" | "--wifi-retry-from" | "--wifi-restore-from" => {
                     forwarded.push(name.clone());
                     forwarded.push(value.clone());
                 }
@@ -1321,7 +1321,8 @@ mod tests {
     fn dedicated_socket_survives_native_stdout_and_delivers_private_answers() {
         let path =
             std::env::temp_dir().join(format!("couch-ratatui-ipc-{}.py", std::process::id()));
-        std::fs::write(&path,r#"import os,json
+        std::fs::write(&path,r#"import os,json,sys
+assert sys.argv[1:5] == ['--config','unused','--local-payload','fixture-package.tar.gz']
 out=os.fdopen(os.dup(3),'w',buffering=1)
 incoming=os.fdopen(os.dup(3),'r')
 print('unstructured native tool output',flush=True)
@@ -1337,6 +1338,8 @@ out.write(json.dumps({'event':'finished','code':0})+'\n')
             path.to_string_lossy().into_owned(),
             "--config".into(),
             "unused".into(),
+            "--local-payload".into(),
+            "fixture-package.tar.gz".into(),
         ];
         let mut worker = Worker::start(&args).unwrap();
         assert!(matches!(

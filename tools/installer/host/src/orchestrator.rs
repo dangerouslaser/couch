@@ -202,7 +202,7 @@ fn plan_images(paths: &BTreeMap<String, PathBuf>, device: &Value, ui: &mut Ui) -
     Ok(Value::Object(images))
 }
 
-pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
+pub fn run(ui: &mut Ui, config: Option<&Path>, local_payload: Option<&Path>) -> Result<()> {
     ui.set_steps(
         [
             "Prepare",
@@ -271,7 +271,14 @@ pub fn run(ui: &mut Ui, config: Option<&Path>) -> Result<()> {
     } else {
         mode == 1
     };
-    let result = install(ui, &release, skip_userdata, mode == 2, &mut session);
+    let result = install(
+        ui,
+        &release,
+        skip_userdata,
+        mode == 2,
+        &mut session,
+        local_payload,
+    );
     if let Err(error) = &result {
         if !matches!(session.phase(), Phase::Failed | Phase::Complete) {
             let _ = session.transition(
@@ -292,6 +299,7 @@ fn install(
     skip_userdata: bool,
     reinstall: bool,
     session: &mut SessionGuard,
+    local_payload: Option<&Path>,
 ) -> Result<()> {
     let _usb_lease = UsbLease::acquire(session)?;
     let dependencies = dependencies::prepare(
@@ -306,8 +314,17 @@ fn install(
     let prepared = session.path().join("owner-inputs");
     ui.progress(0, "Reconstructing verified owner inputs", 0, 0)?;
     crate::prepare(&ota, &prepared)?;
-    let public = public_inputs::payload(release, session.path(), |done, total| {
-        ui.progress(0, "Downloading Couch OS", done, total)
+    let public = public_inputs::payload(release, session.path(), local_payload, |done, total| {
+        ui.progress(
+            0,
+            if local_payload.is_some() {
+                "Verifying local Couch OS package"
+            } else {
+                "Downloading Couch OS"
+            },
+            done,
+            total,
+        )
     })?;
     let mut images = BTreeMap::new();
     for (name, ramdisk) in [
@@ -817,7 +834,7 @@ mod tests {
             Box::new(Cursor::new(b"{\"id\":1,\"value\":\"3\"}\n".to_vec())),
             Box::new(Vec::new()),
         );
-        run(&mut ui, None).unwrap();
+        run(&mut ui, None, None).unwrap();
     }
     #[test]
     fn images_use_fixed_wire_chunks_and_full_digest() {
