@@ -253,6 +253,77 @@ fn require_debug_identity(status: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Retain only the fixed lifecycle record emitted by the dedicated stage.
+/// This is an observation, not a host-controlled supervisor interface.
+fn lifecycle_summary(value: &Value) -> Result<Value> {
+    let lifecycle = value.as_object().context("missing debug lifecycle")?;
+    ensure!(
+        lifecycle.len() == 8
+            && [
+                "supervisor",
+                "alive",
+                "phase",
+                "generation",
+                "retry",
+                "marker",
+                "worker",
+                "worker_exit",
+            ]
+            .iter()
+            .all(|key| lifecycle.contains_key(*key)),
+        "invalid debug lifecycle fields"
+    );
+    let supervisor = value["supervisor"]
+        .as_str()
+        .filter(|value| matches!(*value, "couch-wifi-debug-supervisor-v1" | "unknown"));
+    let phase = value["phase"].as_str().filter(|value| {
+        matches!(
+            *value,
+            "generation-started"
+                | "worker-running"
+                | "waiting-retry"
+                | "retry-consumed"
+                | "retry-limit"
+                | "unknown"
+        )
+    });
+    let retry = value["retry"].as_str().filter(|value| {
+        matches!(
+            *value,
+            "none" | "accepted" | "consumed" | "limit" | "unknown"
+        )
+    });
+    let worker = value["worker"]
+        .as_str()
+        .filter(|value| matches!(*value, "starting" | "running" | "exited" | "unknown"));
+    let worker_exit = value["worker_exit"].as_str().filter(|value| {
+        matches!(
+            *value,
+            "none" | "success" | "failure" | "signaled" | "unknown"
+        )
+    });
+    let generation = value["generation"]
+        .as_u64()
+        .filter(|value| *value <= 8)
+        .context("invalid lifecycle generation")?;
+    let alive = value["alive"]
+        .as_bool()
+        .context("invalid lifecycle liveness")?;
+    let marker = value["marker"]
+        .as_bool()
+        .context("invalid lifecycle marker")?;
+    Ok(json!({
+        "supervisor": supervisor.context("invalid lifecycle supervisor")?,
+        "alive": alive,
+        "phase": phase.context("invalid lifecycle phase")?,
+        "generation": generation,
+        "retry": retry.context("invalid lifecycle retry")?,
+        "marker": marker,
+        "worker": worker.context("invalid lifecycle worker")?,
+        "worker_exit": worker_exit.context("invalid lifecycle worker exit")?,
+    }))
+}
+
 fn diagnostic_summary(value: &Value) -> Result<Value> {
     ensure!(
         value["stage_kind"] == "private-ram-wifi-debug-stage"
@@ -264,6 +335,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
     );
     require_debug_identity(&value["status"])?;
     let status = status_summary(&value["status"])?;
+    let lifecycle = lifecycle_summary(&value["lifecycle"])?;
     ensure!(
         status["provisioned"] == false,
         "debug stage received credentials"
@@ -290,7 +362,7 @@ fn diagnostic_summary(value: &Value) -> Result<Value> {
         })
         .collect();
     Ok(
-        json!({"status":status,"generation":generation,"debug_generation_limit":8,"step":step,"precredential":true,"log":log}),
+        json!({"status":status,"generation":generation,"debug_generation_limit":8,"step":step,"precredential":true,"lifecycle":lifecycle,"log":log}),
     )
 }
 
@@ -431,11 +503,17 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
                 let choice = ui.choose(
                     "Wi-Fi debug stage",
                     &format!(
-                        "Attempt {} of 8; Wi-Fi {}; step {}; reason {}.\n{}",
+                        "Attempt {} of 8; Wi-Fi {}; step {}; reason {}.\nSupervisor {} ({}, generation {}, marker {}, worker {} / {}).\n{}",
                         diagnostic["generation"],
                         diagnostic["status"]["status"].as_str().unwrap(),
                         diagnostic["step"].as_str().unwrap(),
                         diagnostic["status"]["error"].as_str().unwrap(),
+                        diagnostic["lifecycle"]["supervisor"].as_str().unwrap(),
+                        if diagnostic["lifecycle"]["alive"].as_bool().unwrap() { "alive" } else { "stale" },
+                        diagnostic["lifecycle"]["generation"],
+                        diagnostic["lifecycle"]["marker"],
+                        diagnostic["lifecycle"]["worker"].as_str().unwrap(),
+                        diagnostic["lifecycle"]["worker_exit"].as_str().unwrap(),
                         diagnostic["log"].as_str().unwrap()
                     ),
                     &choices,
@@ -483,6 +561,20 @@ pub fn run(ui: &mut Ui, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lifecycle() -> Value {
+        json!({
+            "supervisor": "couch-wifi-debug-supervisor-v1",
+            "alive": true,
+            "phase": "worker-running",
+            "generation": 1,
+            "retry": "none",
+            "marker": false,
+            "worker": "running",
+            "worker_exit": "none",
+        })
+    }
+
     #[test]
     fn actual_worker_boundary_preserves_safe_failures_and_poisoning() {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_wifi_debug_boundary.py");
@@ -580,7 +672,7 @@ mod tests {
         assert!(require_debug_identity(&status).is_ok());
         let mut diagnostic = json!({"status":status,"generation":1,"step":"power",
             "stage_kind":"private-ram-wifi-debug-stage", "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
-            "precredential":true,"debug_generation_limit":8,"log":"message\u{001b}\u{202e}\nnext"});
+            "precredential":true,"debug_generation_limit":8,"lifecycle":lifecycle(),"log":"message\u{001b}\u{202e}\nnext"});
         assert_eq!(
             diagnostic_summary(&diagnostic).unwrap()["log"],
             "message\nnext"
@@ -597,6 +689,7 @@ mod tests {
         let diagnostic = json!({"stage_kind":"private-ram-wifi-debug-stage",
             "capability":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_protocol":1,
             "precredential":true, "generation":1, "debug_generation_limit":8, "step":"power", "log":"",
+            "lifecycle":lifecycle(),
             "status":{"status":"ready", "provisioned":false, "wifi_debug":true,
                 "stage_kind":"private-ram-wifi-debug-stage","debug_protocol":1,"scan":false,
                 "capabilities":"COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1", "debug_generation_limit":8}});
@@ -626,6 +719,41 @@ mod tests {
             invalid[key] = replacement;
             assert!(diagnostic_summary(&invalid).is_err());
         }
+    }
+
+    #[test]
+    fn lifecycle_is_retained_only_when_typed_and_complete() {
+        let valid = lifecycle();
+        assert_eq!(lifecycle_summary(&valid).unwrap(), valid);
+        for key in [
+            "supervisor",
+            "alive",
+            "phase",
+            "generation",
+            "retry",
+            "marker",
+            "worker",
+            "worker_exit",
+        ] {
+            let mut invalid = valid.clone();
+            invalid.as_object_mut().unwrap().remove(key);
+            assert!(lifecycle_summary(&invalid).is_err());
+        }
+        for (key, value) in [
+            ("alive", json!(1)),
+            ("phase", json!("credentials")),
+            ("generation", json!(9)),
+            ("retry", json!("pending")),
+            ("worker", json!("pid-123")),
+            ("worker_exit", json!("secret")),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = value;
+            assert!(lifecycle_summary(&invalid).is_err());
+        }
+        let mut extra = valid.clone();
+        extra["private"] = json!("text");
+        assert!(lifecycle_summary(&extra).is_err());
     }
     #[test]
     fn status_receipt_drops_untrusted_and_private_fields() {

@@ -12,7 +12,10 @@ def debug_status(**extra):
 def diagnostic(status, **extra):
     return {'stage_kind': 'private-ram-wifi-debug-stage', 'capability': CAPABILITY,
         'debug_protocol': 1, 'precredential': True, 'status': status, 'log': '',
-        'generation': 1, 'debug_generation_limit': 8, **extra}
+        'generation': 1, 'debug_generation_limit': 8,
+        'lifecycle': {'supervisor': 'couch-wifi-debug-supervisor-v1', 'alive': True,
+            'phase': 'worker-running', 'generation': 1, 'retry': 'none',
+            'marker': False, 'worker': 'running', 'worker_exit': 'none'}, **extra}
 
 
 class DebugTests(unittest.TestCase):
@@ -117,6 +120,31 @@ class DebugTests(unittest.TestCase):
                 self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None}), valid)
             else:
                 with self.assertRaises(InstallError): worker.dispatch({'op': 'debug_status', 'payload': None})
+
+    def test_diagnostics_require_bounded_typed_lifecycle(self):
+        status = debug_status()
+        for lifecycle, accepted in (
+            (diagnostic(status)['lifecycle'], True),
+            ({'supervisor': 'unexpected', 'alive': True, 'phase': 'worker-running',
+              'generation': 1, 'retry': 'none', 'marker': False, 'worker': 'running',
+              'worker_exit': 'none'}, False),
+            ({'supervisor': 'couch-wifi-debug-supervisor-v1', 'alive': True,
+              'phase': 'worker-running', 'generation': 9, 'retry': 'none', 'marker': False,
+              'worker': 'running', 'worker_exit': 'none'}, False),
+            ({'supervisor': 'couch-wifi-debug-supervisor-v1', 'alive': True,
+              'phase': 'worker-running', 'generation': 1, 'retry': 'none', 'marker': False,
+              'worker': 'running', 'worker_exit': 'none', 'private': 'text'}, False),
+        ):
+            worker, _ = self.fixture()
+            self.open(worker)
+            worker.stage.dispatch = lambda *args: status
+            worker.stage.debug_request = lambda opcode: json.dumps(
+                diagnostic(status, lifecycle=lifecycle)).encode()
+            if accepted:
+                self.assertEqual(worker.dispatch({'op': 'debug_status', 'payload': None})['lifecycle'], lifecycle)
+            else:
+                with self.assertRaises(InstallError):
+                    worker.dispatch({'op': 'debug_status', 'payload': None})
 
     def test_diagnostic_log_bound_counts_utf8_bytes(self):
         status = debug_status()

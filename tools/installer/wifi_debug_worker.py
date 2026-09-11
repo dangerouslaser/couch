@@ -49,6 +49,21 @@ def debug_identity(status):
             and status.get('provisioned') is False)
 
 
+def debug_lifecycle(value):
+    return (isinstance(value, dict)
+            and set(value) == {'supervisor', 'alive', 'phase', 'generation', 'retry',
+                               'marker', 'worker', 'worker_exit'}
+            and value.get('supervisor') in ('couch-wifi-debug-supervisor-v1', 'unknown')
+            and type(value.get('alive')) is bool
+            and value.get('phase') in ('generation-started', 'worker-running', 'waiting-retry',
+                                       'retry-consumed', 'retry-limit', 'unknown')
+            and type(value.get('generation')) is int and 0 <= value['generation'] <= 8
+            and value.get('retry') in ('none', 'accepted', 'consumed', 'limit', 'unknown')
+            and type(value.get('marker')) is bool
+            and value.get('worker') in ('starting', 'running', 'exited', 'unknown')
+            and value.get('worker_exit') in ('none', 'success', 'failure', 'signaled', 'unknown'))
+
+
 class DebugStageUsb(StageUsb):
     def debug_request(self, opcode):
         require(opcode in (8, 9), 'Unsupported debug opcode')
@@ -129,6 +144,8 @@ class DebugWorker:
                 require(type(value.get('debug_generation_limit')) is int and value['debug_generation_limit'] == 8
                         and type(value.get('generation')) is int and 0 <= value['generation'] <= 8,
                         'Invalid debug generation bound')
+                require(debug_lifecycle(value.get('lifecycle')),
+                        'Invalid debug lifecycle record')
                 require(isinstance(value.get('log'), str)
                         and len(value['log'].encode('utf-8')) <= MAX_LOG,
                         'Diagnostic log exceeds UTF-8 byte bound')
