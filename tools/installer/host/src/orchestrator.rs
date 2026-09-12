@@ -783,8 +783,14 @@ fn install(
     // Wi-Fi is always provisioned over USB for the TLS transfer. A restore writes
     // raw full-partition images, so the plan carries no stage-side network/vendor
     // personalization; a normal install personalizes its compact userdata.
-    let mut plan = json!({"schema":1,"restore":restore,"nonce":hex(&random()?),"manifest_sha256":release.payload.sha256,"stage_sha256":stage_hash,"original_boot_sha256":originals["boot"],"cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"images":plan_images(&images,device,ui)?,"skip_userdata_backup":skip_userdata});
-    if !restore {
+    let mut plan = json!({"schema":1,"nonce":hex(&random()?),"manifest_sha256":release.payload.sha256,"stage_sha256":stage_hash,"original_boot_sha256":originals["boot"],"cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"images":plan_images(&images,device,ui)?,"skip_userdata_backup":skip_userdata});
+    // Stage probes parse the plan with deny_unknown_fields, and images built
+    // before the restore mode existed do not know this key. Send it only for a
+    // restore, which needs a stage that understands it; a normal install keeps
+    // the exact plan shape every shipped stage accepts.
+    if restore {
+        plan["restore"] = json!(true);
+    } else {
         plan["network"] = network.clone();
         plan["vendor_source_sha256"] = json!(vendor
             .as_ref()

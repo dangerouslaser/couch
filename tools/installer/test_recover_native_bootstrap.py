@@ -97,6 +97,49 @@ class RecoveryTests(unittest.TestCase):
             recovery.recover(proof,self.device(),lambda *a:device,self.root/'r4',
                              current_boot_sha256=self.record['originals']['boot']['sha256'],chain_receipt_sha256=chain)
 
+    def android_session(self, final=('transaction_stopped', 'stage_connected')):
+        """Reshape the fixture into a fresh-Android enrollment whose stage refused the plan."""
+        (self.source/'current-couch-snapshot.json').unlink(missing_ok=True)
+        (self.source/'enrollment.json').unlink(missing_ok=True)
+        self.record['original_os']='Android'
+        raw=json.dumps(self.record).encode();(self.source/'enrollment.json').write_bytes(raw)
+        for old in self.source.glob('event-*.json'):old.unlink()
+        self.events=[]
+        self.event('created','created',{})
+        self.event('inputs_verified','transition',{'event':'inputs_verified','stage_sha256':self.stage})
+        self.event('android_bound','transition',{'event':'android_bound','cid':self.record['cid'],'usb':{'bus':1,'ports':[1]}})
+        for name,item in sorted(self.record['originals'].items()):self.event('android_bound','checkpoint',{'event':'bootstrap_original_verified','target':name,**item})
+        self.event('android_bound','checkpoint',{'event':'android_stock_profile_verified'})
+        self.event('originals_saved','transition',{'event':'enrollment_complete','enrollment_sha256':recovery.sha(raw)})
+        self.event('stage_boot_pending','transition',{'event':'bootstrap_write_admitted','stage_sha256':self.stage})
+        self.event('stage_boot_pending','checkpoint',{'event':'bootstrap_readback_verified','stage_sha256':self.stage})
+        label,prior=final
+        if prior=='stage_connected':
+            self.event('stage_connected','transition',{'event':'stage_authenticated','plan_sha256':'a'*64})
+            self.event('stage_connected','checkpoint',{'event':'transaction_prepared','original_os':'Android','restore':False})
+        self.event('failed','transition',{'event':label,'preserve_originals':True})
+
+    def test_fresh_android_session_stopped_by_the_stage_restores_android_boot(self):
+        self.android_session()
+        proof=self.admit()
+        self.assertEqual(proof.record['original_os'],'Android')
+        self.assertIn('enrollment.json',proof.evidence_sha256)
+        device=self.device()
+        result=recovery.recover(proof,device,lambda *a:device,self.root/'recovery')
+        self.assertEqual(result['restored'],['boot']);self.assertEqual(device.writes,['boot'])
+        self.assertEqual(device.hashes['boot'],self.record['originals']['boot']['sha256'])
+        # A transaction that stopped after a write phase, or a stage stop before
+        # authentication, is not the same fault and stays refused.
+        self.android_session(final=('transaction_stopped','stage_boot_pending'))
+        with self.assertRaises(InstallError):self.admit()
+        self.android_session()
+        self.event('writing','transition',{'event':'write_sequence_started'})
+        with self.assertRaises(InstallError):self.admit()
+        # Both snapshot files present is ambiguous and refused.
+        self.android_session()
+        (self.source/'current-couch-snapshot.json').write_bytes(b'{}')
+        with self.assertRaises(InstallError):self.admit()
+
     def test_wrong_live_cid_boot_or_retained_partition_never_constructs_writer(self):
         proof=self.admit()
         for kind in ('cid','boot','recovery','odmdtbo','nvram'):
