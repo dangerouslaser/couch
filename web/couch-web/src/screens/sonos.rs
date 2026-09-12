@@ -68,7 +68,7 @@ pub fn controls(app: App, id: String) -> AnyView {
                     if let Some(v) = s["volume"].as_u64() {
                         volume.set(v.to_string());
                     }
-                    message.set(format!("{} · {} · Volume {}{} · {}",s["player"]["name"].as_str().unwrap_or("Sonos"),s["transport"].as_str().unwrap_or("Unknown state"),s["volume"],if s["muted"] == true {" · Muted"} else {""},if own {"Playback controls this speaker’s group".into()} else {format!("Playback coordinator: {}. Select its connection to control playback.",s["coordinator"].as_str().unwrap_or("unknown"))}));
+                    message.set(format!("{} · {} · Volume {}{} · {}",s["player"]["name"].as_str().unwrap_or("Sonos"),s["transport"].as_str().unwrap_or("Unknown state"),s["volume"],if s["muted"] == true {" · Muted"} else {""},if own {"Playback controls this speaker’s group".into()} else {format!("Playback coordinator: {}. Select its connection to control playback.",s["coordinator_name"].as_str().or_else(||s["coordinator"].as_str()).unwrap_or("unknown"))}));
                 }
                 Err(e) => {
                     coordinator.set(false);

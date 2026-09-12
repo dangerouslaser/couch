@@ -1,5 +1,6 @@
 use super::{parse, Reply};
 use serde::Deserialize;
+use std::path::Path;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +22,15 @@ fn valid(input: &Input) -> bool {
         _ => false,
     }
 }
-pub(super) fn route(method: &str, path: &[&str], body: &[u8], host: &str) -> Reply {
+/// `key_file` holds the household Sonos API key, alongside the other connection
+/// settings. The key is never echoed to the browser or the log.
+pub(super) fn route(
+    method: &str,
+    path: &[&str],
+    body: &[u8],
+    host: &str,
+    key_file: &Path,
+) -> Reply {
     let input = match (method, path) {
         ("GET", ["status"]) => None,
         ("POST", ["command"]) => {
@@ -43,7 +52,8 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], host: &str) -> Rep
         return Reply::error(400, "Enter the Sonos IPv4 address");
     };
     let result = (|| {
-        let client = couch_sonos::Client::connect(address)?;
+        let client =
+            couch_sonos::Client::connect_with_key(address, &couch_sonos::api_key_at(key_file))?;
         if let Some(input) = input {
             if input.command == "volume" {
                 client.set_volume(input.value.unwrap().as_u64().unwrap() as u8)?;
@@ -66,6 +76,10 @@ pub(super) fn route(method: &str, path: &[&str], body: &[u8], host: &str) -> Rep
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Rejections happen before any network or key access.
+    fn key() -> &'static Path {
+        Path::new("/nonexistent/sonos-api-key")
+    }
     #[test]
     fn commands_are_validated_before_network_access() {
         for body in [
@@ -76,7 +90,7 @@ mod tests {
             r#"{"command":"play","value":50}"#,
         ] {
             assert_eq!(
-                route("POST", &["command"], body.as_bytes(), "invalid").status,
+                route("POST", &["command"], body.as_bytes(), "invalid", key()).status,
                 400
             );
             let input: Input = serde_json::from_str(body).unwrap();
@@ -89,6 +103,9 @@ mod tests {
         ] {
             assert!(valid(&serde_json::from_str(body).unwrap()));
         }
-        assert_eq!(route("DELETE", &["command"], b"", "invalid").status, 404);
+        assert_eq!(
+            route("DELETE", &["command"], b"", "invalid", key()).status,
+            404
+        );
     }
 }

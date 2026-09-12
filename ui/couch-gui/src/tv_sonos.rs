@@ -83,7 +83,7 @@ pub(super) fn run(work: &Work, active: &AtomicU64) -> Result<Option<Event>, Stri
             sound: if own {
                 "Playback affects this group".into()
             } else {
-                format!("Select coordinator {}", state.coordinator)
+                format!("Select coordinator {}", state.coordinator_name)
             },
             ..Details::default()
         }),
