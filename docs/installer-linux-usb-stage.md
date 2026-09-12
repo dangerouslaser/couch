@@ -63,6 +63,16 @@ the final boot write. Private restore images reject this customization.
 Final boot is written last. First normal boot, network association and recovery
 remain separate hardware acceptance checks.
 
+## Stock Android restore
+
+A plan may instead set the backward-compatible `restore` flag, which writes the
+device's saved Android originals and a fresh full-partition F2FS userdata raw,
+with no compact-prefix expansion and no network/vendor personalization (the stage
+rejects either under `restore`). This is the Wi-Fi alternative to the slow USB
+download-agent stock restore. See [Restore stock Android](installer-android-restore.md)
+and the [wire protocol](../tools/installer/linux_stage/PROTOCOL.md). Nothing in the
+restore path is hardware validated.
+
 ## Recovery and validation
 
 Before userdata changes, restoring the verified original boot can recover the

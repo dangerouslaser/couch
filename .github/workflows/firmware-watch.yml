@@ -28,6 +28,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Validate the firmware restore pin
+        working-directory: tools/release
+        run: python -m unittest test_firmware_restore -v
       - name: Install best-effort derivation dependencies
         run: |
           python -m pip install --upgrade brotli
