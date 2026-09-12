@@ -474,9 +474,20 @@ fn api_key_prefers_environment_then_file_then_placeholder() {
     assert_eq!(choose_key([None, Some(" file \n".into())]), "file");
     assert_eq!(choose_key([Some("  ".into()), Some("file".into())]), "file");
     assert_eq!(choose_key([None, None]), PLACEHOLDER_API_KEY);
-    // Header-unsafe or oversized values are ignored rather than sent.
+    // Header-unsafe or oversized values are ignored rather than sent, and the
+    // caller can tell that happened without ever being handed the value.
     assert_eq!(choose_key([Some("a\nb".into())]), PLACEHOLDER_API_KEY);
     assert_eq!(choose_key([Some("k".repeat(257))]), PLACEHOLDER_API_KEY);
+    assert!(resolve_key([Some("a\nb".into())]).rejected);
+    assert!(resolve_key([Some("a\nb".into()), Some("good".into())]).rejected);
+    assert_eq!(
+        resolve_key([Some("a\nb".into()), Some("good".into())]).key,
+        "good"
+    );
+    // Nothing configured, and whitespace where a key would go, are not mistakes
+    // worth reporting: both mean the same as an absent file.
+    assert!(!resolve_key([None, None]).rejected);
+    assert!(!resolve_key([Some(String::new()), Some("  \n".into())]).rejected);
     let file = std::env::temp_dir().join("couch-sonos-key-fixture");
     std::fs::write(&file, "from-file\n").unwrap();
     if std::env::var_os("COUCH_SONOS_API_KEY").is_none() {

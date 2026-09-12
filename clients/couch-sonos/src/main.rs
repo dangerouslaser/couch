@@ -37,7 +37,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "status" | "volume" | "mute" | "unmute" => None,
         _ => return Err(usage.into()),
     };
-    let client = Client::connect(address)?;
+    // A configured key that cannot be a header is replaced by the placeholder,
+    // which otherwise looks exactly like having configured nothing. Say so once,
+    // on stderr so it cannot corrupt the JSON on stdout, and never print the value.
+    let key = couch_sonos::api_key_choice();
+    if key.rejected {
+        eprintln!(
+            "couch-sonos: the configured API key is not usable as a header and was ignored; \
+             falling back to the built-in placeholder"
+        );
+    }
+    let client = Client::connect_with_key(address, &key.key)?;
     if let Some(command) = command {
         client.playback(command)?;
     } else {

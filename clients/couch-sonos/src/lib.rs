@@ -187,13 +187,30 @@ struct Membership {
     transport: String,
 }
 
+/// A resolved API key, and whether a configured value had to be passed over to
+/// reach it. The rejected value is never kept, returned or logged; a caller that
+/// wants to tell someone has only the fact that it happened.
+pub struct KeyChoice {
+    pub key: String,
+    pub rejected: bool,
+}
+
 /// Read the household API key: environment first, then the settings file, then
 /// the placeholder. Never log the result.
 pub fn api_key() -> String {
-    api_key_at(&key_file())
+    api_key_choice().key
 }
 pub fn api_key_at(file: &Path) -> String {
-    choose_key([key_from_env(), std::fs::read_to_string(file).ok()])
+    api_key_choice_at(file).key
+}
+/// The same resolution, keeping whether a configured key was unusable. A silent
+/// fall back to the placeholder looks exactly like "no key is configured" and
+/// then fails at the player, which is a long way from the mistake.
+pub fn api_key_choice() -> KeyChoice {
+    api_key_choice_at(&key_file())
+}
+pub fn api_key_choice_at(file: &Path) -> KeyChoice {
+    resolve_key([key_from_env(), std::fs::read_to_string(file).ok()])
 }
 fn key_from_env() -> Option<String> {
     std::env::var(KEY_ENV).ok()
@@ -224,12 +241,26 @@ pub fn key_file_in(home: &Path) -> PathBuf {
 }
 /// The first usable key in order of precedence, or the placeholder.
 fn choose_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> String {
-    candidates
-        .into_iter()
-        .flatten()
-        .map(|value| value.trim().to_owned())
-        .find(|value| key_ok(value))
-        .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_owned())
+    resolve_key(candidates).key
+}
+fn resolve_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> KeyChoice {
+    let mut rejected = false;
+    for value in candidates.into_iter().flatten() {
+        let value = value.trim();
+        if key_ok(value) {
+            return KeyChoice {
+                key: value.to_owned(),
+                rejected,
+            };
+        }
+        // An unset variable or an empty file is "not configured"; anything else
+        // is a value somebody meant to send, and this client will not send it.
+        rejected |= !value.is_empty();
+    }
+    KeyChoice {
+        key: PLACEHOLDER_API_KEY.to_owned(),
+        rejected,
+    }
 }
 /// A key reaches the wire as a header value: refuse anything that is not
 /// printable ASCII rather than letting a stray newline split the request.

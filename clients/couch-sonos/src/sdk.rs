@@ -43,13 +43,24 @@ impl From<Error> for couch_sdk::Error {
 /// `config.json` instead of repeating the same value in every connection. When
 /// it is set here it is written to the per-connection file at mode 0600 like
 /// any other credential.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// The player's IPv4 address. Sonos serves the API on port 1443, so there
     /// is no port to configure.
     pub host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+}
+
+/// Written by hand so the promise that the key is never logged is structural:
+/// a `{:?}` in a future error path cannot print it by accident.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("host", &self.host)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl Settings {
@@ -302,6 +313,21 @@ mod tests {
         assert_eq!(settings.validate(), Err(couch_sdk::Error::Invalid));
     }
 
+    #[test]
+    fn debug_output_cannot_print_the_key() {
+        let mut settings = Settings::new("192.0.2.10");
+        settings.api_key = Some("s3cret-developer-key".into());
+        let shown = format!("{settings:?}");
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert!(
+            shown.contains("192.0.2.10") && shown.contains("<redacted>"),
+            "{shown}"
+        );
+        assert_eq!(
+            format!("{:?}", Settings::new("192.0.2.10")),
+            "Settings { host: \"192.0.2.10\", api_key: None }"
+        );
+    }
     #[test]
     fn a_connection_key_is_preferred_to_the_household_file() {
         if std::env::var_os(crate::KEY_ENV).is_some() {
