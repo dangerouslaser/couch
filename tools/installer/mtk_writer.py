@@ -15,7 +15,8 @@ import re
 import stat
 import struct
 
-from couch_install import CHUNK, MODEL, InstallError, WRITE_ORDER, fingerprint, layout, require, sync_directory
+from couch_install import (CHUNK, MODEL, InstallError, allowed_write_targets, fingerprint,
+                           layout, require, sync_directory)
 from mtk_readonly import ConnectedMtkReader
 from mtk_usb import bounded_operation
 
@@ -170,7 +171,8 @@ class ConnectedMtkWriter(ConnectedMtkReader):
             require(layout(self._release["partitions"]) == self.description["partitions"],
                     "Verified manifest layout differs from observed GPT")
             images = self._release.get("images")
-            require(isinstance(images, dict) and images and images.keys() <= set(WRITE_ORDER),
+            self._allowed = allowed_write_targets(self._release)
+            require(isinstance(images, dict) and images and images.keys() <= self._allowed,
                     "Manifest contains a prohibited write target")
             self._bundle = Path(bundle).resolve(strict=True)
             require(self._bundle.is_dir(), "Missing verified bundle directory")
@@ -272,7 +274,7 @@ class ConnectedMtkWriter(ConnectedMtkReader):
 
     def write(self, name, source):
         self._healthy()
-        require(name in WRITE_ORDER and name in self._sources, "Prohibited or unmanifested write target")
+        require(name in self._allowed and name in self._sources, "Prohibited or unmanifested write target")
         require(Path(source).absolute().parent.resolve() / Path(source).name == self._sources[name]["path"],
                 "Write source differs from verified manifest")
         require(fingerprint(self.description) == self._description_hash, "Bound device description changed")
