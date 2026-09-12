@@ -69,8 +69,11 @@ The supported value is a developer key from integration.sonos.com. Players that
 report `"allowGuestAccess":true` with `"credentialTypeAllowed":"API_KEY"` accept
 any non-empty key today, which is why the placeholder works on this network; do
 not rely on that. Keep the real key out of Git and off the browser: the daemon
-never echoes it, nothing logs it, and a value that cannot be a header (newlines,
-control characters, over 256 bytes) is refused before any request is sent.
+never echoes it, nothing logs it, `Settings`' own `Debug` redacts it, and a value
+that cannot be a header (newlines, control characters, over 256 bytes) is refused
+before any request is sent. Refusing one falls back to the placeholder, which
+otherwise looks exactly like configuring no key at all, so the CLI prints a line
+on stderr saying a configured key was ignored - never the value itself.
 
 ## Web and remote controls
 
