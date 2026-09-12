@@ -22,12 +22,7 @@
         <h1 id="headline">Linux for your<br><em>universal remote.</em></h1>
         <p class="lede">Control lights, media players, TVs,<br>and receivers from one remote.</p>
         <p class="explain">Couch replaces Android on the HA100 with a custom Linux kernel, Rust integrations, and a Slint touchscreen interface.</p>
-        <div class="actions"><a class="button" href="https://github.com/dangerouslaser/couch">View source <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a><a class="text-link" href="#details">See features <span class="icon icon-arrow-down" aria-hidden="true"></span></a></div>
-        <div class="install" aria-labelledby="install-title">
-          <p class="eyebrow" id="install-title">INSTALL · PRERELEASE</p>
-          <pre><code>curl -fsSL https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.sh | sh</code></pre>
-          <p>Linux and macOS. Start Android on the HA100, enable USB debugging, connect USB, then run this in a terminal. The script verifies every download against hashes pinned inside it before anything runs. Windows: <a href="https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.ps1">install.ps1</a>.</p>
-        </div>
+        <div class="actions"><a class="button" href="#install">Install Couch <span class="icon icon-arrow-down" aria-hidden="true"></span></a><a class="text-link" href="https://github.com/dangerouslaser/couch">View source <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></div>
         <p class="development">PRERELEASE <span>Installs, backs up Android, and restores stock Android over Wi-Fi. Hardware validation is ongoing on development units.</span></p>
       </div>
       <figure class="preview">
@@ -45,6 +40,24 @@
         </div>
         <p id="demo-summary" class="sr-only" aria-live="polite"></p>
       </figure>
+    </section>
+    <section class="install-band wrap" id="install" aria-labelledby="install-heading">
+      <div class="install-head">
+        <p class="eyebrow">INSTALL <span class="badge">PRERELEASE</span></p>
+        <h2 id="install-heading">Install Couch on your HA100.</h2>
+        <p>Start Android on the remote, enable USB debugging, and connect it to your computer by USB. Run the command for your system. The script verifies every download against hashes pinned inside it before anything runs, and it backs up your original Android first.</p>
+      </div>
+      <div class="commands">
+        <div class="command">
+          <p class="command-label">Linux &amp; macOS</p>
+          <div class="command-box"><code>curl -fsSL https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.sh | sh" aria-label="Copy the Linux and macOS install command">Copy</button></div>
+        </div>
+        <div class="command">
+          <p class="command-label">Windows · PowerShell</p>
+          <div class="command-box"><code>irm https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.ps1 | iex</code><button class="copy" type="button" data-copy="irm https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.ps1 | iex" aria-label="Copy the Windows PowerShell install command">Copy</button></div>
+        </div>
+      </div>
+      <p class="install-foot">Prerelease under hardware validation. <a href="https://github.com/dangerouslaser/couch/releases/latest">Release notes, other platforms &amp; checksums <span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></p>
     </section>
     <section class="integrations" aria-label="Selected integrations"><div class="wrap integration-inner"><p>WORKS WITH</p><ul><li>Kodi</li><li>Philips Hue</li><li>Home Assistant</li><li>LG webOS</li><li><a href="integrations.html">And more <span aria-hidden="true">→</span></a></li></ul></div></section>
     <section class="stack wrap" id="codebase" aria-labelledby="stack-title">

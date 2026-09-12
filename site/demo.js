@@ -65,3 +65,44 @@
     }
   });
 })();
+
+/* Copy buttons for the install commands. Clipboard API with a selection
+   fallback; the label briefly confirms and is announced to assistive tech. */
+(() => {
+  const buttons = document.querySelectorAll('.copy[data-copy]');
+  if (!buttons.length) return;
+  const write = async (text) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) { /* fall through to the selection fallback */ }
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      return ok;
+    } catch (e) { return false; }
+  };
+  buttons.forEach((button) => {
+    const original = button.textContent;
+    button.addEventListener('click', async () => {
+      const ok = await write(button.dataset.copy);
+      button.textContent = ok ? 'Copied' : 'Press ⌘C';
+      button.classList.toggle('copied', ok);
+      button.setAttribute('aria-live', 'polite');
+      clearTimeout(button._t);
+      button._t = setTimeout(() => {
+        button.textContent = original;
+        button.classList.remove('copied');
+      }, 2000);
+    });
+  });
+})();
