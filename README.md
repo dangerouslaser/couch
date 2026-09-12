@@ -7,7 +7,8 @@ on a dedicated remote. Use its physical buttons and touchscreen for everyday
 control, and configure your setup from a browser.
 
 [Project site](https://dangerouslaser.github.io/couch/) ·
-[Kernel source](https://github.com/dangerouslaser/couch-kernel)
+[Kernel source](https://github.com/dangerouslaser/couch-kernel) ·
+[Discord](https://discord.gg/KnZK6SZQhF)
 
 ## What it does
 
@@ -39,6 +40,12 @@ Android from those saved originals. Keep that backup folder. The releases are
 prereleases under active hardware validation; see the
 [installer guide](docs/installer.md), the [Wi-Fi installer notes](docs/installer-wifi-wizard.md)
 and [restoring stock Android](docs/installer-android-restore.md).
+
+## Community
+
+Questions, install reports and hardware findings are welcome on the
+[Couch Discord server](https://discord.gg/KnZK6SZQhF). Bugs go to the
+[issue tracker](https://github.com/dangerouslaser/couch/issues).
 
 ## Development
 
