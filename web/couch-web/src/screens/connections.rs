@@ -16,6 +16,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("web-os", "LG webOS TV"),
         ("android-tv", "Android / Google TV · experimental"),
         ("apple-tv", "Apple TV · experimental"),
+        ("tizen", "Samsung Tizen TV · experimental"),
         ("denon", "Denon AVR"),
         ("unifi-protect", "UniFi Protect"),
     ]
@@ -31,7 +32,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"unifi-protect"=>create_named(app,Provider::UnifiProtect),"sonos"=>super::sonos::form(app,None),"core-elec"=>super::coreelec::form(app,None),"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared is built into the remote and is configured on each device."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"unifi-protect"=>create_named(app,Provider::UnifiProtect),"sonos"=>super::sonos::form(app,None),"core-elec"=>super::coreelec::form(app,None),"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),"tizen"=>create_named(app,Provider::Tizen),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared is built into the remote and is configured on each device."</p>}.into_any()}}
         </section>
     }.into_any()
 }
@@ -51,6 +52,7 @@ fn saved(app: App, c: Connection) -> AnyView {
         Provider::Hue => super::hue::setup(app, &c),
         Provider::WebOs => super::webos::setup(app, &c),
         Provider::AndroidTv | Provider::AppleTv => super::streaming_tv::setup(app, &c),
+        Provider::Tizen => super::tizen::setup(app, &c),
     };
     view!{<section class="card saved-connection"><h2>{title}</h2><p>{format!("{label} · {usage} assigned devices")}</p>
         <p class="dim">{match &c.provider{Provider::Sonos{host}=>format!("{host} · Local Sonos control"),Provider::Kodi{host,port}|Provider::CoreElec{host,port}=>format!("{host}:{port} · Saved address"),Provider::Ir=>"Built-in transmitter · Codes are configured per device".into(),_=>"Credentials are kept privately on the remote".into()}}</p>

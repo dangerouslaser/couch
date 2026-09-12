@@ -1,7 +1,7 @@
 # Connections and private settings
 
 Add named connections in the web UI, then assign their devices in **Rooms & devices**.
-Multiple Hue bridges, Home Assistant servers, Kodi players and LG TVs are supported.
+Multiple Hue bridges, Home Assistant servers, Kodi players, LG TVs and Samsung TVs are supported.
 A device keeps its upstream resource ID and a separate connection ID. The same
 Home Assistant entity ID or Hue resource ID can appear on different servers.
 
@@ -16,6 +16,7 @@ Private files are beside `config.json`, under `connections/<connection-id>/`:
 - `hue-connection.json`: URL, application key, pinned certificate.
 - `ha-connection.json`: server URL and access token.
 - `webos-connection.json` and `webos-wake.json`: TV pairing and wake address.
+- `androidtv-connection.json`, `appletv-connection.json`, `tizen-connection.json`: streaming TV pairings (Samsung's holds its token, pinned certificate and MAC).
 - `kodi-connection.json`: bound host, HTTP port, username/password, control mode.
 
 Credentials are mode 0600 and absent from exported house configuration. The daemon
@@ -25,7 +26,7 @@ legacy pairing after its connection is deleted. Retained credential directories
 reserve their IDs; creating another connection with the same name gets a new ID.
 Deletion is rejected while devices or scenes still reference the connection.
 
-Provider operations use `/api/connections/<id>/<hue|ha|webos|kodi>/...`.
+Provider operations use `/api/connections/<id>/<hue|ha|webos|kodi|androidtv|appletv|tizen>/...`.
 Legacy provider-only routes reject ambiguous requests when several connections
 exist. Per-connection operation locks allow independent servers to operate at once.
 Hue state and SSE subscriptions are separate per bridge; UI cache keys include the

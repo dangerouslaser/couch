@@ -21,6 +21,7 @@ pub enum Provider {
     WebOs,
     AndroidTv,
     AppleTv,
+    Tizen,
     UnifiProtect,
     Ir,
 }
@@ -36,6 +37,7 @@ impl Provider {
             Self::WebOs => "web-os",
             Self::AndroidTv => "android-tv",
             Self::AppleTv => "apple-tv",
+            Self::Tizen => "tizen",
             Self::UnifiProtect => "unifi-protect",
             Self::Ir => "ir",
         }
@@ -51,6 +53,7 @@ impl Provider {
             Self::WebOs => "LG webOS",
             Self::AndroidTv => "Android / Google TV",
             Self::AppleTv => "Apple TV",
+            Self::Tizen => "Samsung Tizen",
             Self::UnifiProtect => "UniFi Protect",
             Self::Ir => "Infrared",
         }
@@ -94,6 +97,7 @@ impl Config {
             Provider::WebOs => Integration::WebOs,
             Provider::AndroidTv => Integration::AndroidTv,
             Provider::AppleTv => Integration::AppleTv,
+            Provider::Tizen => Integration::Tizen,
             Provider::UnifiProtect => Integration::UnifiProtect { camera_id: alloc::format!("{connection_id}/{resource_id}") },
             Provider::Ir => Integration::Ir {
                 codeset: resource_id.clone(),
@@ -275,6 +279,7 @@ mod tests {
         for (name, provider, integration) in [
             ("android", Provider::AndroidTv, Integration::AndroidTv),
             ("apple", Provider::AppleTv, Integration::AppleTv),
+            ("samsung", Provider::Tizen, Integration::Tizen),
         ] {
             config.connections.push(Connection {
                 id: name.into(),
@@ -298,6 +303,15 @@ mod tests {
         );
         assert!(!crate::commands::Function::Mute.supports(&Integration::AppleTv));
         assert!(crate::commands::Function::Mute.supports(&Integration::AndroidTv));
+        // Samsung offers fixed source keys and app IDs, but no next/previous.
+        let tizen = Integration::Tizen;
+        assert!(crate::commands::Function::parse("input:hdmi2").unwrap().supports(&tizen));
+        assert!(!crate::commands::Function::parse("input:HDMI_2").unwrap().supports(&tizen));
+        assert!(crate::commands::Function::parse("app:111299001912").unwrap().supports(&tizen));
+        assert!(crate::commands::Function::PowerOn.supports(&tizen));
+        assert!(!crate::commands::Function::Next.supports(&tizen));
+        assert!(!crate::commands::Function::PlayPause.supports(&tizen));
+        assert!(serde_json::to_string(&config).unwrap().contains("\"tizen\""));
     }
 }
 

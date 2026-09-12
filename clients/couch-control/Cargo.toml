@@ -12,6 +12,7 @@ serde_json = "1"
 libc = "0.2"
 couch-androidtv = { path = "../couch-androidtv" }
 couch-appletv = { path = "../couch-appletv" }
+couch-tizen = { path = "../couch-tizen" }
 
 [dev-dependencies]
 prost = "0.13"

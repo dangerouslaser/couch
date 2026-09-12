@@ -186,6 +186,7 @@ pub enum Integration {
     WebOs,
     AndroidTv,
     AppleTv,
+    Tizen,
     UnifiProtect { camera_id: String },
     HomeAssistant {
         entity_id: String,
@@ -212,6 +213,7 @@ impl Integration {
             Integration::WebOs => "web-os",
             Integration::AndroidTv => "android-tv",
             Integration::AppleTv => "apple-tv",
+            Integration::Tizen => "tizen",
             Integration::UnifiProtect { .. } => "unifi-protect",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",

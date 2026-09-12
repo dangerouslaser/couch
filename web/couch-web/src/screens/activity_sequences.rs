@@ -43,6 +43,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
             Provider::Denon { .. } => "denon",
             Provider::WebOs => "webos",
             Provider::AppleTv => "appletv",
+            Provider::Tizen => "tizen",
             _ => return,
         };
         status.set("Loading inputs and apps…".into());
@@ -85,7 +86,7 @@ pub fn editor(app: App, config: &Config, activity: &Activity) -> AnyView {
                 }
             }
             let mut discovery_failed = inputs.is_err();
-            if matches!(prefix, "webos" | "appletv") {
+            if matches!(prefix, "webos" | "appletv" | "tizen") {
                 let app_result = api::ha("GET", &format!("{path}/apps"), None).await;
                 discovery_failed |= app_result.is_err();
                 if let Ok(value) = app_result {

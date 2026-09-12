@@ -132,6 +132,8 @@ impl Function {
         match self {
             Self::Input(id) => match integration {
                 Integration::WebOs => valid_id(id),
+                // Samsung source keys are fixed; there is no input list to discover.
+                Integration::Tizen => TIZEN_INPUTS.contains(&id.as_str()),
                 Integration::Denon { .. } => {
                     id.len() <= 25
                         && id.bytes().all(|b| {
@@ -140,7 +142,7 @@ impl Function {
                 }
                 _ => false,
             },
-            Self::App(id) => if matches!(integration, Integration::AndroidTv) { crate::valid_app_url(id) } else { matches!(integration, Integration::WebOs | Integration::AppleTv) && valid_id(id) },
+            Self::App(id) => if matches!(integration, Integration::AndroidTv) { crate::valid_app_url(id) } else { matches!(integration, Integration::WebOs | Integration::AppleTv | Integration::Tizen) && valid_id(id) },
             _ => crate::buttons::functions(integration)
                 .iter()
                 .any(|f| f.0 == self.id()),
@@ -166,6 +168,9 @@ impl Function {
         )
     }
 }
+/// Mirrors `couch_tizen::INPUTS`; kept here so the wasm build stays free of
+/// the client crates.
+pub const TIZEN_INPUTS: &[&str] = &["tv", "hdmi", "hdmi1", "hdmi2", "hdmi3", "hdmi4"];
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
