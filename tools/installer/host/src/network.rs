@@ -18,6 +18,13 @@ pub fn rpc(worker: &mut Worker, operation: &str, payload: Value) -> Result<Value
         Ok(event["result"].clone())
     })
 }
+/// The MediaTek gen2 driver injects a pseudo network named "NVRAM WARNING:
+/// Err = 0x01" into scan results when it finds no calibration record. The RAM
+/// stage deliberately runs without one, so the notice is expected there and is
+/// not a network anyone can join. Hide it; never treat it as a selectable SSID.
+fn driver_notice(raw: &[u8]) -> bool {
+    raw.starts_with(b"NVRAM WARNING")
+}
 fn failure_reason(status: &Value) -> &str {
     status["error"]
         .as_str()
@@ -41,18 +48,26 @@ fn failure_reason(status: &Value) -> &str {
         })
         .unwrap_or("unknown")
 }
+// The stage waits out a slow kernel random pool before its supplicant control
+// socket appears: transport (≤20 s) + interface (≤15 s) + settle (3 s) +
+// SOCKET_WAIT (90 s in a normal stage) plus detect/loader. The host budget must
+// exceed that whole window, or the host times out generically while the stage
+// is still inside the wait this release deliberately added.
+const READY_BUDGET_SECS: u64 = 180;
 pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
     let start = Instant::now();
+    let mut last = String::from("waiting");
     loop {
-        ensure!(
-            start.elapsed() < Duration::from_secs(120),
-            "Wi-Fi did not become ready"
-        );
+        if start.elapsed() >= Duration::from_secs(READY_BUDGET_SECS) {
+            // Surface the last stage state and its own step, not just a generic
+            // timeout, so a stuck phase is distinguishable from a slow pool.
+            anyhow::bail!("Wi-Fi did not become ready within {READY_BUDGET_SECS}s (last stage status: {last})");
+        }
         ui.progress_with_unit(
             4,
             "Starting remote Wi-Fi",
             start.elapsed().as_secs(),
-            120,
+            READY_BUDGET_SECS,
             crate::frontend::ProgressUnit::Seconds,
         )?;
         let status = rpc(worker, "stage_status", Value::Null)?;
@@ -60,6 +75,7 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
             status["provisioned"] != true,
             "Wi-Fi stage was already provisioned"
         );
+        last = status["status"].as_str().unwrap_or("unknown").to_string();
         if status["status"] == "failed" {
             let reason = failure_reason(&status);
             anyhow::bail!("Remote Wi-Fi initialization failed: {reason}");
@@ -120,14 +136,22 @@ pub fn select(worker: &mut Worker, ui: &mut Ui) -> Result<Value> {
                 && scan["truncated"].is_boolean(),
             "invalid network scan response"
         );
-        let networks = scan["networks"]
+        let scanned = scan["networks"]
             .as_array()
             .context("missing network list")?;
-        ensure!(networks.len() <= 64, "network list exceeds bound");
-        let mut choices = Vec::new();
-        for n in networks {
+        ensure!(scanned.len() <= 64, "network list exceeds bound");
+        // Filter before numbering so choice indices and network entries stay aligned.
+        let mut networks = Vec::new();
+        for n in scanned {
             let raw = decode(n["ssid_hex"].as_str().context("missing SSID")?)?;
             ensure!(!raw.is_empty() && raw.len() <= 32, "invalid scanned SSID");
+            if !driver_notice(&raw) {
+                networks.push(n);
+            }
+        }
+        let mut choices = Vec::new();
+        for n in &networks {
+            let raw = decode(n["ssid_hex"].as_str().context("missing SSID")?)?;
             let security = n["security"].as_str().context("missing network security")?;
             ensure!(
                 ["wpa2", "open", "enterprise", "wpa3", "wep", "unsupported"].contains(&security),
@@ -218,6 +242,14 @@ mod tests {
         );
         assert!(credentials(b"x", Some("short")).is_err());
         assert!(credentials(&[], None).is_err());
+    }
+    #[test]
+    fn driver_calibration_notice_is_not_a_network() {
+        assert!(driver_notice(b"NVRAM WARNING: Err = 0x01"));
+        assert!(driver_notice(b"NVRAM WARNING"));
+        assert!(!driver_notice(b"NVRAM"));
+        assert!(!driver_notice(b"home"));
+        assert!(!driver_notice(b" NVRAM WARNING: Err = 0x01"));
     }
     #[test]
     fn display_cannot_inject_terminal_controls() {

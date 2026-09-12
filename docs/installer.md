@@ -62,8 +62,10 @@ session and opens no device.
 ## Installation flow
 
 1. Choose **Install with Android backup**, **YOLO — skip Android data backup**,
-   or **Reinstall existing Couch**. Reinstallation needs the saved Android
-   enrollment described below.
+   **Reinstall existing Couch**, or **Restore stock Android**. Reinstallation and
+   restore both need the saved Android enrollment described below. Restore returns
+   a Couch remote to stock Android over Wi-Fi; see
+   [Restore stock Android](installer-android-restore.md).
 2. Follow the dependency and input preparation prompts. The installer downloads
    pinned official inputs and assembles vendor-dependent pieces locally; the
    public OS payload contains no device backups or owner firmware.
@@ -125,6 +127,7 @@ Physical startup, complete installation, Android restoration and update rollback
 must be recorded separately. These host tests do not certify those device flows.
 
 - [Owner-side official inputs](installer-public-inputs.md)
+- [Restore stock Android](installer-android-restore.md)
 - [Wi-Fi stage and transaction](installer-linux-usb-stage.md)
 - [Wire protocol](../tools/installer/linux_stage/PROTOCOL.md)
 - [Storage policy and direct readback](installer-storage-policy.md)

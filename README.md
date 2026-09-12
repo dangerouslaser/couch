@@ -20,10 +20,25 @@ a Slint GUI, Rust services and an Alpine Linux userland.
 
 ## Installation
 
-The installer is in active development and end-to-end testing. Public releases
-and a complete installation guide will be linked here when they are ready.
+Couch installs from a Linux or macOS computer over USB, with the large transfers
+carried by Wi-Fi. Start Android on the HA100, enable USB debugging, connect the
+remote, then run the pinned installer for the current prerelease in a terminal:
 
-For development testing, see the [installer workflow](docs/installer-wifi-wizard.md).
+```sh
+curl -fsSL https://github.com/dangerouslaser/couch/releases/download/v0.1.0-alpha.20260912.71/install.sh | sh
+```
+
+Windows users run `install.ps1` from the same release in PowerShell. The script
+downloads the installer binaries and release descriptor for your platform,
+verifies their sizes and SHA-256 hashes against the values pinned inside the
+script, and only then starts the installer. Nothing runs on a mismatch.
+
+The installer saves your remote's original Android partitions and identity
+before writing anything, and it can later reinstall Couch or restore stock
+Android from those saved originals. Keep that backup folder. The releases are
+prereleases under active hardware validation; see the
+[installer guide](docs/installer.md), the [Wi-Fi installer notes](docs/installer-wifi-wizard.md)
+and [restoring stock Android](docs/installer-android-restore.md).
 
 ## Development
 

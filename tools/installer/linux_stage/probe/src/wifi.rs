@@ -9,6 +9,8 @@ use rustls::{
 };
 #[cfg(not(feature = "wifi-debug"))]
 use serde::Deserialize;
+#[cfg(feature = "wifi-debug")]
+use std::time::Duration;
 use std::{
     fs::{self, OpenOptions},
     io::{self},
@@ -27,6 +29,8 @@ use subtle::ConstantTimeEq;
 static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "wifi-debug")]
 const DEBUG_GENERATION_LIMIT: u32 = 8;
+#[cfg(feature = "wifi-debug")]
+const DEBUG_LIFECYCLE_MAX: usize = 256;
 pub fn active() -> bool {
     ACTIVE.load(std::sync::atomic::Ordering::Acquire)
 }
@@ -227,6 +231,133 @@ pub fn status() -> Vec<u8> {
     status_from(std::path::Path::new("/tmp"))
 }
 
+#[cfg(feature = "wifi-debug")]
+fn debug_lifecycle(root: &std::path::Path) -> serde_json::Value {
+    let mut supervisor = "unknown";
+    let mut phase = "unknown";
+    let mut retry = "unknown";
+    let mut worker = "unknown";
+    let mut worker_exit = "unknown";
+    let mut generation = 0u32;
+    let marker = root.join("couch-wifi-debug.retry").is_file();
+    let lifecycle_path = root.join("couch-wifi-debug.lifecycle");
+    let alive = fs::metadata(&lifecycle_path)
+        .and_then(|metadata| metadata.modified())
+        .and_then(|modified| modified.elapsed().map_err(io::Error::other))
+        .map(|elapsed| elapsed <= Duration::from_secs(3))
+        .unwrap_or(false);
+    let data = fs::read(&lifecycle_path).unwrap_or_default();
+    let mut fields = 0usize;
+    let mut marker_seen = false;
+    let mut valid = data.len() <= DEBUG_LIFECYCLE_MAX;
+    if let Ok(data) = std::str::from_utf8(&data) {
+        for item in data.split_ascii_whitespace() {
+            match item.split_once('=') {
+                Some(("supervisor", "couch-wifi-debug-supervisor-v1")) => {
+                    supervisor = "couch-wifi-debug-supervisor-v1";
+                    fields += 1;
+                }
+                Some(("phase", "generation-started")) => {
+                    phase = "generation-started";
+                    fields += 1;
+                }
+                Some(("phase", "worker-running")) => {
+                    phase = "worker-running";
+                    fields += 1;
+                }
+                Some(("phase", "waiting-retry")) => {
+                    phase = "waiting-retry";
+                    fields += 1;
+                }
+                Some(("phase", "retry-consumed")) => {
+                    phase = "retry-consumed";
+                    fields += 1;
+                }
+                Some(("phase", "retry-limit")) => {
+                    phase = "retry-limit";
+                    fields += 1;
+                }
+                Some(("retry", "none")) => {
+                    retry = "none";
+                    fields += 1;
+                }
+                Some(("retry", "consumed")) => {
+                    retry = "consumed";
+                    fields += 1;
+                }
+                Some(("retry", "limit")) => {
+                    retry = "limit";
+                    fields += 1;
+                }
+                Some(("marker", "present" | "absent")) => {
+                    marker_seen = true;
+                    fields += 1;
+                }
+                Some(("worker", "starting")) => {
+                    worker = "starting";
+                    fields += 1;
+                }
+                Some(("worker", "running")) => {
+                    worker = "running";
+                    fields += 1;
+                }
+                Some(("worker", "exited")) => {
+                    worker = "exited";
+                    fields += 1;
+                }
+                Some(("worker_exit", "none")) => {
+                    worker_exit = "none";
+                    fields += 1;
+                }
+                Some(("worker_exit", "success")) => {
+                    worker_exit = "success";
+                    fields += 1;
+                }
+                Some(("worker_exit", "failure")) => {
+                    worker_exit = "failure";
+                    fields += 1;
+                }
+                Some(("worker_exit", "signaled")) => {
+                    worker_exit = "signaled";
+                    fields += 1;
+                }
+                Some(("generation", value)) => {
+                    match value.parse().ok().filter(|n| *n <= DEBUG_GENERATION_LIMIT) {
+                        Some(value) => {
+                            generation = value;
+                            fields += 1;
+                        }
+                        None => valid = false,
+                    }
+                }
+                _ => valid = false,
+            }
+        }
+    } else {
+        valid = false;
+    }
+    if !valid || fields != 7 || !marker_seen {
+        supervisor = "unknown";
+        phase = "unknown";
+        retry = "unknown";
+        worker = "unknown";
+        worker_exit = "unknown";
+        generation = 0;
+    } else if marker && retry == "none" {
+        retry = "accepted";
+    }
+    serde_json::json!({
+        "supervisor": supervisor,
+        "alive": alive,
+        "phase": phase,
+        "generation": generation,
+        "retry": retry,
+        "marker": marker,
+        "worker": worker,
+        "worker_exit": worker_exit,
+    })
+}
+
 /// The debug stage has no provisioning opcode. Its only diagnostic record is
 /// therefore pre-credential, bounded, and reduced to printable text.
 #[cfg(feature = "wifi-debug")]
@@ -260,6 +391,7 @@ fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(0);
+    let lifecycle = debug_lifecycle(root);
     let status = serde_json::from_slice::<serde_json::Value>(&status()).ok();
     loop {
         let bytes = serde_json::json!({
@@ -269,6 +401,7 @@ fn debug_status_from(root: &std::path::Path) -> Vec<u8> {
             "status": status.clone(),
             "step": step,
             "generation": generation,
+            "lifecycle": lifecycle,
             "debug_generation_limit": DEBUG_GENERATION_LIMIT,
             "precredential": true,
             "log": printable,
@@ -314,9 +447,9 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
     } else {
         "none"
     };
-    let mut value = serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")});
     #[cfg(feature = "wifi-debug")]
     {
+        let mut value = serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")});
         value["stage_kind"] = serde_json::json!("private-ram-wifi-debug-stage");
         value["capability"] = serde_json::json!("COUCH_PRIVATE_WIFI_DEBUG_STAGE_V1");
         value["wifi_debug"] = serde_json::json!(true);
@@ -324,8 +457,10 @@ fn status_from(root: &std::path::Path) -> Vec<u8> {
         value["debug_protocol"] = serde_json::json!(1);
         value["debug_generation_limit"] = serde_json::json!(DEBUG_GENERATION_LIMIT);
         value["scan"] = serde_json::json!(false);
+        return value.to_string().into_bytes();
     }
-    value.to_string().into_bytes()
+    #[cfg(not(feature = "wifi-debug"))]
+    serde_json::json!({"ip":ip,"status":status,"port":8443,"error":error,"provisioned":active(),"scan":true,"stage_network_config":cfg!(feature = "private-install")}).to_string().into_bytes()
 }
 #[cfg(test)]
 mod tests {
@@ -544,6 +679,25 @@ mod tests {
         assert_eq!(value["status"]["provisioned"], false);
         assert!(value["log"].as_str().unwrap().len() <= 4096);
         assert!(raw.len() <= 4608);
+        fs::write(
+            root.join("couch-wifi-debug.lifecycle"),
+            "supervisor=couch-wifi-debug-supervisor-v1 generation=2 phase=worker-running retry=consumed marker=absent worker=running worker_exit=none\n",
+        )
+        .unwrap();
+        fs::write(root.join("couch-wifi-debug.retry"), b"").unwrap();
+        fs::write(root.join("couch-wifi-debug.log"), "\"\\\\\n\t".repeat(4096)).unwrap();
+        let lifecycle = debug_status_from(&root);
+        let lifecycle: serde_json::Value = serde_json::from_slice(&lifecycle).unwrap();
+        assert_eq!(
+            lifecycle["lifecycle"]["supervisor"],
+            "couch-wifi-debug-supervisor-v1"
+        );
+        assert_eq!(lifecycle["lifecycle"]["alive"], true);
+        assert_eq!(lifecycle["lifecycle"]["generation"], 2);
+        assert_eq!(lifecycle["lifecycle"]["phase"], "worker-running");
+        assert_eq!(lifecycle["lifecycle"]["retry"], "consumed");
+        assert_eq!(lifecycle["lifecycle"]["marker"], true);
+        assert!(serde_json::to_vec(&lifecycle).unwrap().len() <= 4608);
         fs::write(root.join("couch-wifi-debug.log"), vec![0xff; 8192]).unwrap();
         let malformed = debug_status_from(&root);
         let malformed: serde_json::Value = serde_json::from_slice(&malformed).unwrap();
@@ -561,6 +715,15 @@ mod tests {
         assert_eq!(ordinary["debug_generation_limit"], DEBUG_GENERATION_LIMIT);
         assert_eq!(ordinary["scan"], false);
         assert_eq!(ordinary["provisioned"], false);
+        fs::write(
+            root.join("couch-wifi-debug.lifecycle"),
+            vec![b'x'; DEBUG_LIFECYCLE_MAX + 1],
+        )
+        .unwrap();
+        let malformed: serde_json::Value =
+            serde_json::from_slice(&debug_status_from(&root)).unwrap();
+        assert_eq!(malformed["lifecycle"]["supervisor"], "unknown");
+        assert_eq!(malformed["lifecycle"]["marker"], true);
         fs::remove_dir_all(root).unwrap();
     }
     #[cfg(feature = "wifi-debug")]

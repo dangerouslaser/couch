@@ -137,6 +137,56 @@ class TransitionTests(unittest.TestCase):
         inputs = {'source': str(self.source), **{k: str(v) if isinstance(v, Path) else v for k,v in self.args.items()}}
         return {'receipt': str(output/'completed.json'), 'sha256': pin, 'inputs': inputs}
 
+    def chained_inputs(self):
+        parent = self.completed()
+        return self.chained_inputs_for_parent(parent, 'candidate', 'n')
+
+    def chained_inputs_for_parent(self, parent, name, fill):
+        """Build a fully pinned next target for either supported receipt shape."""
+        candidate = self.root/name
+        candidate.mkdir(mode=0o700)
+        bundle = candidate/'stage-bundle'
+        bundle.mkdir()
+        self.next_image = bundle/'next-debug.img'
+        self.next_image.write_bytes(b'ANDROID!' + fill.encode() + bytes(16*1024*1024-9))
+        next_hash = recovery.sha(self.next_image.read_bytes())
+        next_metadata = bundle/'next-debug.json'
+        next_metadata.write_text(json.dumps({'schema': 1, 'kind': 'private-ram-wifi-debug-stage',
+            'private_only': True, 'installable': False, 'storage_operations': [],
+            'sha256': next_hash, 'size': self.next_image.stat().st_size}))
+        receipt = candidate/'candidate-receipt.json'
+        receipt.write_text(json.dumps({'schema': 1,
+            'kind': 'couch-private-wifi-debug-lifecycle-candidate',
+            'installable': False, 'device_access': False, 'physical_boot_verified': False,
+            'source_binding': {'partial_overlay': True, 'local_source_commit': 'a'*40,
+                               'stage_base_commit': 'b'*40},
+            'outputs': {'image': {'path': 'stage-bundle/'+self.next_image.name, 'sha256': next_hash},
+                        'metadata': {'path': 'stage-bundle/'+next_metadata.name,
+                                     'sha256': recovery.sha(next_metadata.read_bytes())}},
+            'approved_overlay': {'files': {'stage/probe': {'sha256': 'e'*64}}}}))
+        return {'parent': parent, 'candidate_receipt': str(receipt),
+                'candidate_receipt_sha256': recovery.sha(receipt.read_bytes()),
+                'source_commit': 'a'*40, 'stage_base_commit': 'b'*40, 'probe_sha256': 'e'*64,
+                'image': str(self.next_image), 'image_sha256': next_hash,
+                'metadata': str(next_metadata),
+                'metadata_sha256': recovery.sha(next_metadata.read_bytes())}
+
+    def complete_chained(self, inputs, name):
+        proof = debug.admit_chained(inputs, 1, [2])
+        reader = self.chained_device(proof.previous_boot_sha256)
+        writer = self.chained_device(proof.previous_boot_sha256)
+        output = self.root/name
+        debug.transition_chained(proof, reader, lambda *args: writer, output, bus=1, ports=[2])
+        recovery.publish(output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
+        recovery.publish(output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
+        return {'chain': True, 'receipt': str(output/'completed.json'),
+                'sha256': debug.complete_chained_receipt(output), 'inputs': inputs}
+
+    def chained_device(self, boot):
+        device = self.device()
+        device.hashes['boot'] = boot
+        return device
+
     def test_completed_receipt_required_and_topology_pinned(self):
         config = self.completed()
         self.assertEqual(debug.validate_receipt(config, 1, [2]),
@@ -174,6 +224,124 @@ class TransitionTests(unittest.TestCase):
             with self.assertRaises(InstallError): debug.validate_receipt(config, 1, [2])
         (Path(config['receipt']).parent/'restart-acknowledged.json').write_text('{}')
         with self.assertRaises(InstallError): debug.validate_receipt(config, 1, [2])
+
+    def test_chained_b13_to_new_debug_writes_boot_once_and_reattaches(self):
+        inputs = self.chained_inputs()
+        proof = debug.admit_chained(inputs, 1, [2])
+        self.assertEqual(proof.previous_boot_sha256, self.image_hash)
+        reader = self.chained_device(self.image_hash)
+        writer = self.chained_device(self.image_hash)
+        output = self.root/'chained-transition'
+        result = debug.transition_chained(proof, reader, lambda *args: writer, output, bus=1, ports=[2])
+        self.assertEqual(result['written'], ['boot'])
+        self.assertEqual(writer.writes, ['boot'])
+        self.assertEqual(writer.hashes['boot'], inputs['image_sha256'])
+        recovery.publish(output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
+        recovery.publish(output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
+        pin = debug.complete_chained_receipt(output)
+        config = {'chain': True, 'receipt': str(output/'completed.json'), 'sha256': pin, 'inputs': inputs}
+        self.assertEqual(debug.validate_chained_receipt(config, 1, [2]),
+                         {'validated': True, 'device_access': False, 'receipt_sha256': pin})
+
+    def test_schema2_to_schema3_to_next_debug_chain_preserves_current_boot_continuity(self):
+        first_inputs = self.chained_inputs()
+        first = self.complete_chained(first_inputs, 'first-chained-transition')
+        second_inputs = self.chained_inputs_for_parent(first, 'second-candidate', 'm')
+        second = debug.admit_chained(second_inputs, 1, [2])
+        self.assertEqual(second.previous_boot_sha256, first_inputs['image_sha256'])
+        self.assertNotEqual(second.previous_boot_sha256, self.image_hash)
+        reader = self.chained_device(second.previous_boot_sha256)
+        writer = self.chained_device(second.previous_boot_sha256)
+        output = self.root/'second-chained-transition'
+        result = debug.transition_chained(second, reader, lambda *args: writer, output, bus=1, ports=[2])
+        self.assertEqual(result['written'], ['boot'])
+        self.assertEqual(writer.hashes['boot'], second_inputs['image_sha256'])
+        recovery.publish(output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
+        recovery.publish(output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
+        second_completed = {'chain': True, 'receipt': str(output/'completed.json'),
+                            'sha256': debug.complete_chained_receipt(output), 'inputs': second_inputs}
+        self.assertEqual(debug.validate_chained_receipt(second_completed, 1, [2]),
+                         {'validated': True, 'device_access': False, 'receipt_sha256': second_completed['sha256']})
+
+    def test_completed_chain_rejects_cycle_sentinel_depth_and_wrong_shape_before_writes(self):
+        parent = self.completed()
+        identity = (str(Path(parent['receipt']).resolve()), parent['sha256'])
+        with self.assertRaises(InstallError):
+            debug._validated_completed_receipt(parent, 1, [2], seen=frozenset({identity}))
+        with self.assertRaises(InstallError):
+            debug._validated_completed_receipt(parent, 1, [2], depth=debug.MAX_COMPLETED_CHAIN_DEPTH)
+        malformed = {'chain': True, 'receipt': parent['receipt'], 'sha256': parent['sha256'],
+                     'inputs': parent['inputs'], 'unexpected': True}
+        with self.assertRaises(InstallError):
+            debug.validate_chained_receipt(malformed, 1, [2])
+
+    def test_nested_chain_rejects_tampered_parent_continuity_and_reused_output(self):
+        first_inputs = self.chained_inputs()
+        first = self.complete_chained(first_inputs, 'nested-parent')
+        second_inputs = self.chained_inputs_for_parent(first, 'nested-child-candidate', 'q')
+        for bad in (
+            {**second_inputs, 'candidate_receipt_sha256': '0'*64},
+            {**second_inputs, 'parent': {**first, 'sha256': '0'*64}},
+            {**second_inputs, 'parent': {**first, 'inputs': {
+                **first['inputs'], 'parent': {**first['inputs']['parent'], 'inputs': {
+                    **first['inputs']['parent']['inputs'], 'original_boot_sha256': '0'*64}}}}},
+        ):
+            with self.assertRaises(InstallError):
+                debug.admit_chained(bad, 1, [2])
+        with self.assertRaises(InstallError):
+            debug.admit_chained(second_inputs, 1, [3])
+
+        verified = Path(first['receipt']).parent/'verified.json'
+        verified.write_text('{}')
+        with self.assertRaises(InstallError):
+            debug.admit_chained(second_inputs, 1, [2])
+        # Restore a fresh complete parent, then prove a reused output is rejected
+        # before any writer is constructed for the second hop.
+        first = self.complete_chained(first_inputs, 'nested-parent-restored')
+        second_inputs = self.chained_inputs_for_parent(first, 'nested-child-restored', 'r')
+        proof = debug.admit_chained(second_inputs, 1, [2])
+        output = self.root/'nested-reused-output'
+        output.mkdir()
+        with self.assertRaises(FileExistsError):
+            debug.transition_chained(proof, self.chained_device(proof.previous_boot_sha256),
+                                     lambda *args: self.fail('writer constructed'), output, bus=1, ports=[2])
+
+    def test_chained_parent_candidate_and_live_mismatches_never_write(self):
+        inputs = self.chained_inputs()
+        for key, value in (('candidate_receipt_sha256', '0'*64), ('source_commit', '0'*40),
+                           ('probe_sha256', '0'*64)):
+            bad = {**inputs, key: value}
+            with self.assertRaises(InstallError, msg=key): debug.admit_chained(bad, 1, [2])
+        bad_parent = {**inputs, 'parent': {**inputs['parent'], 'sha256': '0'*64}}
+        with self.assertRaises(InstallError): debug.admit_chained(bad_parent, 1, [2])
+        with self.assertRaises(InstallError):
+            debug.admit_chained(inputs, 1, [3])
+        proof = debug.admit_chained(inputs, 1, [2])
+        for name in ('boot', 'nvram', 'cid'):
+            reader = self.chained_device(self.image_hash)
+            if name == 'cid': reader.description['runtime_cid_sha256'] = '0'*64
+            else: reader.hashes[name] = '0'*64
+            with self.assertRaises(InstallError):
+                debug.transition_chained(proof, reader, lambda *args: self.fail('writer constructed'),
+                                         self.root/('mismatch-'+name), bus=1, ports=[2])
+
+    def test_chained_reused_output_or_bad_readback_never_completes(self):
+        inputs = self.chained_inputs()
+        proof = debug.admit_chained(inputs, 1, [2])
+        output = self.root/'used-output'
+        output.mkdir()
+        with self.assertRaises(FileExistsError):
+            debug.transition_chained(proof, self.chained_device(self.image_hash),
+                                     lambda *args: self.chained_device(self.image_hash), output, bus=1, ports=[2])
+        reader = self.chained_device(self.image_hash)
+        writer = self.chained_device(self.image_hash)
+        writer.write = lambda name, path: writer.writes.append(name)
+        failed = self.root/'bad-readback'
+        with self.assertRaises(InstallError):
+            debug.transition_chained(proof, reader, lambda *args: writer, failed, bus=1, ports=[2])
+        self.assertEqual(writer.writes, ['boot'])
+        self.assertFalse((failed/'verified.json').exists())
+        self.assertFalse((failed/'completed.json').exists())
 
 
 if __name__ == '__main__': unittest.main()

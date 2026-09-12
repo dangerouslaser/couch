@@ -255,6 +255,23 @@ The plan-bound boolean `skip_userdata_backup` defaults to false. YOLO sets it
 true and omits only Android userdata backup; all other originals/calibration and
 all image verification remain mandatory. It never changes image write sizes.
 
+The plan-bound boolean `restore` defaults to false and is backward compatible:
+existing plans and existing stage images never set or require it. When true, the
+transaction restores stock Android rather than installing Couch. Every image,
+including `userdata`, must cover its exact partition and is written raw with the
+same chunked pinned-hash transfer, fsync+close and O_DIRECT readback as any other
+target; there is no compact-prefix expansion and no `expanding`/`expanded` phase.
+A restore plan must not carry `network` or `vendor_source_sha256`; the stage
+rejects either before opening the installation disk. The stock `userdata` is a
+full F2FS image (both superblocks) generated offline by the firmware's own
+`make_f2fs`; because that formatter writes fresh UUID/time fields the image has no
+reproducible content hash, so the host pins its exact bytes through the plan's
+per-image full/chunk hashes (derived from an owner-side build receipt) rather than
+a repo-pinned value. The fixed target allowlist is unchanged, and bootloaders,
+calibration and the BCB are never written. The 5.9 GiB mostly-zero image is
+streamed whole (Wi-Fi is ~20 MiB/s, ~5 min); the device reads back and hashes the
+complete transmitted image, so no zero-run is skipped on the verified write.
+
 An explicit `--wifi-retry-from` flow accepts an interrupted run only after complete
 full original backups are rehashed and no final boot write was recorded. It binds
 `reused_backups`, an exact target/calibration hash inventory, into the new USB plan.

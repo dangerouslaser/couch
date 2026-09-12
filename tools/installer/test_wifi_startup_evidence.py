@@ -96,14 +96,19 @@ class WifiStartupEvidence(unittest.TestCase):
         """The whole point: these two faults must not share a reason."""
         loop = self.text[self.text.index('while [ ! -S'):]
         loop = loop[:loop.index('done')]
-        self.assertIn('|| fail supplicant-exit', loop)
         self.assertIn('|| fail supplicant-socket-timeout', loop)
-        dead = loop[loop.index('kill -0'):loop.index('\n', loop.index('kill -0'))]
-        timeout = [line for line in loop.splitlines() if '-lt 10' in line][0]
-        self.assertIn('supplicant-exit', dead)
+        # A dead child is reaped first so its exit status reaches the log.
+        dead = loop[loop.index('if ! $BB kill -0'):loop.index('fi', loop.index('if ! $BB kill -0'))]
+        self.assertIn('wait "$supplicant"', dead)
+        self.assertIn('fail supplicant-exit', dead)
         self.assertNotIn('supplicant-socket-timeout', dead)
+        timeout = [line for line in loop.splitlines() if '-lt "$SOCKET_WAIT"' in line][0]
         self.assertIn('supplicant-socket-timeout', timeout)
         self.assertNotIn('fail supplicant-exit', timeout)
+        # The wait outlasts a slow kernel random pool in both modes.
+        waits = dict(re.findall(r'\n\s*(SOCKET_WAIT)=(\d+)', self.text))
+        self.assertEqual(self.text.count('SOCKET_WAIT='), 2)
+        self.assertGreaterEqual(min(int(v) for v in re.findall(r'SOCKET_WAIT=(\d+)', self.text)), 60)
 
     def test_failure_records_that_the_supplicant_was_still_running(self):
         body = (f'{self.fail_src}\nstarting_supplicant=1\n'

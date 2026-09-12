@@ -103,7 +103,9 @@ def check_failure(value):
 
 
 def wait_ready(out, incoming):
-    deadline = time.monotonic() + 60
+    # Exceed the stage's worst-case startup (transport + interface + settle +
+    # the 90 s socket wait this release added for a slow kernel random pool).
+    deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         value = wifi_status(out, incoming)
         check_failure(value)

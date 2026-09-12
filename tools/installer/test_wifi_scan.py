@@ -108,6 +108,23 @@ class ScanTests(unittest.TestCase):
         self.assertNotEqual(terminal.prompts[1][1][0]['label'], terminal.prompts[1][1][1]['label'])
         self.assertEqual(terminal.secrets, 0)
 
+    def test_driver_calibration_notice_is_hidden_without_shifting_selection(self):
+        notice = network(raw=b'NVRAM WARNING: Err = 0x01', security='open', dbm=0)
+        home = network(raw=b'home', security='open')
+        endpoint = Endpoint(frame(status()) + frame(result([notice, home])))
+        terminal = Terminal(['0'])
+        value = wifi_scan.network_form(terminal, endpoint, endpoint)
+        self.assertEqual(value['ssid_hex'], b'home'.hex())
+        labels = [option['label'] for option in terminal.prompts[0][1]]
+        self.assertFalse(any('NVRAM' in label for label in labels))
+        self.assertTrue(labels[0].startswith('home'))
+        self.assertTrue(wifi_scan.driver_notice(notice))
+        self.assertFalse(wifi_scan.driver_notice(network(raw=b'NVRAM')))
+        only_notice = Endpoint(frame(status()) + frame(result([notice])))
+        terminal = Terminal(['manual', 'open'], ['hidden'])
+        wifi_scan.network_form(terminal, only_notice, only_notice)
+        self.assertIn('No named networks were found', terminal.stages[-1][2])
+
     def test_echoed_password_fallback_is_rejected_for_scanned_network(self):
         endpoint = Endpoint(frame(status()) + frame(result([network()])))
         terminal = Terminal(['0'])

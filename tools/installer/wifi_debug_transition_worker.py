@@ -25,6 +25,7 @@ class TransitionWorker:
         self.verified = False
         self.consumed = False
         self.boot_requested = False
+        self.chained = False
 
     def dispatch(self, command):
         require(isinstance(command, dict) and set(command) == {'op', 'payload'}, 'Invalid transition request')
@@ -37,12 +38,19 @@ class TransitionWorker:
                     'Receipt validation must be offline')
             require(isinstance(payload, dict) and set(payload) == {'config', 'bus', 'ports'},
                     'Invalid receipt validation fields')
-            self.wire.send({'event': op, 'result': transition.validate_receipt(**payload)})
+            validator = (transition.validate_chained_receipt
+                         if isinstance(payload.get('config'), dict) and payload['config'].get('chain') is True
+                         else transition.validate_receipt)
+            self.wire.send({'event': op, 'result': validator(**payload)})
         elif op == 'transition_admit':
             require(self.proof is None and not self.consumed and isinstance(payload, dict), 'Transition already admitted')
-            require(set(payload) == {'source', 'temporary_boot_sha256', 'original_boot_sha256',
-                'snapshot_sha256', 'image', 'image_sha256', 'metadata', 'metadata_sha256'}, 'Invalid admission fields')
-            self.proof = transition.admit(**payload)
+            legacy = {'source', 'temporary_boot_sha256', 'original_boot_sha256',
+                      'snapshot_sha256', 'image', 'image_sha256', 'metadata', 'metadata_sha256'}
+            chained = {'chain', 'bus', 'ports'}
+            require(set(payload) in (legacy, chained), 'Invalid admission fields')
+            self.chained = set(payload) == chained
+            self.proof = (transition.admit_chained(payload['chain'], payload['bus'], payload['ports'])
+                          if self.chained else transition.admit(**payload))
             self.wire.send({'event': op, 'result': {'admitted': True, 'device_access': False}})
         elif op == 'transition_execute':
             require(self.proof is not None and not self.consumed, 'Transition unavailable or consumed')
@@ -53,13 +61,14 @@ class TransitionWorker:
                     and isinstance(payload['ports'], list) and 1 <= len(payload['ports']) <= 7
                     and all(type(p) is int and 0 < p <= 255 for p in payload['ports']), 'Invalid exact USB port')
             # Recheck retained admission before even enumerating USB.
-            checked = transition.admit(self.proof.retained.source,
+            checked = (transition.admit_chained(self.proof.config, payload['bus'], payload['ports'])
+                       if self.chained else transition.admit(self.proof.retained.source,
                 temporary_boot_sha256=self.proof.retained.temporary_boot_sha256,
                 original_boot_sha256=self.proof.original_boot_sha256, snapshot_sha256=self.proof.snapshot_sha256,
                 image=self.proof.image, image_sha256=self.proof.image_sha256,
-                metadata=self.proof.metadata, metadata_sha256=self.proof.metadata_sha256)
+                metadata=self.proof.metadata, metadata_sha256=self.proof.metadata_sha256))
             require(checked == self.proof, 'Transition inputs changed')
-            root = self.proof.retained.source
+            root = (self.proof.parent.retained.source if self.chained else self.proof.retained.source)
             runtime = Path(payload['runtime'])
             pinned = source_pin(runtime/'mtk')
             loader = loader_bytes(root/'dependencies/owner-da/loader.bin', DA_SHA256)
@@ -90,8 +99,8 @@ class TransitionWorker:
                 return ConnectedMtkWriter(mtk, REVIEWED_REVISION, release=release, bundle=bundle, binding=binding,
                     progress=lambda phase, target, done, total: self.wire.send({'event': 'progress',
                         'phase': phase, 'target': target, 'done': done, 'total': total}))
-            result = transition.transition(self.proof, reader, factory, payload['output'],
-                                           bus=payload['bus'], ports=payload['ports'])
+            result = (transition.transition_chained if self.chained else transition.transition)(
+                self.proof, reader, factory, payload['output'], bus=payload['bus'], ports=payload['ports'])
             self.output = Path(payload['output'])
             self.verified = True
             self.wire.send({'event': op, 'result': result})
@@ -102,7 +111,7 @@ class TransitionWorker:
             recovery.publish(self.output, 'restart-requested.json', {'requested': True, 'acknowledged': False})
             self.backend.boot_after_capture()
             recovery.publish(self.output, 'restart-acknowledged.json', {'requested': True, 'acknowledged': True})
-            pin = transition.complete_receipt(self.output)
+            pin = (transition.complete_chained_receipt if self.chained else transition.complete_receipt)(self.output)
             self.wire.send({'event': op, 'result': {'acknowledged': True, 'receipt_sha256': pin}})
             return False
         elif op == 'transition_close':

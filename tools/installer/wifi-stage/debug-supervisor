@@ -5,14 +5,37 @@ BB=/bin/busybox
 umask 077
 generation=0
 MAX_GENERATIONS=8
+retry_state=none
+
+# This is the sole producer of lifecycle state consumed by the fixed debug
+# probe. It never accepts a PID, command, path, or host input. Keep the line
+# short and allowlisted so a partially written or corrupt RAM file fails closed
+# to "unknown" in the probe instead of becoming a shell/control channel.
+lifecycle() {
+    printf 'supervisor=couch-wifi-debug-supervisor-v1 generation=%s phase=%s retry=%s marker=%s worker=%s worker_exit=%s\n' \
+        "$generation" "$1" "$retry_state" "$2" "$3" "$4" > /tmp/couch-wifi-debug.lifecycle
+}
+
+worker_result() {
+    case "$1" in
+        0) echo success;;
+        *) [ "$1" -ge 128 ] && echo signaled || echo failure;;
+    esac
+}
+
 while true; do
     if [ "$generation" -ge "$MAX_GENERATIONS" ]; then
         echo debug-retry-limit > /tmp/couch-wifi.error
         echo failed > /tmp/couch-wifi.status
         echo 'WiFi failed: debug-retry-limit' > /tmp/couch-wifi-debug.log
+        retry_state=limit
+        lifecycle retry-limit absent exited none
         # Keep the diagnostic FunctionFS service alive, but never start a
         # ninth generation. A fresh reviewed debug transition is required.
-        while true; do $BB sleep 3600; done
+        while true; do
+            lifecycle retry-limit absent exited none
+            $BB sleep 1
+        done
     fi
     generation=$((generation + 1))
     echo "$generation" > /tmp/couch-wifi-debug.generation
@@ -22,19 +45,34 @@ while true; do
     $BB rm -rf /tmp/couch-wpa
     : > /tmp/couch-wifi-debug.log
     : > /tmp/probe.log
+    lifecycle generation-started absent starting none
     /bin/couch-wifi-init >> /tmp/couch-wifi-debug.log 2>&1 &
     worker=$!
+    lifecycle worker-running absent running none
     while $BB kill -0 "$worker" 2>/dev/null; do
         if [ -f /tmp/couch-wifi-debug.retry ]; then
             # Fixed process names only; no host-provided command or path.
+            retry_state=consumed
+            lifecycle retry-consumed present running none
             $BB kill "$worker" 2>/dev/null
             $BB killall wpa_supplicant wmt_launcher wmt_loader 2>/dev/null
             break
         fi
+        lifecycle worker-running absent running none
         $BB sleep 1
     done
     $BB wait "$worker" 2>/dev/null
-    [ -f /tmp/couch-wifi-debug.retry ] || {
-        while [ ! -f /tmp/couch-wifi-debug.retry ]; do $BB sleep 1; done
-    }
+    result=$?
+    if [ -f /tmp/couch-wifi-debug.retry ]; then
+        retry_state=consumed
+        lifecycle retry-consumed present exited "$(worker_result "$result")"
+    else
+        lifecycle waiting-retry absent exited "$(worker_result "$result")"
+        while [ ! -f /tmp/couch-wifi-debug.retry ]; do
+            lifecycle waiting-retry absent exited "$(worker_result "$result")"
+            $BB sleep 1
+        done
+        retry_state=consumed
+        lifecycle retry-consumed present exited "$(worker_result "$result")"
+    fi
 done

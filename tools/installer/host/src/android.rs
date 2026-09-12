@@ -181,18 +181,55 @@ pub fn capture(adb: &Path, serial: &str) -> Result<AndroidIdentity> {
         model.len() <= 128 && !model.chars().any(char::is_control),
         "Invalid Android model response"
     );
+    // The stock About screen shows Build.getSerial(), which is ro.serialno, and
+    // stock init also writes ro.serialno into the USB serial (see
+    // docs/installer-public-inputs.md). Accept it as the Device ID only when it
+    // equals the serial ADB enumerated, so a property that disagrees with the
+    // physical device still falls back to the operator's recorded value.
+    let device_id = device_id_from_serial(serial, query(&["getprop", "ro.serialno"])?);
+    let wifi_mac = wifi_mac_with_radio(&query)?;
     Ok(AndroidIdentity {
         serial: serial.into(),
         model,
-        // Vendor Device ID is not Android ID or ro.serialno. No verified
-        // property mapping exists; the TUI must ask for the recorded value.
-        device_id: None,
-        wifi_mac: mac(query(&["cat", "/sys/class/net/wlan0/address"])?),
+        device_id,
+        wifi_mac,
         bt_mac: mac(query(&["settings", "get", "secure", "bluetooth_address"])?),
         cid: canonical_cid(query(&["cat", "/sys/block/mmcblk0/device/cid"])?),
         usb_bus: None,
         usb_ports: None,
     })
+}
+fn device_id_from_serial(serial: &str, value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_owned();
+    (serial_valid(&value) && value == serial).then_some(value)
+}
+/// The kernel only exposes wlan0 while Wi-Fi is on. If it is off, switch it on
+/// for the read and switch it back off afterwards, so enrollment leaves Android
+/// as it found it. Any step that fails leaves the MAC unknown for the operator
+/// prompt; nothing here is retried or treated as an error.
+fn wifi_mac_with_radio(
+    query: &dyn Fn(&[&str]) -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    let address: &[&str] = &["cat", "/sys/class/net/wlan0/address"];
+    if let Some(found) = mac(query(address)?) {
+        return Ok(Some(found));
+    }
+    let was_on = query(&["settings", "get", "global", "wifi_on"])?
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
+    if query(&["svc", "wifi", "enable"])?.is_none() {
+        return Ok(None);
+    }
+    let started = Instant::now();
+    let mut found = None;
+    while found.is_none() && started.elapsed() < Duration::from_secs(12) {
+        thread::sleep(Duration::from_millis(500));
+        found = mac(query(address)?);
+    }
+    if !was_on {
+        let _ = query(&["svc", "wifi", "disable"]);
+    }
+    Ok(found)
 }
 /// Call only after binding this serial to the retained physical USB port and CID.
 /// An ambiguous failure is never retried: the remote may already have restarted.
@@ -251,6 +288,7 @@ printf '%s\n' "$*" >> calls
 case "$*" in
   'devices -l') printf 'List of devices attached\nremote device model:HA100\n' ;;
   '-s remote shell getprop ro.product.model') printf HA100 ;;
+  '-s remote shell getprop ro.serialno') printf 'other-unit' ;;
   '-s remote shell cat /sys/class/net/wlan0/address') printf 'a0:b1:c2:d3:e4:f5' ;;
   '-s remote shell settings get secure bluetooth_address') printf null ;;
   '-s remote shell cat /sys/block/mmcblk0/device/cid') printf 'a1234567890123456789012345678901' ;;
@@ -264,8 +302,14 @@ esac
         let identity = capture(&adb, "remote").unwrap();
         assert_eq!(identity.model, "HA100");
         assert_eq!(identity.wifi_mac.as_deref(), Some("a0:b1:c2:d3:e4:f5"));
+        // ro.serialno that disagrees with the enumerated serial is not a Device ID.
         assert!(identity.device_id.is_none() && identity.bt_mac.is_none());
         assert!(identity.cid.is_some());
+        let calls_before = std::fs::read_to_string(root.path().join("calls")).unwrap();
+        assert!(
+            !calls_before.contains("svc wifi"),
+            "Wi-Fi radio untouched when wlan0 exists"
+        );
         assert!(reboot(&adb, "remote").is_err());
         assert!(reboot(&adb, "unauthorized").is_err());
         assert!(reboot(&adb, "$(injection)").is_err());
@@ -278,6 +322,46 @@ esac
             1
         );
         assert!(!calls.contains("unauthorized") && !calls.contains("injection"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn device_id_follows_matching_serial_and_wifi_radio_is_restored() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let adb = root.path().join("adb");
+        // wlan0 exists only after `svc wifi enable`; Wi-Fi was off beforehand.
+        std::fs::write(
+            &adb,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> calls
+case "$*" in
+  'devices -l') printf 'List of devices attached\nremote device model:HA100\n' ;;
+  '-s remote shell getprop ro.product.model') printf HA100 ;;
+  '-s remote shell getprop ro.serialno') printf ' remote\n' ;;
+  '-s remote shell cat /sys/class/net/wlan0/address') [ -f wifi-on ] && printf 'a0:b1:c2:d3:e4:f5\n' || exit 1 ;;
+  '-s remote shell settings get global wifi_on') printf '0\n' ;;
+  '-s remote shell svc wifi enable') touch wifi-on ;;
+  '-s remote shell svc wifi disable') rm -f wifi-on ;;
+  '-s remote shell settings get secure bluetooth_address') printf 'BC:EE:00:00:00:6E\n' ;;
+  '-s remote shell cat /sys/block/mmcblk0/device/cid') printf 'a1234567890123456789012345678901' ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let identity = capture(&adb, "remote").unwrap();
+        assert_eq!(identity.device_id.as_deref(), Some("remote"));
+        assert_eq!(identity.wifi_mac.as_deref(), Some("a0:b1:c2:d3:e4:f5"));
+        assert_eq!(identity.bt_mac.as_deref(), Some("bc:ee:00:00:00:6e"));
+        let calls = std::fs::read_to_string(root.path().join("calls")).unwrap();
+        let enable = calls.find("svc wifi enable").unwrap();
+        let disable = calls.find("svc wifi disable").unwrap();
+        assert!(enable < disable, "radio switched back off after the read");
+        assert!(!root.path().join("wifi-on").exists());
+        assert_eq!(device_id_from_serial("remote", Some("$(x)".into())), None);
+        assert_eq!(device_id_from_serial("remote", None), None);
     }
 
     #[cfg(unix)]

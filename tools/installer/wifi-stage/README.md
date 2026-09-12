@@ -74,6 +74,27 @@ images return only `failed`; they must be rebooted into a diagnostic build to
 identify the failing step. USB status also reports whether credentials have
 already been provisioned, so the host refuses a second provisioning attempt.
 
+Supplicant startup and kernel randomness: the `-dd` capture from the first debug
+stage ended immediately after WPS initialization, with the process alive and the
+control directory empty. In wpa_supplicant 2.10 the next step is EAPOL
+initialization, which creates an OpenSSL 3 TLS context; OpenSSL seeds itself with
+a blocking `getrandom(2)`, and this 3.18 kernel only releases it once its
+nonblocking pool is initialized. Percpu timer interrupts do not feed that pool, so
+an idle board can take minutes. The stage therefore waits 90 seconds (300 in the
+debug stage) for the control socket, execs the supplicant directly so `$!`,
+`/proc` snapshots and the failure kill address the real process, records a
+timeline with `entropy_avail` and the kernel's pool message at each step, and in
+the debug stage keeps observing a blocked supplicant after a timeout. The debug
+stage also opens the gen2 driver's dynamic-debug tap around power-on. Init keeps
+streaming startup diagnostics over serial until provisioning delivers a key. The
+installer stage additionally performs bounded direct reads of its read-only
+recovery node while the supplicant starts: eMMC interrupts are the only fast
+entropy source on this board, and 16 MiB of 512-byte reads credits the pool in
+seconds. The debug stage has no block node and measures the natural pool instead.
+On 2026-09-12 the debug stage recorded the pool initializing at 20.8 s of uptime
+and the control socket appearing 10 s after the supplicant started, with the
+process parked in `SyS_getrandom` until then.
+
 Validation still required: WMT bring-up from this independent root, association,
 DHCP, pinned TLS over WiFi, USB disconnect survival, measured throughput and RAM
 pressure. Local hashing and transport do not establish permission or transaction

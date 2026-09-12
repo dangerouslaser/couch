@@ -207,6 +207,7 @@ fn exercise_network(
         }
     }
     let wire = WirePlan {
+        restore: false,
         vendor_source_sha256: None,
         network: network.then(|| network::Network {
             ssid_hex: "61".into(),
