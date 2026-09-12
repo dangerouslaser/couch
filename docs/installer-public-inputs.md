@@ -25,7 +25,13 @@ Confirmed stock evidence:
 - Launcher 1.4.2 `SettingAboutActivity` displays `Build.getSerial()`; its
   `formatSerial` method only inserts spaces. `MachineUtils` also reads
   `ro.serialno`, but has development fallback logic and is not the primary
-  About-screen source.
+  About-screen source. Native enrollment therefore records `ro.serialno` as the
+  Device ID, but only when it equals the serial ADB enumerated for the selected
+  remote (on 2026-09-12 both read `0127A260301T0463`, also the USB `iSerial`);
+  any disagreement falls back to the operator prompt. Wi-Fi MAC is read from
+  `wlan0`; if Android has Wi-Fi off the kernel exposes no `wlan0`, so
+  enrollment switches the radio on for the read and back off afterwards. Both
+  values remain opaque preservation records, not decoded identity.
 - Stock `init.mt6580.usb.rc` writes `${ro.serialno}` into Android USB `iSerial`
   and `${ro.product.model}` into `iProduct` on boot. Reading the normal Android
   USB serial before reboot may provide an ADB-free Device ID capture. This

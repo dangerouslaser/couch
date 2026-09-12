@@ -125,7 +125,7 @@ fn identity_input(
         let value = ui
             .input(
                 label,
-                "Read this value from Android device information before the remote restarts.",
+                "ADB could not read this value. Read it from Android device information before the remote restarts.",
                 false,
             )?
             .to_string();
