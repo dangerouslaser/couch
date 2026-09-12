@@ -2,6 +2,7 @@
 # Build the standalone Sonos client included in the runtime inventory.
 set -eu
 cd "$(dirname "$0")/.."
+. tools/sonos-build-env.sh
 TARGET=${TARGET:-armv7-unknown-linux-musleabihf}
 case "${1:-}" in
     --host) TARGET=host ;;

@@ -12,6 +12,8 @@
 # tools/run-webui.sh serves.
 set -e
 cd "$(dirname "$0")/.."
+# The daemon links couch-sonos, so it carries the developer key too.
+. tools/sonos-build-env.sh
 
 TARGET=${TARGET:-armv7-unknown-linux-musleabihf}
 [ "$1" = "--host" ] && TARGET=host
