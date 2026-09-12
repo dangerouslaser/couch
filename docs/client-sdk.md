@@ -96,6 +96,7 @@ cargo test -p couch-sdk --features testing     # the SDK's own tests
 cargo test -p couch-echo                       # the example client's contract tests
 cargo run -p couch-echo --example demo         # a whole session against a fake TV
 cargo test -p couch-denon                      # a real client, through the SDK
+cargo test -p couch-sonos                      # a second one, over HTTPS
 cargo doc -p couch-sdk --features testing --no-deps   # rustdoc, harness included
 ```
 
@@ -341,9 +342,11 @@ Notes that will save you a day:
   repeating because every "SDK" implies otherwise.
 - **The SDK is 0.1.0 and in-tree.** It has no stability guarantee and no
   release. Expect to change with it.
-- **One existing client has been adapted.** `couch-denon` uses the shared
-  settings helper and implements `DeviceClient`. The other nine keep their own
-  shapes; there is no migration in progress and none is required.
+- **Two existing clients have been adapted.** `couch-denon` uses the shared
+  settings helper and implements `DeviceClient`; `couch-sonos` implements both
+  over its HTTPS Control API transport, and shows what a client does when the
+  mock host cannot speak its protocol (`docs/sonos.md`). The other eight keep
+  their own shapes; there is no migration in progress and none is required.
 - **No streaming or subscription API.** `couch-webos` and `couch-kodi` receive
   pushed updates, and those paths stay in the client and the broker. The SDK
   covers request/response, status and enumeration only.
@@ -357,8 +360,12 @@ Notes that will save you a day:
   holds a multicast socket. Nothing calls `Discover` yet.
 - **The mock host is a line protocol.** It fits Denon, Kodi over TCP and the
   example; it is not an HTTP server, a TLS endpoint or a WebSocket peer. A
-  client needing those still writes its own fixture, as `couch-ha` and
-  `couch-hue` do with `tiny_http`.
+  client needing those still writes its own fixture, as `couch-ha`, `couch-hue`
+  and `couch-sonos` do with `tiny_http`. `contract_findings` still earns its
+  place there: everything it decides before connecting - the slug, the labels,
+  canonical and unique capability ids, the gate agreeing with the declaration,
+  and the settings surviving a real 0600 file - runs against any settings, and
+  `couch-sonos` asserts that `connect failed` is the only finding left.
 - **`cargo fmt --check` is not clean on committed code** in any of the five
   workspaces, including `clients/`. Check your own crate with
   `cargo fmt -p <crate> -- --check` and leave the rest alone unless you are

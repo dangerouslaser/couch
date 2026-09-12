@@ -7,7 +7,7 @@ fn main() {
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage="Usage: couch-sonos discover | IPv4 [status|play|pause|stop|next|previous|volume 0..100|mute|unmute]";
+    let usage="Usage: couch-sonos discover | IPv4 [status|play|pause|play-pause|stop|next|previous|volume 0..100|mute|unmute]";
     if args.first().map(String::as_str) == Some("discover") && args.len() == 1 {
         println!("{}", serde_json::to_string(&couch_sonos::discover()?)?);
         return Ok(());
@@ -29,6 +29,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let command = match action {
         "play" => Some(Playback::Play),
         "pause" => Some(Playback::Pause),
+        "play-pause" => Some(Playback::PlayPause),
+        // The Control API has no stop; this pauses the group.
         "stop" => Some(Playback::Stop),
         "next" => Some(Playback::Next),
         "previous" => Some(Playback::Previous),

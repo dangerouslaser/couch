@@ -55,12 +55,19 @@ impl Api {
             };
         }
         if let [id, "sonos", rest @ ..] = path {
-            let host = self.with(|s| match &s.config().connection(&Id::new(*id))?.provider {
-                Provider::Sonos { host } => Some(host.clone()),
+            // One household API key sits beside the per-connection settings.
+            let target = self.with(|s| match &s.config().connection(&Id::new(*id))?.provider {
+                Provider::Sonos { host } => Some((
+                    host.clone(),
+                    s.path()
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .join(couch_sonos::KEY_FILE),
+                )),
                 _ => None,
             });
-            return match host {
-                Some(host) => super::sonos::route(method, rest, body, &host),
+            return match target {
+                Some((host, key_file)) => super::sonos::route(method, rest, body, &host, &key_file),
                 None => Reply::error(404, "Sonos connection not found"),
             };
         }
