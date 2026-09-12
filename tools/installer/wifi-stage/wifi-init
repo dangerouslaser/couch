@@ -4,32 +4,108 @@ BB=/bin/busybox
 umask 077
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 starting_supplicant=0
+supplicant=
+supplicant_start=
+# The supplicant links OpenSSL 3, whose first RAND use calls getrandom(2) and
+# blocks until this 3.18 kernel's nonblocking pool is initialized. On an idle
+# board only device interrupts feed that pool, so it can take minutes after
+# boot. Give it time instead of declaring a dead supplicant after ten seconds.
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    SOCKET_WAIT=300
+else
+    SOCKET_WAIT=90
+fi
 echo initializing > /tmp/couch-wifi.status
+uptime_s() {
+    $BB cut -d' ' -f1 /proc/uptime 2>/dev/null
+}
+entropy() {
+    $BB cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || echo '?'
+}
+pool_state() {
+    # Linux 3.18 logs this once, when getrandom(2) stops blocking.
+    if $BB dmesg 2>/dev/null | $BB grep -q 'random: nonblocking pool is initialized'; then
+        echo ready
+    else
+        echo seeding
+    fi
+}
+timeline() {
+    echo "[$(uptime_s)s] $1 entropy=$(entropy) pool=$(pool_state)" >> /tmp/couch-wifi-timeline.log
+}
 step() {
     echo "$1" > /tmp/couch-wifi.step
     echo "WiFi step: $1" >> /tmp/probe.log
+    timeline "step $1"
+}
+random_dmesg() {
+    # Kernel randomness messages carry the uptime at which the pool became
+    # usable; this is the measurement the debug stage exists to take.
+    $BB dmesg 2>/dev/null | $BB grep 'random:' | $BB tail -c "$1"
 }
 debug_startup_evidence() {
     # This path is reachable only while the empty-network supplicant is
-    # starting. It deliberately prefers its detailed startup and liveness
-    # record over noisy kernel history, while retaining a small kernel tail.
+    # starting. It prefers the timeline and liveness record over kernel
+    # history, while retaining a small kernel tail.
     {
         echo "WiFi failed: $1"
-        # Keep the last source-emitted startup markers first. The wait-state
-        # snapshots below are fixed, pre-credential observations, not a host
-        # supplied process inspection interface.
-        $BB tail -c 1800 /tmp/couch-wpa-startup.log 2>/dev/null
-        $BB tail -c 1280 /tmp/couch-wifi-debug.wait 2>/dev/null
+        # The wait-state snapshots below are fixed, pre-credential
+        # observations, not a host supplied process inspection interface.
+        $BB tail -c 900 /tmp/couch-wifi-timeline.log 2>/dev/null
+        $BB tail -c 1100 /tmp/couch-wifi-debug.wait 2>/dev/null
         if $BB kill -0 "$supplicant" 2>/dev/null; then
             echo "WiFi supplicant pid $supplicant still running at failure"
         else
-            echo "WiFi supplicant pid $supplicant no longer running at failure"
+            echo "WiFi supplicant pid $supplicant no longer running at failure, exit status ${supplicant_exit:-unknown}"
         fi
+        echo "WiFi kernel randomness:"
+        random_dmesg 300
         echo "WiFi control directory:"
         { $BB ls -la /tmp/couch-wpa 2>&1 || \
-            echo 'WiFi control directory absent'; } | $BB head -c 256
+            echo 'WiFi control directory absent'; } | $BB head -c 200
+        echo "WiFi supplicant log tail:"
+        $BB tail -c 500 /tmp/couch-wpa-startup.log 2>/dev/null
+        $BB dmesg | $BB grep -iE 'gen2.*(error|warn|fail)' | $BB tail -c 200
         $BB dmesg | $BB tail -c 256 2>/dev/null
     } | $BB tail -c 4096 > /tmp/couch-wifi-debug.log
+}
+
+debug_ready_evidence() {
+    # Success is evidence too: how long the control socket took, and when the
+    # kernel pool became usable, decide the production wait and accelerator.
+    {
+        echo "WiFi supplicant control socket ready after ${1}s"
+        $BB tail -c 1200 /tmp/couch-wifi-timeline.log 2>/dev/null
+        $BB tail -c 1400 /tmp/couch-wifi-debug.wait 2>/dev/null
+        echo "WiFi kernel randomness:"
+        random_dmesg 400
+        echo "WiFi supplicant log tail:"
+        $BB tail -c 600 /tmp/couch-wpa-startup.log 2>/dev/null
+    } | $BB tail -c 4096 > /tmp/couch-wifi-debug.log
+}
+
+debug_late_watch() {
+    # After a socket timeout the blocked supplicant is left alone. Keep
+    # watching it for a bounded time so a late socket or a late pool
+    # initialization still lands in the bounded debug log.
+    pid=$1
+    n=0
+    while [ "$n" -lt 1500 ]; do
+        if [ -S /tmp/couch-wpa/wlan0 ] || ! $BB kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        $BB sleep 2; n=$((n+2))
+    done
+    {
+        if [ -S /tmp/couch-wpa/wlan0 ]; then
+            echo "WiFi late: control socket appeared at $(uptime_s)s entropy=$(entropy)"
+        elif $BB kill -0 "$pid" 2>/dev/null; then
+            echo "WiFi late: supplicant still blocked at $(uptime_s)s entropy=$(entropy)"
+        else
+            echo "WiFi late: supplicant exited before $(uptime_s)s"
+        fi
+        random_dmesg 200
+    } | $BB head -c 600 >> /tmp/couch-wifi-debug.log
 }
 
 debug_print_proc_field() {
@@ -90,7 +166,7 @@ debug_wait_snapshot() {
     checkpoint=$1
     [ -f /etc/couch-wifi-debug-mode ] || return 0
     {
-        echo "WiFi wait snapshot: $checkpoint"s
+        echo "WiFi wait snapshot: ${checkpoint}s uptime=$(uptime_s)s entropy=$(entropy) pool=$(pool_state)"
         current_start=$($BB awk '{print $22}' "/proc/$supplicant/stat" 2>/dev/null)
         case "$supplicant_start:$current_start" in
             *[!0-9:]*|:*)
@@ -115,27 +191,32 @@ debug_wait_snapshot() {
                 ;;
         esac
         debug_print_proc_field wchan "/proc/$supplicant/wchan" 128
-        debug_print_proc_field syscall "/proc/$supplicant/syscall" 192
-        debug_print_proc_field stack "/proc/$supplicant/stack" 256
-        debug_fd_snapshot
-        if [ ! -r /proc/net/unix ]; then
-            echo 'WiFi wait unix: unavailable-or-permission-denied'
-        else
-            unix=$($BB grep -F /tmp/couch-wpa /proc/net/unix 2>/dev/null | \
-                $BB head -c 192 | $BB tr -c '\011\012\015\040-\176' '?')
-            [ -n "$unix" ] || unix=none
-            printf 'WiFi wait unix: %s\n' "$unix"
+        if [ "$checkpoint" = 2 ]; then
+            # Full detail once; later checkpoints stay one short record each.
+            debug_print_proc_field syscall "/proc/$supplicant/syscall" 192
+            debug_print_proc_field stack "/proc/$supplicant/stack" 256
+            debug_fd_snapshot
+            if [ ! -r /proc/net/unix ]; then
+                echo 'WiFi wait unix: unavailable-or-permission-denied'
+            else
+                unix=$($BB grep -F /tmp/couch-wpa /proc/net/unix 2>/dev/null | \
+                    $BB head -c 192 | $BB tr -c '\011\012\015\040-\176' '?')
+                [ -n "$unix" ] || unix=none
+                printf 'WiFi wait unix: %s\n' "$unix"
+            fi
         fi
     } | $BB head -c 640 >> /tmp/couch-wifi-debug.wait
 }
 
 start_supplicant() {
+    # exec keeps $! bound to wpa_supplicant itself rather than a wrapper shell,
+    # so liveness checks, /proc snapshots and the failure kill address the
+    # real process. The debug image has no provisioning opcode or networks, so
+    # detailed nl80211/control-interface output stays strictly pre-credential.
     if [ -f /etc/couch-wifi-debug-mode ]; then
-        # The debug image has no provisioning opcode or networks, so detailed
-        # nl80211/control-interface output stays strictly pre-credential.
-        /sbin/wpa_supplicant -dd -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
+        exec /sbin/wpa_supplicant -dd -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
     else
-        /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
+        exec /sbin/wpa_supplicant -i wlan0 -Dnl80211 -c /tmp/couch-wpa_supplicant.conf
     fi
 }
 
@@ -143,25 +224,31 @@ fail() {
     echo "$1" > /tmp/couch-wifi.error
     echo failed > /tmp/couch-wifi.status
     echo "WiFi failed: $1" >> /tmp/probe.log
+    timeline "failed $1"
     if [ "$starting_supplicant" = 1 ]; then
         # Only startup output from the empty-network configuration is exposed.
         # Once ready, provisioning may include secrets and logs stay RAM-private.
         $BB tail -c 4096 /tmp/couch-wpa-startup.log >> /tmp/probe.log 2>/dev/null
-        # A live supplicant with no control socket and a dead one both used to
-        # report supplicant-exit. Record which actually happened, plus the
-        # control directory and kernel tail, which init stops emitting once the
-        # configuration file exists and so cannot show a supplicant crash.
+        # A live supplicant with no control socket and a dead one are different
+        # faults. Record which happened, plus the timeline, control directory
+        # and kernel tail, which init stops emitting once credentials arrive
+        # and so cannot show a supplicant crash.
+        $BB cat /tmp/couch-wifi-timeline.log >> /tmp/probe.log 2>/dev/null
         if $BB kill -0 "$supplicant" 2>/dev/null; then
             echo "WiFi supplicant pid $supplicant still running at failure" >> /tmp/probe.log
         else
-            echo "WiFi supplicant pid $supplicant no longer running at failure" >> /tmp/probe.log
+            echo "WiFi supplicant pid $supplicant no longer running at failure, exit status ${supplicant_exit:-unknown}" >> /tmp/probe.log
         fi
         echo "WiFi control directory:" >> /tmp/probe.log
         { $BB ls -la /tmp/couch-wpa 2>&1 || \
             echo 'WiFi control directory absent'; } | $BB head -c 1024 >> /tmp/probe.log
+        random_dmesg 1024 >> /tmp/probe.log
         $BB dmesg | $BB tail -c 4096 >> /tmp/probe.log 2>/dev/null
         if [ -f /etc/couch-wifi-debug-mode ]; then
             debug_startup_evidence "$1"
+            if [ "$1" = supplicant-socket-timeout ]; then
+                debug_late_watch "$supplicant" &
+            fi
         fi
     fi
     # The debug binary has no provisioning opcode. Preserve only this bounded
@@ -215,13 +302,27 @@ while ! $BB dmesg | $BB grep -qE 'set STP mode success|wmt_lib_set_hif:new hifTy
 done
 # Use driver default calibration behavior. No fabricated/persisted device identity.
 step power
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    # The gen2 driver logs through pr_debug; open its tap so a failed probe or
+    # a stalled ioctl says something in the bounded kernel tail.
+    $BB mount -t debugfs none /sys/kernel/debug 2>/dev/null
+    echo 'file *gen2* +p' > /sys/kernel/debug/dynamic_debug/control 2>/dev/null
+fi
 echo 1 > /dev/wmtWifi || fail power-on
 n=0
 while [ ! -d /sys/class/net/wlan0 ]; do
     [ "$n" -lt 15 ] || fail interface-timeout
     $BB sleep 1; n=$((n+1))
 done
+timeline "wlan0 registered after ${n}s"
+# The proven runtime path settles for three seconds after the interface
+# registers before bringing it up.
+$BB sleep 3
 $BB ifconfig wlan0 up || fail interface-up
+if [ -f /etc/couch-wifi-debug-mode ]; then
+    echo 'file *gen2* -p' > /sys/kernel/debug/dynamic_debug/control 2>/dev/null
+fi
+timeline "wlan0 up"
 # Start one supplicant with no networks. Scans and provisioning share its PID.
 # v2.10 initializes the control interface after driver setup; make its private
 # directory explicit before launch instead of relying on that later setup.
@@ -232,24 +333,35 @@ starting_supplicant=1
 if [ -f /etc/couch-wifi-debug-mode ]; then
     : > /tmp/couch-wifi-debug.wait
 fi
+timeline "supplicant starting"
 start_supplicant >/tmp/couch-wpa-startup.log 2>&1 &
 supplicant=$!
 supplicant_start=$($BB awk '{print $22}' "/proc/$supplicant/stat" 2>/dev/null)
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
     # These two outcomes are different faults and must not share a reason.
-    $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
-    case "$n" in 2|8) debug_wait_snapshot "$n";; esac
-    [ "$n" -lt 10 ] || fail supplicant-socket-timeout
+    if ! $BB kill -0 "$supplicant" 2>/dev/null; then
+        wait "$supplicant"
+        supplicant_exit=$?
+        fail supplicant-exit
+    fi
+    case "$n" in 2|8|20|40|60|90|120|180|240) debug_wait_snapshot "$n";; esac
+    [ "$n" -lt "$SOCKET_WAIT" ] || fail supplicant-socket-timeout
     $BB sleep 1; n=$((n+1))
 done
 starting_supplicant=0
+timeline "control socket ready after ${n}s"
+echo "WiFi supplicant control socket ready after ${n}s" >> /tmp/probe.log
 # The dedicated debug stage never reaches provisioning or DHCP. It leaves the
 # empty-network supplicant alive for observation until its fixed supervisor
 # receives a retry marker; no credential-bearing configuration can be accepted.
 if [ -f /etc/couch-wifi-debug-mode ]; then
+    debug_ready_evidence "$n"
     echo ready > /tmp/couch-wifi.status
     while $BB kill -0 "$supplicant" 2>/dev/null; do $BB sleep 1; done
+    wait "$supplicant"
+    supplicant_exit=$?
+    starting_supplicant=1
     fail supplicant-exit
 fi
 step credentials
@@ -258,6 +370,9 @@ while true; do
     $BB kill -0 "$supplicant" 2>/dev/null || fail supplicant-exit
     if [ -f /tmp/couch-wifi.request ] && [ -f /tmp/couch-wpa_supplicant.conf ]; then
         $BB rm -f /tmp/couch-wifi.request /tmp/couch-wifi.ip
+        # From here the configuration may carry a network key; init stops
+        # streaming startup logs over the diagnostic serial channel.
+        : > /tmp/couch-wifi.credentials
         echo connecting > /tmp/couch-wifi.status
         step connect
         # The USB worker already reconfigured this supplicant and received OK.

@@ -278,8 +278,9 @@ class DebugSupervisorTests(unittest.TestCase):
         self.assertFalse((self.root / 'couch-wifi-debug.wait').exists())
 
     def test_wait_snapshots_are_fixed_precredential_debug_only(self):
-        self.assertIn('case "$n" in 2|8)', self.wifi_init)
-        self.assertLess(self.wifi_init.index('case "$n" in 2|8)'),
+        schedule = 'case "$n" in 2|8|20|40|60|90|120|180|240)'
+        self.assertIn(schedule, self.wifi_init)
+        self.assertLess(self.wifi_init.index(schedule),
                         self.wifi_init.rindex('starting_supplicant=0'))
         credentials = self.wifi_init[self.wifi_init.index('step credentials'):]
         self.assertNotIn('debug_wait_snapshot', credentials)

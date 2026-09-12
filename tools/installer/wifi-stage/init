@@ -53,7 +53,9 @@ serial_log() {
           fi
           $BB cat /tmp/probe.log 2>/dev/null
           # Capture startup failures before any network credentials arrive.
-          if [ ! -f /tmp/couch-wpa_supplicant.conf ]; then
+          # The empty-network supplicant configuration carries no secret; the
+          # marker appears when provisioning delivers a key.
+          if [ ! -f /tmp/couch-wifi.credentials ]; then
               $BB tail -c 4096 /tmp/wifi-init.log /tmp/wmt-loader.log /tmp/wmt-launcher.log 2>/dev/null
               $BB dmesg | $BB tail -c 8192
           fi; } > /dev/ttyGS0
