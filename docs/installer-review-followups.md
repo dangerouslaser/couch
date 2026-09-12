@@ -69,3 +69,34 @@ not-yet-validated Wi-Fi stock-restore feature).
     is about to overwrite. This is why the over-Wi-Fi stock restore is documented
     as not hardware validated; the USB download-agent stock restore is unaffected
     and was exercised on hardware on 2026-09-12.
+
+## Hardware findings, 2026-09-12 Wi-Fi stock restore run
+
+- **Stage TLS deadline (fixed, PR #80).** The connection deadline was a single
+  whole-transaction budget (max 30 min) set once at connect. The 5.6 GB stock
+  userdata at ~5 MiB/s over Wi-Fi plus backups/recovery/readback exceeded it and
+  the read after "synced userdata" aborted as "stage JSON header interrupted".
+  `DeadlineSocket` is now an idle timeout that resets on every byte, so a slow but
+  progressing transfer never aborts while a stalled one still fails.
+- **Wi-Fi write throughput (open).** The over-Wi-Fi write held ~5-7 MiB/s for the
+  5.6 GB userdata. It is not per-chunk fsync (single `sync_all` at close in
+  `install/block.rs`) and not O_DIRECT (the write path opens the block node with
+  `direct=false`; O_DIRECT is only the readback). The limiter is elsewhere -
+  candidate: the host/probe chunk-size and TLS framing (`stage.rs` CHUNK is 1 MiB,
+  the probe's is 64 KiB), zlib decode, or buffered eMMC write throughput. Needs
+  on-hardware profiling before any write-path change; do not change it blind.
+- **Stock restore identity strictness.** `stock_baseline_restore.compare_baseline`
+  requires all five calibration partitions to equal the baseline, but Android and
+  Couch legitimately rewrite `nvdata` (and this device's `protect1`/`protect2`
+  differed from an older baseline), so a restore that is safe by CID + layout was
+  rejected as "Runtime identity baseline differs: nvdata". Same over-strict pattern
+  as the enrollment rebind gate (fixed for restore). Recovery workaround: build a
+  baseline from the device's current enrollment. A durable fix would bind the
+  destructive restore by CID + capacity + layout and treat calibration drift as a
+  reviewed, explicit condition rather than a hard mismatch.
+- **Remote recovery limitation.** A remote left in a stale MediaTek preloader
+  (after an aborted DA/Wi-Fi session) only recovers with a physical power cycle:
+  software USB reset, port de/reauthorize and an mtkclient reset do not reboot a
+  bare preloader, and the lab host cannot cut USB port power. Bootstrapping the
+  installer's restore/reinstall path also requires a *running* Couch or Android;
+  it cannot bootstrap a device stuck in the RAM stage.
