@@ -52,8 +52,11 @@ HTTP 400 `ERROR_API_KEY_VALIDATION_FAILED`. The key is read, in order, from:
    `connections/<id>/sonos-connection.json`, written at mode 0600 by
    `couch_sdk::save_private` like every other credential (SDK path only);
 3. the shared `sonos-api-key` file beside `config.json`
-   (`/opt/couch/sonos-api-key` on the remote; `COUCH_HOME_DIR` relocates it for
-   development and `COUCH_SONOS_API_KEY_FILE` overrides the path outright);
+   (`/opt/couch/sonos-api-key` on the remote). One rule resolves it for every
+   reader: `COUCH_SONOS_API_KEY_FILE` overrides the path outright, otherwise the
+   daemon uses the directory holding the `config.json` it owns and the GUI and
+   CLI use `COUCH_HOME_DIR` or the installed root. Moving the key with the
+   override moves it for all three;
 4. a built-in placeholder UUID that is not a credential.
 
 Both file locations exist because the key is a *household* credential, not a

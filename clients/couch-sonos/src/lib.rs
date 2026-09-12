@@ -17,10 +17,15 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const KEY_HEADER: &str = "X-Sonos-Api-Key";
 /// One operator override for the whole remote, ahead of every file.
 pub const KEY_ENV: &str = "COUCH_SONOS_API_KEY";
+/// Moves the household key file, for every process that reads it.
+pub const KEY_FILE_ENV: &str = "COUCH_SONOS_API_KEY_FILE";
 const SERVICE: &str = "_sonos._tcp.local";
 const MDNS: (&str, u16) = ("224.0.0.251", 5353);
 /// File name, alongside the other connection settings, holding one API key for
 /// the household. Keep real keys out of Git.
+///
+/// Every reader resolves it the same way: [`KEY_FILE_ENV`] if set, otherwise
+/// this name in the directory that holds `config.json`.
 pub const KEY_FILE: &str = "sonos-api-key";
 /// Stand-in used when no key is configured. Players that allow guest access
 /// currently accept any non-empty key; a real developer key from
@@ -194,10 +199,9 @@ fn key_from_env() -> Option<String> {
     std::env::var(KEY_ENV).ok()
 }
 /// Default key location, mirroring where the GUI keeps connection settings.
+/// For a process that already knows the configuration directory - the daemon
+/// owns `config.json` - use [`key_file_in`] so both agree.
 pub fn key_file() -> PathBuf {
-    if let Some(path) = std::env::var_os("COUCH_SONOS_API_KEY_FILE") {
-        return PathBuf::from(path);
-    }
     let root = std::env::var_os("COUCH_HOME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -207,7 +211,16 @@ pub fn key_file() -> PathBuf {
                 "/opt/couch"
             })
         });
-    root.join(KEY_FILE)
+    key_file_in(&root)
+}
+/// The household key file for a given configuration directory. The override
+/// outranks the directory, so moving the key moves it for every reader rather
+/// than only for the ones that guess the same path.
+pub fn key_file_in(home: &Path) -> PathBuf {
+    match std::env::var_os(KEY_FILE_ENV) {
+        Some(path) => PathBuf::from(path),
+        None => home.join(KEY_FILE),
+    }
 }
 /// The first usable key in order of precedence, or the placeholder.
 fn choose_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> String {

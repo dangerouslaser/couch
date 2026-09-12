@@ -488,6 +488,18 @@ fn api_key_prefers_environment_then_file_then_placeholder() {
     }
     std::fs::remove_file(&file).ok();
     assert!(key_file().ends_with(KEY_FILE));
+    // The daemon knows its own configuration directory; the override still wins,
+    // so no reader can end up looking at a different file from the others.
+    if std::env::var_os(KEY_FILE_ENV).is_none() {
+        assert_eq!(
+            key_file_in(Path::new("/srv/couch")),
+            Path::new("/srv/couch").join(KEY_FILE)
+        );
+        assert_eq!(
+            key_file_in(Path::new("/srv/couch")),
+            key_file_in(Path::new("/srv/couch"))
+        );
+    }
 }
 
 // Multicast DNS fixtures. Names are compressed exactly as players compress them.

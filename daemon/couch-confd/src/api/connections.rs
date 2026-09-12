@@ -55,14 +55,14 @@ impl Api {
             };
         }
         if let [id, "sonos", rest @ ..] = path {
-            // One household API key sits beside the per-connection settings.
+            // One household API key, resolved by the client's own rule so the
+            // daemon, the GUI and the CLI cannot read different files.
             let target = self.with(|s| match &s.config().connection(&Id::new(*id))?.provider {
                 Provider::Sonos { host } => Some((
                     host.clone(),
-                    s.path()
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."))
-                        .join(couch_sonos::KEY_FILE),
+                    couch_sonos::key_file_in(
+                        s.path().parent().unwrap_or(std::path::Path::new(".")),
+                    ),
                 )),
                 _ => None,
             });
