@@ -46,6 +46,14 @@ def scan(out, incoming):
     return value
 
 
+def driver_notice(network):
+    """The MediaTek gen2 driver injects a pseudo network named "NVRAM WARNING:
+    Err = 0x01" into scan results when it finds no calibration record. The RAM
+    stage deliberately runs without one, so the notice is expected and is not a
+    network anyone can join. Hide it before numbering the choices."""
+    return bytes.fromhex(network['ssid_hex']).startswith(b'NVRAM WARNING')
+
+
 def display_ssid(raw):
     # Surrogateescape preserves arbitrary SSID octets; controls/bidi cannot affect TUI.
     result = []
@@ -65,7 +73,7 @@ def network_form(terminal, out, incoming):
         terminal.stage(2, 'Scanning for Wi-Fi networks visible to your remote…',
                        'Keep the remote near your router. You can also enter a hidden network manually.')
         result = scan(out, incoming)
-        networks = result['networks']
+        networks = [n for n in result['networks'] if not driver_notice(n)]
         if result['status'] == 'unsupported':
             detail = 'This installer stage does not support scanning. Enter your network manually.'
         elif result['status'] != 'ok':

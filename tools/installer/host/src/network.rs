@@ -18,6 +18,13 @@ pub fn rpc(worker: &mut Worker, operation: &str, payload: Value) -> Result<Value
         Ok(event["result"].clone())
     })
 }
+/// The MediaTek gen2 driver injects a pseudo network named "NVRAM WARNING:
+/// Err = 0x01" into scan results when it finds no calibration record. The RAM
+/// stage deliberately runs without one, so the notice is expected there and is
+/// not a network anyone can join. Hide it; never treat it as a selectable SSID.
+fn driver_notice(raw: &[u8]) -> bool {
+    raw.starts_with(b"NVRAM WARNING")
+}
 fn failure_reason(status: &Value) -> &str {
     status["error"]
         .as_str()
@@ -120,14 +127,22 @@ pub fn select(worker: &mut Worker, ui: &mut Ui) -> Result<Value> {
                 && scan["truncated"].is_boolean(),
             "invalid network scan response"
         );
-        let networks = scan["networks"]
+        let scanned = scan["networks"]
             .as_array()
             .context("missing network list")?;
-        ensure!(networks.len() <= 64, "network list exceeds bound");
-        let mut choices = Vec::new();
-        for n in networks {
+        ensure!(scanned.len() <= 64, "network list exceeds bound");
+        // Filter before numbering so choice indices and network entries stay aligned.
+        let mut networks = Vec::new();
+        for n in scanned {
             let raw = decode(n["ssid_hex"].as_str().context("missing SSID")?)?;
             ensure!(!raw.is_empty() && raw.len() <= 32, "invalid scanned SSID");
+            if !driver_notice(&raw) {
+                networks.push(n);
+            }
+        }
+        let mut choices = Vec::new();
+        for n in &networks {
+            let raw = decode(n["ssid_hex"].as_str().context("missing SSID")?)?;
             let security = n["security"].as_str().context("missing network security")?;
             ensure!(
                 ["wpa2", "open", "enterprise", "wpa3", "wep", "unsupported"].contains(&security),
@@ -218,6 +233,14 @@ mod tests {
         );
         assert!(credentials(b"x", Some("short")).is_err());
         assert!(credentials(&[], None).is_err());
+    }
+    #[test]
+    fn driver_calibration_notice_is_not_a_network() {
+        assert!(driver_notice(b"NVRAM WARNING: Err = 0x01"));
+        assert!(driver_notice(b"NVRAM WARNING"));
+        assert!(!driver_notice(b"NVRAM"));
+        assert!(!driver_notice(b"home"));
+        assert!(!driver_notice(b" NVRAM WARNING: Err = 0x01"));
     }
     #[test]
     fn display_cannot_inject_terminal_controls() {
