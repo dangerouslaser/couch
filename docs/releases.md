@@ -53,10 +53,10 @@ copied between machines. The host needs:
   ([sonos.md](sonos.md#release-builds)), which is compiled into the GUI,
   daemon and CLI and never committed.
 
-With those in place the build sequence in
-[runtime payload inventory](runtime-payload.md) produces every ARM binary the
-inventory lists, and the inventory and packaging steps below run on the same
-machine. A macOS checkout builds the same binaries with the same scripts for
+With those in place `tools/build-release.sh` produces every ARM binary the
+[runtime payload inventory](runtime-payload.md) lists, in one command that
+sets the compiler and key environment once for all of them, and the inventory
+and packaging steps below run on the same machine. A macOS checkout builds the same binaries with the same scripts for
 development; it is not the release host.
 
 ## Assemble offline packages
