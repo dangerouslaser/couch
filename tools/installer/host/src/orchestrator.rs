@@ -233,12 +233,20 @@ pub fn run(ui: &mut Ui, config: Option<&Path>, local_payload: Option<&Path>) -> 
                 "Reinstall existing Couch",
                 "Import retained Android enrollment and back up the current Couch installation.",
             ),
+            choice(
+                "Restore stock Android",
+                "Write your saved Android originals and a fresh stock filesystem. Couch is replaced.",
+            ),
             choice("Cancel", "Leave the device unchanged."),
         ],
     )?;
-    if mode == 3 {
+    if mode == 4 {
         return Ok(());
     }
+    // Restore shares the reinstall bootstrap path: the device currently runs Couch
+    // and a saved Android enrollment is imported and re-bound before any write.
+    let reinstall = mode == 2 || mode == 3;
+    let restore = mode == 3;
     #[cfg(windows)]
     ui.choose("Windows USB driver setup", "The selected remote's MediaTek download interface and Couch installer interface (VID 0e8d, PID 201c) need usable WinUSB bindings. ADB working alone does not verify those drivers. Configure only this remote's interfaces; the installer will stop on a claim failure and will not replace drivers automatically.", &[choice("Continue with drivers prepared", "See the Windows USB notes in the installer guide.")])?;
     let release = public_inputs::release(
@@ -253,10 +261,10 @@ pub fn run(ui: &mut Ui, config: Option<&Path>, local_payload: Option<&Path>) -> 
             .to_str()
             .context("invalid private session path")?,
     )?;
-    let skip_userdata = if mode == 2 {
+    let skip_userdata = if reinstall {
         ui.choose(
             "Current Couch data backup",
-            "The imported Android originals remain separate from this new installation's backups.",
+            "The imported Android originals remain separate from this operation's backups.",
             &[
                 choice(
                     "Back up current Couch data",
@@ -275,7 +283,8 @@ pub fn run(ui: &mut Ui, config: Option<&Path>, local_payload: Option<&Path>) -> 
         ui,
         &release,
         skip_userdata,
-        mode == 2,
+        reinstall,
+        restore,
         &mut session,
         local_payload,
     );
@@ -293,11 +302,13 @@ pub fn run(ui: &mut Ui, config: Option<&Path>, local_payload: Option<&Path>) -> 
     }
     result
 }
+#[allow(clippy::too_many_arguments)]
 fn install(
     ui: &mut Ui,
     release: &public_inputs::Release,
     skip_userdata: bool,
     reinstall: bool,
+    restore: bool,
     session: &mut SessionGuard,
     local_payload: Option<&Path>,
 ) -> Result<()> {
@@ -326,17 +337,25 @@ fn install(
             total,
         )
     })?;
+    // The installer stage is always assembled from the Couch payload to bootstrap
+    // the RAM Wi-Fi installer. A restore writes no Couch OS images, so it builds
+    // only the stage; a normal install also builds Couch boot/recovery/userdata.
     let mut images = BTreeMap::new();
-    for (name, ramdisk) in [
-        ("boot", "boot.cpio.gz"),
-        ("recovery", "recovery.cpio.gz"),
-        ("installer", "installer.cpio.gz"),
-    ] {
-        let ram = assembly::owner_ramdisk(&fs::read(&public[ramdisk])?, &prepared)?;
+    let ramdisks: &[(&str, &str)] = if restore {
+        &[("installer", "installer.cpio.gz")]
+    } else {
+        &[
+            ("boot", "boot.cpio.gz"),
+            ("recovery", "recovery.cpio.gz"),
+            ("installer", "installer.cpio.gz"),
+        ]
+    };
+    for (name, ramdisk) in ramdisks {
+        let ram = assembly::owner_ramdisk(&fs::read(&public[*ramdisk])?, &prepared)?;
         let kernel = fs::read(&public["zImage"])?;
         let bytes = assembly::boot_image(
             &prepared,
-            if name == "recovery" {
+            if *name == "recovery" {
                 None
             } else {
                 Some(&kernel)
@@ -349,8 +368,15 @@ fn install(
     }
     let stage = images.remove("installer").unwrap();
     let stage_hash = digest(&stage)?;
-    images.insert("userdata".into(), public["userdata.ext4"].clone());
-    let vendor = vendor_transfer::prepare(&prepared)?;
+    if !restore {
+        images.insert("userdata".into(), public["userdata.ext4"].clone());
+    }
+    // Owner vendor runtime is a Couch-install concept; a stock restore carries none.
+    let vendor = if restore {
+        None
+    } else {
+        Some(vendor_transfer::prepare(&prepared)?)
+    };
     session.transition(Phase::InputsVerified,&json!({"event":"inputs_verified","release":release.version,"payload_sha256":release.payload.sha256,"stage_sha256":stage_hash}))?;
     let (saved, serial, expected_cid, identity) = if reinstall {
         let state_root = session
@@ -619,17 +645,50 @@ fn install(
         imported_proof.is_some() == reinstall,
         "missing retained enrollment admission"
     );
-    let logo = assembly::logo_image(
-        &fs::read(session.path().join("bootstrap-logo.img"))?,
-        &fs::read(
-            public
-                .get("logo.bgra")
-                .context("public Couch logo frame missing")?,
-        )?,
-    )?;
-    let logo_path = session.path().join("logo.img");
-    write(&logo_path, &logo)?;
-    images.insert("logo".into(), logo_path);
+    if restore {
+        // Assemble the restore set from the re-bound Android enrollment (recovery,
+        // logo, odmdtbo, boot) plus a fresh stock F2FS userdata the owner prepared
+        // offline with the firmware's make_f2fs. assemble re-hashes every original
+        // against the imported record and refuses a non-Android enrollment.
+        let proof = imported_proof
+            .as_ref()
+            .context("restore requires a re-bound Android enrollment")?;
+        let enrollment = proof.enrollment();
+        let userdata = input_path(
+            ui,
+            "Stock Android userdata image",
+            "Select the full F2FS userdata image made offline by the firmware's make_f2fs. See docs/installer-android-restore.md.",
+        )?;
+        let receipt = input_path(
+            ui,
+            "Stock userdata receipt",
+            "Select the couch-stock-userdata receipt recorded beside that image.",
+        )?;
+        ui.progress(
+            2,
+            "Verifying saved Android originals and stock userdata",
+            0,
+            0,
+        )?;
+        images = crate::android_restore::assemble(
+            enrollment.directory(),
+            enrollment.record(),
+            &userdata,
+            &receipt,
+        )?;
+    } else {
+        let logo = assembly::logo_image(
+            &fs::read(session.path().join("bootstrap-logo.img"))?,
+            &fs::read(
+                public
+                    .get("logo.bgra")
+                    .context("public Couch logo frame missing")?,
+            )?,
+        )?;
+        let logo_path = session.path().join("logo.img");
+        write(&logo_path, &logo)?;
+        images.insert("logo".into(), logo_path);
+    }
     let identity_hashes: BTreeMap<_, _> = enrollment::IDENTITY
         .into_iter()
         .map(|n| (n, originals[n].clone()))
@@ -721,7 +780,17 @@ fn install(
     )?;
     network::ready(&mut worker, ui)?;
     let network = network::select(&mut worker, ui)?;
-    let plan = json!({"schema":1,"nonce":hex(&random()?),"manifest_sha256":release.payload.sha256,"stage_sha256":stage_hash,"original_boot_sha256":originals["boot"],"cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"images":plan_images(&images,device,ui)?,"skip_userdata_backup":skip_userdata,"network":network,"vendor_source_sha256":vendor.source_sha256()});
+    // Wi-Fi is always provisioned over USB for the TLS transfer. A restore writes
+    // raw full-partition images, so the plan carries no stage-side network/vendor
+    // personalization; a normal install personalizes its compact userdata.
+    let mut plan = json!({"schema":1,"restore":restore,"nonce":hex(&random()?),"manifest_sha256":release.payload.sha256,"stage_sha256":stage_hash,"original_boot_sha256":originals["boot"],"cid":cid,"capacity":device["capacity"],"partitions":device["partitions"],"identity_sha256":identity_hashes,"images":plan_images(&images,device,ui)?,"skip_userdata_backup":skip_userdata});
+    if !restore {
+        plan["network"] = network.clone();
+        plan["vendor_source_sha256"] = json!(vendor
+            .as_ref()
+            .context("owner vendor runtime missing for install")?
+            .source_sha256());
+    }
     let plan_bytes = zeroize::Zeroizing::new(serde_json::to_vec(&plan)?);
     network::rpc(
         &mut worker,
@@ -732,7 +801,7 @@ fn install(
     let der = cert.cert.der().to_vec();
     let key = zeroize::Zeroizing::new(cert.signing_key.serialize_der());
     let token = zeroize::Zeroizing::new(random()?);
-    let mut provision = network;
+    let mut provision = network.clone();
     let object = provision.as_object_mut().unwrap();
     object.insert("certificate_hex".into(), json!(hex(&der)));
     object.insert("private_key_hex".into(), json!(hex(&key)));
@@ -790,7 +859,7 @@ fn install(
             OriginalOs::Android
         },
         session,
-        Some(vendor),
+        vendor,
         |phase, target, done, total| {
             ui.progress(
                 if phase.contains("Backup") { 5 } else { 6 },
@@ -801,10 +870,21 @@ fn install(
         },
     )?;
     let reboot = ui.choose(
-        "Couch installation verified",
-        "Backups and the installation journal are saved on this computer.",
+        if restore {
+            "Stock Android restore verified"
+        } else {
+            "Couch installation verified"
+        },
+        "Backups and the journal are saved on this computer.",
         &[
-            choice("Restart into Couch", "Start the newly installed OS."),
+            choice(
+                if restore {
+                    "Restart into stock Android"
+                } else {
+                    "Restart into Couch"
+                },
+                "Start the newly written OS.",
+            ),
             choice(
                 "Leave the installer running",
                 "Keep the current verified stage available.",
@@ -817,7 +897,11 @@ fn install(
     }
     ui.progress(
         7,
-        "Installation verified. First normal boot still needs to be checked on the remote.",
+        if restore {
+            "Stock Android restored. Check first boot on the remote, then re-enroll from Android before any future Couch install."
+        } else {
+            "Installation verified. First normal boot still needs to be checked on the remote."
+        },
         0,
         0,
     )?;
@@ -831,7 +915,7 @@ mod tests {
     #[test]
     fn cancel_never_requires_release_config_or_creates_session() {
         let mut ui = Ui::new(
-            Box::new(Cursor::new(b"{\"id\":1,\"value\":\"3\"}\n".to_vec())),
+            Box::new(Cursor::new(b"{\"id\":1,\"value\":\"4\"}\n".to_vec())),
             Box::new(Vec::new()),
         );
         run(&mut ui, None, None).unwrap();
