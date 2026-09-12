@@ -91,7 +91,8 @@ pub(super) fn setup(app: App, connection: &Connection) -> AnyView {
         });
     };
     view! {
-        <section class="card matter-connection"><h2>"Matter"</h2>
+        <section class="card matter-connection"><h2>"Matter · experimental"</h2>
+        <p class="notice">"Experimental: tested against a simulated device only. Pairing and controls may change; report what works and what does not."</p>
         <p>"Couch runs its own Matter controller. In the app that set up a device (Apple Home, Google Home, Alexa or Home Assistant), choose to pair it with another app or service, then enter the pairing code it shows here before it expires. The device stays in that app as well. Pairing works over Wi-Fi or Ethernet; a new device still in its box must be set up in its own app first."</p>
         <label class="field">"Pairing code"<input type="text" inputmode="numeric" placeholder="3497-011-2332" prop:value=move || code.get() disabled=move || busy.get() on:input=move |e| code.set(event_target_value(&e))/></label>
         <label class="field">"Device name"<input type="text" placeholder="Reading lamp" prop:value=move || name.get() disabled=move || busy.get() on:input=move |e| name.set(event_target_value(&e))/></label>

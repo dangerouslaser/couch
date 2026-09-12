@@ -19,7 +19,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("tizen", "Samsung Tizen TV · experimental"),
         ("denon", "Denon AVR"),
         ("unifi-protect", "UniFi Protect"),
-        ("matter", "Matter"),
+        ("matter", "Matter · experimental"),
     ]
     .into_iter()
 

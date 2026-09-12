@@ -1,5 +1,9 @@
 # Matter devices
 
+> **Status: experimental.** Validated only against a simulated Matter light on a
+> development Mac. Not yet tested with a real device or on the remote itself;
+> expect the pairing flow and device list to change.
+
 `clients/couch-matter` makes the remote a Matter controller with its own small
 fabric. Devices that another ecosystem already set up (Apple Home, Google Home,
 Alexa, Home Assistant) join that fabric through the ecosystem's "pair with
