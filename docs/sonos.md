@@ -84,13 +84,15 @@ shipped remote carries it the way a phone app carries its client ID: compiled
 in. Put the developer key, on its own line, in `build/sonos-api-key` on the
 build machine. `build/` is gitignored, and this repository is public, so the
 key must never be committed, pasted into a document, or written into the
-runtime payload as a file. `tools/build-sonos.sh` and `tools/build-webui.sh`
-source `tools/sonos-build-env.sh`, which exports the file's contents as
-`COUCH_SONOS_BUILT_IN_API_KEY` for cargo; `couch-sonos` reads that variable
-with `option_env!` and exposes it as `BUILT_IN_API_KEY`. A GUI build run by
-hand needs the same variable exported first. Without the file the build says so
-on stderr and falls back to the placeholder, which is fine for development.
-Cargo recompiles the crate when the variable changes.
+runtime payload as a file. `tools/build-sonos.sh`, `tools/build-webui.sh` and
+`tools/build-gui.sh` source `tools/sonos-build-env.sh`, which exports the
+file's contents as `COUCH_SONOS_BUILT_IN_API_KEY` for cargo; `couch-sonos`
+reads that variable with `option_env!` and exposes it as `BUILT_IN_API_KEY`.
+Those three scripts cover every shipped binary that links the crate (the CLI,
+the daemon, the GUI); a bare `cargo build` in `ui/` does not see the key
+unless the variable is exported first. Without the file the build says so on
+stderr and falls back to the placeholder, which is fine for development. Cargo
+recompiles the crate when the variable changes.
 
 ## Web and remote controls
 

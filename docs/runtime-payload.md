@@ -4,6 +4,8 @@
 
 ```sh
 tools/build-wmt-properties.sh
+tools/build-gui.sh
+tools/build-webui.sh
 (cd daemon && cargo build --release --locked --target armv7-unknown-linux-musleabihf -p couch-system)
 tools/build-sonos.sh
 (cd clients && cargo build --release --target armv7-unknown-linux-musleabihf -p couch-coreelec)
@@ -18,7 +20,7 @@ python3 tools/release/prepare_rootfs.py build/runtime-payload/staging-input.json
 
 | Role | Files and checks |
 |---|---|
-| GUI, configuration server, boot console | `couch-gui`, `couch-confd`, `couch-system`, `fbcon`; little-endian ARM32 ELF, no dynamic-loader/library requirement |
+| GUI, configuration server, boot console | `couch-gui` (built with `tools/build-gui.sh`), `couch-confd` (`tools/build-webui.sh`), `couch-system`, `fbcon`; little-endian ARM32 ELF, no dynamic-loader/library requirement. The GUI and daemon builds compile in the Sonos developer key from `build/sonos-api-key` when present ([sonos.md](sonos.md#release-builds)) |
 | CoreELEC control | `couch-coreelec`, built in the clients workspace; static ARM32 ELF installed at `/opt/couch/couch-coreelec` |
 | Sonos LAN control | `couch-sonos`, built with `tools/build-sonos.sh`; static ARM32 ELF installed at `/opt/couch/couch-sonos` |
 | Runtime scripts | `stage2.sh`, `runtime-boot.sh`, `hardware-init.sh`, `gui-start.sh`, `system.sh`, `confd.sh`, `setup-mode.sh`, `portal.sh`, `wifi-conf.sh`, `station.sh` |
