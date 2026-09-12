@@ -30,3 +30,6 @@ site/usage/screenshots/
 [Aa][Gg][Ee][Nn][Tt][Ss].[Oo][Vv][Ee][Rr][Rr][Ii][Dd][Ee].[Mm][Dd]
 .codex/
 .agents/
+
+# Cargo build output; was committed by mistake and costs ~870 MB per checkout.
+spike/slint-fb/target/

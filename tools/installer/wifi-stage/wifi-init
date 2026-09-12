@@ -314,7 +314,27 @@ while ! $BB dmesg | $BB grep -qE 'set STP mode success|wmt_lib_set_hif:new hifTy
     [ "$n" -lt 20 ] || fail transport-timeout
     $BB sleep 1; n=$((n+1))
 done
-# Use driver default calibration behavior. No fabricated/persisted device identity.
+# Without an NVRAM record the gen2 driver invents a MAC from jiffies and injects
+# a "NVRAM WARNING" pseudo network into every scan. Give it the same locally
+# administered address the installed runtime derives (stage2/hardware-init.sh):
+# 02: plus five bytes of md5("couch-wlan0-<eMMC CID>"). The 512-byte record
+# lives only in this RAM root; bytes 0-3 and 10-511 stay zero, so the driver's
+# calibration defaults are unchanged. No calibration partition is read or written.
+nvram_mac_record() {
+    id=$($BB cat /sys/block/mmcblk0/device/cid 2>/dev/null)
+    case "$id" in ''|*[!0-9a-fA-F]*) return 0;; esac
+    hash=$($BB echo -n "couch-wlan0-$id" | $BB md5sum | $BB cut -c1-10)
+    record=/data/nvram/APCFG/APRDEB/WIFI
+    $BB mkdir -p "${record%/*}" || return 0
+    { $BB printf '\0\0\0\0\002'
+      for i in 1 3 5 7 9; do
+          $BB printf "\\$($BB printf '%03o' 0x$($BB echo "$hash" | $BB cut -c$i-$((i+1))))"
+      done
+      $BB head -c 502 /dev/zero
+    } > "$record" || return 0
+    echo "WiFi MAC record: 02:$($BB echo "$hash" | $BB sed 's/../&:/g; s/:$//')" >> /tmp/probe.log
+}
+nvram_mac_record
 step power
 if [ -f /etc/couch-wifi-debug-mode ]; then
     # The gen2 driver logs through pr_debug; open its tap so a failed probe or
