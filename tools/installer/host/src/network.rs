@@ -48,18 +48,26 @@ fn failure_reason(status: &Value) -> &str {
         })
         .unwrap_or("unknown")
 }
+// The stage waits out a slow kernel random pool before its supplicant control
+// socket appears: transport (≤20 s) + interface (≤15 s) + settle (3 s) +
+// SOCKET_WAIT (90 s in a normal stage) plus detect/loader. The host budget must
+// exceed that whole window, or the host times out generically while the stage
+// is still inside the wait this release deliberately added.
+const READY_BUDGET_SECS: u64 = 180;
 pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
     let start = Instant::now();
+    let mut last = String::from("waiting");
     loop {
-        ensure!(
-            start.elapsed() < Duration::from_secs(120),
-            "Wi-Fi did not become ready"
-        );
+        if start.elapsed() >= Duration::from_secs(READY_BUDGET_SECS) {
+            // Surface the last stage state and its own step, not just a generic
+            // timeout, so a stuck phase is distinguishable from a slow pool.
+            anyhow::bail!("Wi-Fi did not become ready within {READY_BUDGET_SECS}s (last stage status: {last})");
+        }
         ui.progress_with_unit(
             4,
             "Starting remote Wi-Fi",
             start.elapsed().as_secs(),
-            120,
+            READY_BUDGET_SECS,
             crate::frontend::ProgressUnit::Seconds,
         )?;
         let status = rpc(worker, "stage_status", Value::Null)?;
@@ -67,6 +75,7 @@ pub fn ready(worker: &mut Worker, ui: &mut Ui) -> Result<()> {
             status["provisioned"] != true,
             "Wi-Fi stage was already provisioned"
         );
+        last = status["status"].as_str().unwrap_or("unknown").to_string();
         if status["status"] == "failed" {
             let reason = failure_reason(&status);
             anyhow::bail!("Remote Wi-Fi initialization failed: {reason}");
