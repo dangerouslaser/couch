@@ -57,7 +57,9 @@ HTTP 400 `ERROR_API_KEY_VALIDATION_FAILED`. The key is read, in order, from:
    daemon uses the directory holding the `config.json` it owns and the GUI and
    CLI use `COUCH_HOME_DIR` or the installed root. Moving the key with the
    override moves it for all three;
-4. a built-in placeholder UUID that is not a credential.
+4. the developer key compiled into the binary at build time (see
+   "Release builds" below);
+5. a built-in placeholder UUID that is not a credential.
 
 Both file locations exist because the key is a *household* credential, not a
 per-player one: the same developer key works for every speaker. The SDK's
@@ -74,6 +76,21 @@ that cannot be a header (newlines, control characters, over 256 bytes) is refuse
 before any request is sent. Refusing one falls back to the placeholder, which
 otherwise looks exactly like configuring no key at all, so the CLI prints a line
 on stderr saying a configured key was ignored - never the value itself.
+
+### Release builds
+
+The key identifies Couch as an integration, not the person using it, so a
+shipped remote carries it the way a phone app carries its client ID: compiled
+in. Put the developer key, on its own line, in `build/sonos-api-key` on the
+build machine. `build/` is gitignored, and this repository is public, so the
+key must never be committed, pasted into a document, or written into the
+runtime payload as a file. `tools/build-sonos.sh` and `tools/build-webui.sh`
+source `tools/sonos-build-env.sh`, which exports the file's contents as
+`COUCH_SONOS_BUILT_IN_API_KEY` for cargo; `couch-sonos` reads that variable
+with `option_env!` and exposes it as `BUILT_IN_API_KEY`. A GUI build run by
+hand needs the same variable exported first. Without the file the build says so
+on stderr and falls back to the placeholder, which is fine for development.
+Cargo recompiles the crate when the variable changes.
 
 ## Web and remote controls
 

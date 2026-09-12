@@ -239,13 +239,33 @@ pub fn key_file_in(home: &Path) -> PathBuf {
         None => home.join(KEY_FILE),
     }
 }
+/// The developer key compiled into a release build, so a shipped remote
+/// identifies itself to players without any file on the device. Set
+/// `COUCH_SONOS_BUILT_IN_API_KEY` when cargo runs (the build scripts read it
+/// from the gitignored `build/sonos-api-key`); the value lives in the binary,
+/// never in the source tree. Runtime configuration still outranks it.
+pub const BUILT_IN_API_KEY: Option<&str> = option_env!("COUCH_SONOS_BUILT_IN_API_KEY");
+
 /// The first usable key in order of precedence, or the placeholder.
 fn choose_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> String {
     resolve_key(candidates).key
 }
 fn resolve_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> KeyChoice {
+    resolve_key_with(candidates, BUILT_IN_API_KEY)
+}
+/// `built_in` is consulted after every configured candidate and before the
+/// placeholder; tests pass their own so they do not depend on how the crate was
+/// compiled.
+fn resolve_key_with<I: IntoIterator<Item = Option<String>>>(
+    candidates: I,
+    built_in: Option<&str>,
+) -> KeyChoice {
     let mut rejected = false;
-    for value in candidates.into_iter().flatten() {
+    for value in candidates
+        .into_iter()
+        .flatten()
+        .chain(built_in.map(str::to_owned))
+    {
         let value = value.trim();
         if key_ok(value) {
             return KeyChoice {

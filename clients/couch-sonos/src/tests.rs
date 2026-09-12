@@ -504,25 +504,52 @@ fn only_loopback_may_drop_tls() {
     }
 }
 #[test]
-fn api_key_prefers_environment_then_file_then_placeholder() {
-    assert_eq!(choose_key([Some("env".into()), Some("file".into())]), "env");
-    assert_eq!(choose_key([None, Some(" file \n".into())]), "file");
-    assert_eq!(choose_key([Some("  ".into()), Some("file".into())]), "file");
-    assert_eq!(choose_key([None, None]), PLACEHOLDER_API_KEY);
+fn api_key_prefers_environment_then_file_then_built_in_then_placeholder() {
+    // Hermetic: the crate under test may itself have been compiled with a
+    // built-in key, so every assertion here names the built-in explicitly.
+    let choose = |candidates: [Option<String>; 2]| resolve_key_with(candidates, None).key;
+    let resolve = |candidates: [Option<String>; 2]| resolve_key_with(candidates, None);
+    assert_eq!(choose([Some("env".into()), Some("file".into())]), "env");
+    assert_eq!(choose([None, Some(" file \n".into())]), "file");
+    assert_eq!(choose([Some("  ".into()), Some("file".into())]), "file");
+    assert_eq!(choose([None, None]), PLACEHOLDER_API_KEY);
     // Header-unsafe or oversized values are ignored rather than sent, and the
     // caller can tell that happened without ever being handed the value.
-    assert_eq!(choose_key([Some("a\nb".into())]), PLACEHOLDER_API_KEY);
-    assert_eq!(choose_key([Some("k".repeat(257))]), PLACEHOLDER_API_KEY);
-    assert!(resolve_key([Some("a\nb".into())]).rejected);
-    assert!(resolve_key([Some("a\nb".into()), Some("good".into())]).rejected);
+    assert_eq!(choose([Some("a\nb".into()), None]), PLACEHOLDER_API_KEY);
+    assert_eq!(choose([Some("k".repeat(257)), None]), PLACEHOLDER_API_KEY);
+    assert!(resolve([Some("a\nb".into()), None]).rejected);
+    assert!(resolve([Some("a\nb".into()), Some("good".into())]).rejected);
     assert_eq!(
-        resolve_key([Some("a\nb".into()), Some("good".into())]).key,
+        resolve([Some("a\nb".into()), Some("good".into())]).key,
         "good"
     );
     // Nothing configured, and whitespace where a key would go, are not mistakes
     // worth reporting: both mean the same as an absent file.
-    assert!(!resolve_key([None, None]).rejected);
-    assert!(!resolve_key([Some(String::new()), Some("  \n".into())]).rejected);
+    assert!(!resolve([None, None]).rejected);
+    assert!(!resolve([Some(String::new()), Some("  \n".into())]).rejected);
+    // A key compiled into the build sits below every configured value and above
+    // the placeholder, and is held to the same header rule.
+    assert_eq!(
+        resolve_key_with([None, None], Some("built-in")).key,
+        "built-in"
+    );
+    assert_eq!(
+        resolve_key_with([None, Some("file".into())], Some("built-in")).key,
+        "file"
+    );
+    assert_eq!(
+        resolve_key_with([Some("a\nb".into()), None], Some(" built-in\n")).key,
+        "built-in"
+    );
+    let blank = resolve_key_with([None, None], Some("  "));
+    assert_eq!(blank.key, PLACEHOLDER_API_KEY);
+    assert!(!blank.rejected, "an empty build variable is not configured");
+    let broken = resolve_key_with([None, None], Some("a\nb"));
+    assert_eq!(broken.key, PLACEHOLDER_API_KEY);
+    assert!(broken.rejected, "an unusable built-in key is reported");
+    if let Some(built_in) = BUILT_IN_API_KEY {
+        assert_eq!(resolve_key([None, None]).key, built_in.trim());
+    }
     let directory = scratch();
     let file = directory.join(KEY_FILE);
     std::fs::write(&file, "from-file\n").unwrap();
