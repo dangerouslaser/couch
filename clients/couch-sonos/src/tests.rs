@@ -118,6 +118,24 @@ fn server_with(
 fn connect(base: &str) -> Client {
     Client::connect_url(base, KEY).unwrap()
 }
+/// A directory this run alone owns. A fixed name under a shared temporary
+/// directory is a symlink somebody else can plant and a collision between two
+/// concurrent runs, so the name carries the process, the clock and a counter,
+/// and `create_dir` refuses to adopt anything already there.
+fn scratch() -> std::path::PathBuf {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "couch-sonos-test-{}-{nanos}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&path).expect("a scratch directory of this run's own");
+    path
+}
 
 #[test]
 fn connect_identifies_the_player_and_sends_the_api_key() {
@@ -449,6 +467,23 @@ fn redirects_are_not_followed() {
     assert_eq!(thread.join().unwrap().len(), 1);
 }
 #[test]
+fn a_player_is_addressed_over_tls_on_the_control_api_port() {
+    assert_eq!(
+        api_root(Ipv4Addr::new(192, 168, 1, 114)),
+        "https://192.168.1.114:1443/api/v1"
+    );
+    assert_eq!(check_base(&api_root(Ipv4Addr::new(10, 0, 0, 1))), Ok(()));
+    // And the agent that address is used with does not verify the player's
+    // certificate: that is the documented trust level, not an accident of
+    // configuration, so a change to the TLS wiring fails here.
+    let (base, thread) = server(vec![(200, info())]);
+    let client = connect(&base);
+    let config = client.agent.config();
+    assert!(config.tls_config().disable_verification());
+    assert_eq!(config.max_redirects(), 0);
+    thread.join().unwrap();
+}
+#[test]
 fn only_loopback_may_drop_tls() {
     for base in [
         "https://192.0.2.10:1443/api/v1",
@@ -488,16 +523,21 @@ fn api_key_prefers_environment_then_file_then_placeholder() {
     // worth reporting: both mean the same as an absent file.
     assert!(!resolve_key([None, None]).rejected);
     assert!(!resolve_key([Some(String::new()), Some("  \n".into())]).rejected);
-    let file = std::env::temp_dir().join("couch-sonos-key-fixture");
+    let directory = scratch();
+    let file = directory.join(KEY_FILE);
     std::fs::write(&file, "from-file\n").unwrap();
-    if std::env::var_os("COUCH_SONOS_API_KEY").is_none() {
+    if std::env::var_os(KEY_ENV).is_none() {
         assert_eq!(api_key_at(&file), "from-file");
         assert_eq!(
             api_key_at(Path::new("/nonexistent/sonos-api-key")),
             PLACEHOLDER_API_KEY
         );
+        std::fs::write(&file, "one two\n").unwrap();
+        let choice = api_key_choice_at(&file);
+        assert_eq!(choice.key, PLACEHOLDER_API_KEY);
+        assert!(choice.rejected, "an unusable configured key is reported");
     }
-    std::fs::remove_file(&file).ok();
+    std::fs::remove_dir_all(&directory).ok();
     assert!(key_file().ends_with(KEY_FILE));
     // The daemon knows its own configuration directory; the override still wins,
     // so no reader can end up looking at a different file from the others.

@@ -316,6 +316,11 @@ fn check_base(base: &str) -> Result<()> {
     }
     Ok(())
 }
+/// Where a player's API lives. A real player is always TLS on 1443; the scheme
+/// and port are pinned here so a change to either is one edit and one test.
+fn api_root(address: Ipv4Addr) -> String {
+    format!("https://{address}:{PORT}/api/v1")
+}
 fn action(command: Playback) -> &'static str {
     match command {
         Playback::Play => "play",
@@ -338,7 +343,7 @@ impl Client {
         Self::connect_with_key(address, &api_key())
     }
     pub fn connect_with_key(address: Ipv4Addr, key: &str) -> Result<Self> {
-        Self::connect_url(&format!("https://{address}:{PORT}/api/v1"), key)
+        Self::connect_url(&api_root(address), key)
     }
     /// Connect to an explicit API root, e.g. `https://192.0.2.10:1443/api/v1`.
     ///
@@ -648,8 +653,11 @@ fn query(service: &str) -> Vec<u8> {
     packet.extend_from_slice(&[0, 0, 12, 0, 1]);
     packet
 }
-/// Decompress one name. Pointers must point backwards, which makes loops
-/// impossible, and the caller continues after the first pointer.
+/// Decompress one name. A pointer must point backwards, but that does not bound
+/// the walk on its own - a backwards pointer can land on a label that runs
+/// forward into the same pointer again - so the hop budget below and the
+/// 255-byte name cap are what end it. The caller continues after the first
+/// pointer.
 fn read_name(message: &[u8], start: usize) -> Option<(String, usize)> {
     let mut name = String::new();
     let mut pos = start;
