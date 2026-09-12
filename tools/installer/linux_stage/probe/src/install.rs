@@ -96,6 +96,11 @@ struct WirePlan {
     network: Option<network::Network>,
     #[serde(default)]
     skip_userdata_backup: bool,
+    // Android stock restore: full-partition raw images only (F2FS userdata
+    // included), with no network/vendor personalization. Defaults false, so
+    // existing plans and stage images keep their current behavior.
+    #[serde(default)]
+    restore: bool,
     #[serde(default)]
     reused_backups: BTreeMap<String, String>,
     nonce: String,
@@ -423,6 +428,26 @@ fn execute<D: InstallDisk>(
             "stage network configuration requires compact userdata",
         )?;
     }
+    if wire.restore {
+        // A stock Android restore writes the device's own originals and a fresh
+        // full F2FS userdata image raw. No expansion and no personalization: every
+        // image must cover its exact partition and no network/vendor is accepted.
+        ensure(
+            network.is_none() && wire.vendor_source_sha256.is_none(),
+            "restore mode forbids network or vendor personalization",
+        )?;
+        for (name, image) in &wire.images {
+            ensure(
+                image.size
+                    == wire
+                        .partitions
+                        .get(name)
+                        .ok_or_else(|| invalid("missing restore partition"))?
+                        .size,
+                "restore images must cover their exact partition (no compact userdata)",
+            )?;
+        }
+    }
     let plan = Plan::new(identity.clone(), images)?;
     let mut disk = make_disk(identity.clone(), wire.identity_sha256.clone())?;
     disk.configure_network(network)?;
@@ -584,5 +609,19 @@ mod tests {
         for name in ["lk", "lk2", "preloader_a", "nvram", "para", "../boot"] {
             assert!(target(name).is_err());
         }
+    }
+    #[test]
+    fn restore_flag_defaults_false_and_parses() {
+        let base = serde_json::json!({
+            "schema":1,"nonce":"a","manifest_sha256":"b","cid":"c","capacity":0,
+            "partitions":{},"images":{},"identity_sha256":{},
+            "original_boot_sha256":"d","stage_sha256":"e"
+        });
+        let plan: WirePlan = serde_json::from_value(base.clone()).unwrap();
+        assert!(!plan.restore);
+        let mut with = base;
+        with["restore"] = serde_json::json!(true);
+        let plan: WirePlan = serde_json::from_value(with).unwrap();
+        assert!(plan.restore);
     }
 }
