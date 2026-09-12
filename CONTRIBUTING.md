@@ -81,6 +81,7 @@ The browser UI and the host daemon:
 ```sh
 tools/build-webui.sh --host    # build the wasm bundle, then the host daemon
 tools/run-webui.sh             # serve it at http://127.0.0.1:8090
+tools/build-gui.sh --host      # the device GUI, for this machine
 ```
 
 Building for the device, and the kernel, are documented in `README.md` and
