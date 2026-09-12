@@ -60,6 +60,16 @@ impl From<couch_webos::Error> for Error {
         }
     }
 }
+impl From<couch_tizen::Error> for Error {
+    fn from(e: couch_tizen::Error) -> Self {
+        match e {
+            couch_tizen::Error::Transport => Self::Transport,
+            couch_tizen::Error::Timeout => Self::Timeout,
+            couch_tizen::Error::Rejected => Self::Rejected,
+            _ => Self::Remote(e.to_string()),
+        }
+    }
+}
 impl From<couch_denon::Error> for Error {
     fn from(e: couch_denon::Error) -> Self {
         match e {

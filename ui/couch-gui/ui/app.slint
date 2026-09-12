@@ -170,6 +170,7 @@ export component App inherits Window {
     in-out property <bool> tv-shown: false;
     in-out property <bool> tv-android: false;
     in-out property <bool> tv-apple: false;
+    in-out property <bool> tv-tizen: false;
     in-out property <bool> tv-ir: false;
     in-out property <bool> tv-sonos: false;
     in-out property <bool> tv-media-active: false;
@@ -445,7 +446,7 @@ export component App inherits Window {
     }
 
     television := Television {
-        visible:root.tv-shown;shown:root.tv-shown;android-tv:root.tv-android;apple-tv:root.tv-apple;infrared:root.tv-ir;sonos:root.tv-sonos;
+        visible:root.tv-shown;shown:root.tv-shown;android-tv:root.tv-android;apple-tv:root.tv-apple;tizen:root.tv-tizen;infrared:root.tv-ir;sonos:root.tv-sonos;
         width:parent.width;height:parent.height;
         title:root.tv-title;status:root.tv-status;error:root.tv-error;
         source-name:root.tv-source;sound:root.tv-sound;picture:root.tv-picture;panel:root.tv-panel;choices:root.tv-choices;

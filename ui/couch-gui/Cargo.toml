@@ -20,6 +20,7 @@ couch-ir = { path = "../../clients/couch-ir" }
 couch-control = { path = "../../clients/couch-control" }
 couch-denon = { path = "../../clients/couch-denon" }
 couch-webos = { path = "../../clients/couch-webos" }
+couch-tizen = { path = "../../clients/couch-tizen" }
 base64 = "0.22"
 couch-kodi = { path = "../../clients/couch-kodi" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

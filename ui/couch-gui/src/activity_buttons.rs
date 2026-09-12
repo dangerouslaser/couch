@@ -328,11 +328,11 @@ pub(crate) fn execute_with_input(
             client.command_if_current(&command.id(),current).map_err(|e|e.to_string())
         }
         Integration::Ir { .. } => Err(format!("No IR code assigned to {}", command.id())),
-        Integration::AndroidTv | Integration::AppleTv => {
-            let kind = if matches!(integration, Integration::AppleTv) {
-                "appletv"
-            } else {
-                "androidtv"
+        Integration::AndroidTv | Integration::AppleTv | Integration::Tizen => {
+            let kind = match integration {
+                Integration::AppleTv => "appletv",
+                Integration::Tizen => "tizen",
+                _ => "androidtv",
             };
             if connection.is_empty() {
                 return Err("This TV needs a named connection".into());

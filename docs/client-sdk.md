@@ -47,7 +47,7 @@ config.json ──────────► model/couch-model ◄────�
                    │
                    ▼
    clients/couch-kodi   couch-webos   couch-denon   couch-ha   couch-hue
-   couch-androidtv      couch-appletv couch-ir      couch-voice
+   couch-androidtv      couch-appletv couch-tizen   couch-ir     couch-voice
                    ▲
                    └── clients/couch-sdk: the contract they share
 ```

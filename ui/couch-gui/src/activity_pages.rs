@@ -161,6 +161,7 @@ impl Pages {
                         couch_model::Integration::Sonos { .. } | couch_model::Integration::Kodi { .. } | couch_model::Integration::WebOs
                                     | couch_model::Integration::AndroidTv
                                     | couch_model::Integration::AppleTv
+                                    | couch_model::Integration::Tizen
                     )
                 })
         }));

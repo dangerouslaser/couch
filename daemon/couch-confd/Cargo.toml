@@ -39,4 +39,5 @@ couch-kodi = { path = "../../clients/couch-kodi" }
 
 couch-androidtv = { path = "../../clients/couch-androidtv" }
 couch-appletv = { path = "../../clients/couch-appletv" }
+couch-tizen = { path = "../../clients/couch-tizen" }
 mdns-sd = "0.13"

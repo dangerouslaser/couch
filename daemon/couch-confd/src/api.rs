@@ -26,6 +26,7 @@ mod kodi;
 mod remote;
 mod hue;
 mod webos;
+mod tizen;
 mod streaming_tv;
 mod updates;
 mod coreelec;

@@ -3,6 +3,8 @@
 mod android;
 #[path = "tv_apple.rs"]
 mod apple;
+#[path = "tv_tizen.rs"]
+mod tizen;
 #[path = "tv_ir.rs"]
 mod infrared;
 #[path = "tv_media.rs"]
@@ -376,6 +378,7 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
     let mut android_client = None;
     let mut android_mode = false;
     let mut apple_mode = false;
+    let mut tizen_mode = false;
     let mut generation = 0;
     let mut refreshed = Instant::now();
     let mut waking: Option<Instant> = None;
@@ -392,17 +395,20 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             android_client = None;
             android_mode = false;
             apple_mode = false;
+            tizen_mode = false;
             generation = current;
             waking = None;
             view = None;
         }
         if current != 0
-            && (android_mode || apple_mode)
+            && (android_mode || apple_mode || tizen_mode)
             && refreshed.elapsed() >= Duration::from_secs(4)
         {
             if let Some(c) = android_client.as_ref() {
                 match if apple_mode {
                     apple::refresh(c, generation)
+                } else if tizen_mode {
+                    tizen::refresh(c, generation)
                 } else {
                     android::refresh(c, generation)
                 } {
@@ -492,9 +498,12 @@ fn worker(rx: mpsc::Receiver<Work>, tx: mpsc::SyncSender<Event>, active: Arc<Ato
             });
             android_mode = provider == Some(couch_model::Provider::AndroidTv);
             apple_mode = provider == Some(couch_model::Provider::AppleTv);
-            if android_mode || apple_mode {
+            tizen_mode = provider == Some(couch_model::Provider::Tizen);
+            if android_mode || apple_mode || tizen_mode {
                 let result = if apple_mode {
                     apple::run(&mut android_client, &w, &active)
+                } else if tizen_mode {
+                    tizen::run(&mut android_client, &w, &active)
                 } else {
                     android::run(&mut android_client, &w, &active)
                 };
@@ -757,6 +766,7 @@ fn resolve_target(
     let provider = match integration {
         Some(couch_model::Integration::AndroidTv) => couch_model::Provider::AndroidTv,
         Some(couch_model::Integration::AppleTv) => couch_model::Provider::AppleTv,
+        Some(couch_model::Integration::Tizen) => couch_model::Provider::Tizen,
         Some(couch_model::Integration::WebOs) => couch_model::Provider::WebOs,
         _ => return Err("This device does not have TV controls".into()),
     };
@@ -904,8 +914,13 @@ impl Controller {
                 });
                 app.set_tv_sonos(connection.starts_with("sonos:"));
                 app.set_tv_ir(connection.starts_with("ir:"));
+                let tizen = crate::connections::config().is_some_and(|c| {
+                    c.connection(&couch_model::Id::new(connection))
+                        .is_some_and(|c| c.provider == couch_model::Provider::Tizen)
+                });
                 app.set_tv_android(android);
                 app.set_tv_apple(apple);
+                app.set_tv_tizen(tizen);
                 self.generation += 1;
                 self.active.store(self.generation, Ordering::SeqCst);
                 if android || apple {
@@ -956,7 +971,7 @@ impl Controller {
                     app.set_tv_error("Infrared devices do not report apps or settings".into());
                     continue;
                 }
-                if (app.get_tv_android() || app.get_tv_apple()) && action != "apps" {
+                if (app.get_tv_android() || app.get_tv_apple() || app.get_tv_tizen()) && action != "apps" {
                     app.set_tv_error("This control is only available for LG webOS TVs".into());
                     continue;
                 }
@@ -1087,7 +1102,7 @@ impl Controller {
                 });
                 self.choices = view.choices;
                 self.settings_app = view.settings_app;
-                if (app.get_tv_apple() || app.get_tv_ir()) && app.get_tv_panel() == 2 {
+                if (app.get_tv_apple() || app.get_tv_ir() || app.get_tv_tizen()) && app.get_tv_panel() == 2 {
                     app.set_tv_choices(ModelRc::new(VecModel::from(
                         self.choices
                             .iter()

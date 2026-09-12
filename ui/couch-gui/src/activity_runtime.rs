@@ -163,6 +163,7 @@ impl Controller {
                                     | couch_model::Integration::WebOs
                                     | couch_model::Integration::AndroidTv
                                     | couch_model::Integration::AppleTv
+                                    | couch_model::Integration::Tizen
                             )
                         })
                 })

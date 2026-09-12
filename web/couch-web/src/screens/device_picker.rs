@@ -160,7 +160,7 @@ fn discovery_card(app: App, connection: &Connection, room: &Id, value: Value) ->
 }
 fn manual(app: App, connection: Connection, room: Id) -> AnyView {
     if connection.provider == Provider::Ir { return super::infrared::device_setup(app, room, None); }
-    let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv | Provider::AppleTv);
+    let television = matches!(connection.provider, Provider::WebOs | Provider::AndroidTv | Provider::AppleTv | Provider::Tizen);
     let receiver = matches!(connection.provider, Provider::Denon { .. } | Provider::Sonos { .. });
     let existing = assigned(app, &connection, "");
     let name = RwSignal::new(connection.name.clone());
@@ -201,6 +201,12 @@ pub fn controls(app: App, device: &Device) -> AnyView {
                         if apple { "appletv" } else { "androidtv" }
                     ),
                 ),
+                _ => ().into_any(),
+            };
+        }
+        Some(Integration::Tizen) => {
+            return match &device.integration {
+                Integration::Connection { connection_id, .. } => super::tizen::controls(app, format!("/api/connections/{connection_id}/tizen")),
                 _ => ().into_any(),
             };
         }

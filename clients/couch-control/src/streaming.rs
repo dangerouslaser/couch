@@ -12,6 +12,10 @@ pub enum StreamingConnection {
         settings: couch_appletv::Settings,
         credentials: couch_appletv::Credentials,
     },
+    /// Token, pinned certificate and REST details live in one settings value.
+    Tizen {
+        settings: couch_tizen::Settings,
+    },
 }
 impl std::fmt::Debug for StreamingConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -23,18 +27,23 @@ impl StreamingConnection {
         match self {
             Self::AndroidTv { .. } => "androidtv",
             Self::AppleTv { .. } => "appletv",
+            Self::Tizen { .. } => "tizen",
         }
     }
     pub fn address(&self) -> std::net::IpAddr {
         match self {
             Self::AndroidTv { settings, .. } => settings.address,
             Self::AppleTv { settings, .. } => settings.address,
+            Self::Tizen { settings } => settings
+                .address()
+                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
         }
     }
     pub fn port(&self) -> u16 {
         match self {
             Self::AndroidTv { settings, .. } => settings.remote_port,
             Self::AppleTv { settings, .. } => settings.companion_port,
+            Self::Tizen { settings } => settings.port().unwrap_or(0),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -67,6 +76,7 @@ impl StreamingConnection {
                     return Err(Error::Protocol);
                 }
             }
+            Self::Tizen { settings } => settings.validate().map_err(|_| Error::Protocol)?,
         }
         Ok(())
     }
@@ -137,6 +147,7 @@ impl StreamingTv {
 pub(super) enum Client {
     Android(couch_androidtv::Remote),
     Apple(couch_appletv::Remote),
+    Tizen(couch_tizen::Client, couch_tizen::Settings),
 }
 impl Client {
     pub fn open(s: &StreamingConnection) -> Result<Self> {
@@ -156,6 +167,10 @@ impl Client {
                 couch_appletv::Remote::connect(settings, credentials)
                     .map_err(|e| Error::Remote(e.to_string()))?,
             ),
+            StreamingConnection::Tizen { settings } => Self::Tizen(
+                couch_tizen::Client::connect(settings).map_err(Error::from)?,
+                settings.clone(),
+            ),
         })
     }
     pub fn idle(&mut self) -> Result<()> {
@@ -166,6 +181,7 @@ impl Client {
             Self::Apple(c) => {
                 c.poll().map_err(|e| Error::Remote(e.to_string()))?;
             }
+            Self::Tizen(c, _) => c.idle()?,
         }
         Ok(())
     }
@@ -178,6 +194,16 @@ impl Client {
             Self::Apple(_) => {
                 json!({"connected":true,"protocol":"companion","now_playing_supported":false})
             }
+            Self::Tizen(_, settings) => {
+                // The remote channel says nothing about power; the REST
+                // endpoint does on newer firmware and is absent when asleep.
+                let info = settings.address().ok().and_then(|address| {
+                    couch_tizen::rest::device_info(address, Duration::from_secs(2)).ok()
+                });
+                json!({"connected":true,"protocol":"smartview","model":settings.model,"name":settings.name,
+                    "power_state":info.as_ref().and_then(|i|i.power_state.clone()),
+                    "wake_supported":settings.mac.is_some(),"frame_tv":settings.frame_tv})
+            }
         })
     }
     pub fn apps(&mut self) -> Result<Value> {
@@ -189,6 +215,12 @@ impl Client {
             Self::Android(_) => Err(Error::Remote(
                 "Android TV does not provide installed app discovery".into(),
             )),
+            Self::Tizen(c, _) => c
+                .apps()
+                .map(|apps| {
+                    json!({"apps": apps.iter().map(|a| json!({"id":a.id,"title":a.name,"app_type":a.app_type})).collect::<Vec<_>>()})
+                })
+                .map_err(Error::from),
         }
     }
     pub fn command(&mut self, name: &str) -> Result<()> {
@@ -261,6 +293,27 @@ impl Client {
                     _ => return Err(Error::Protocol),
                 };
                 c.press(b).map_err(|e| Error::Remote(e.to_string()))
+            }
+            Self::Tizen(c, settings) => {
+                if let Some(id) = name.strip_prefix("app:") {
+                    return c.launch_app(id).map_err(Error::from);
+                }
+                match name {
+                    // Never guess a toggle for on: a sleeping TV cannot hear
+                    // the socket, so on is Wake-on-LAN or nothing.
+                    "power-on" => couch_tizen::wake_paired(settings).map_err(|e| match e {
+                        couch_tizen::Error::Unsupported => Error::Remote(
+                            "The TV did not report a MAC address while pairing; pair again with it on"
+                                .into(),
+                        ),
+                        e => Error::from(e),
+                    }),
+                    "power-off" => c.power_toggle(settings.frame_tv).map_err(Error::from),
+                    _ => match couch_tizen::Key::for_function(name) {
+                        Some(key) => c.key(key).map_err(Error::from),
+                        None => Err(Error::Protocol),
+                    },
+                }
             }
         }
     }

@@ -260,6 +260,7 @@ mod device_picker;
 mod appearance;
 
 mod webos;
+mod tizen;
 
 mod kodi;
 

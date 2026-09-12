@@ -98,7 +98,7 @@ impl Api {
                 None => Reply::error(404, "Denon connection not found"),
             };
         }
-        if let [id, kind @ ("protect" | "hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv"), rest @ ..] =
+        if let [id, kind @ ("protect" | "hue" | "ha" | "webos" | "kodi" | "androidtv" | "appletv" | "tizen"), rest @ ..] =
             path
         {
             let file = self.with(|s| {
@@ -110,6 +110,7 @@ impl Api {
                     Provider::WebOs => "webos",
                     Provider::AndroidTv => "androidtv",
                     Provider::AppleTv => "appletv",
+                    Provider::Tizen => "tizen",
                     Provider::Kodi { .. } | Provider::CoreElec { .. } => "kodi",
                     _ => return None,
                 };
@@ -147,6 +148,7 @@ impl Api {
                 "androidtv" | "appletv" => {
                     super::streaming_tv::route(method, rest, body, file, *kind == "appletv")
                 }
+                "tizen" => super::tizen::route(method, rest, body, file),
                 _ => super::webos::route_at(method, rest, body, file),
             };
         }

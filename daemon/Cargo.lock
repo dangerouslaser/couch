@@ -264,6 +264,7 @@ dependencies = [
  "couch-model",
  "couch-sonos",
  "couch-system",
+ "couch-tizen",
  "couch-unifi-protect",
  "couch-webos",
  "flate2",
@@ -281,6 +282,7 @@ dependencies = [
  "couch-appletv",
  "couch-denon",
  "couch-kodi",
+ "couch-tizen",
  "couch-webos",
  "libc",
  "serde",
@@ -376,6 +378,18 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "couch-tizen"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tungstenite",
+ "url",
 ]
 
 [[package]]
