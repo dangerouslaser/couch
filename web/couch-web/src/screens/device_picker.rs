@@ -17,7 +17,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
             <option value="manual-ir">"Manual / infrared"</option>
         </select></label>
         {move ||if app.device_source.get()=="manual-ir" {super::infrared::device_setup(app,room.get_value(),None)}else{
-            connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::UnifiProtect|Provider::Hue|Provider::HomeAssistant=>discover(app,c.clone(),room.get_value()),_=>manual(app,c.clone(),room.get_value())}).unwrap_or_else(||view!{<p class="dim">"Need a server or bridge first?" <button class="ghost" on:click=move |_|app.go(Route::Connections)>"Manage connections"</button></p>}.into_any())
+            connections.iter().find(|c|c.id.as_str()==app.device_source.get()).map(|c|match c.provider{Provider::UnifiProtect|Provider::Hue|Provider::HomeAssistant|Provider::Matter=>discover(app,c.clone(),room.get_value()),_=>manual(app,c.clone(),room.get_value())}).unwrap_or_else(||view!{<p class="dim">"Need a server or bridge first?" <button class="ghost" on:click=move |_|app.go(Route::Connections)>"Manage connections"</button></p>}.into_any())
         }}
     </section>}.into_any()
 }
@@ -25,7 +25,7 @@ pub fn picker(app: App, config: &Config, room: &Id) -> AnyView {
 fn assigned(app: App, connection: &Connection, resource: &str) -> Option<String> {
     app.config.get_untracked().and_then(|cfg|cfg.devices().find_map(|(r,d)|{
         let same=matches!(&d.integration,Integration::Connection{connection_id,resource_id} if connection_id==&connection.id && resource_id==resource)
-            || match cfg.resolve_integration(&d.integration){Some(Integration::Hue{light_id})=>connection.provider==Provider::Hue && light_id==format!("{}/{resource}",connection.id),Some(Integration::HomeAssistant{entity_id})=>connection.provider==Provider::HomeAssistant && entity_id==format!("{}/{resource}",connection.id),Some(Integration::Kodi{host,port})=>connection.provider==Provider::Kodi{host,port},_=>false};
+            || match cfg.resolve_integration(&d.integration){Some(Integration::Hue{light_id})=>connection.provider==Provider::Hue && light_id==format!("{}/{resource}",connection.id),Some(Integration::HomeAssistant{entity_id})=>connection.provider==Provider::HomeAssistant && entity_id==format!("{}/{resource}",connection.id),Some(Integration::Matter{device})=>connection.provider==Provider::Matter && device==format!("{}/{resource}",connection.id),Some(Integration::Kodi{host,port})=>connection.provider==Provider::Kodi{host,port},_=>false};
         same.then(||r.name.clone())
     }))
 }
@@ -35,6 +35,8 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
     let message = RwSignal::new(String::new());
     let prefix = if connection.provider == Provider::UnifiProtect { "protect" } else if connection.provider == Provider::Hue {
         "hue"
+    } else if connection.provider == Provider::Matter {
+        "matter"
     } else {
         "ha"
     };
@@ -72,7 +74,7 @@ fn discover(app: App, connection: Connection, room: Id) -> AnyView {
         });
     };
     fetch();
-    view!{<p class="dim">{if prefix=="protect" {"Add cameras to this room to view them on your remote."} else if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Add lights, blinds or thermostats. Their controls adapt to the features Home Assistant exposes."}}</p>
+    view!{<p class="dim">{if prefix=="protect" {"Add cameras to this room to view them on your remote."} else if prefix=="matter" {"Add the on/off controls of devices paired with this remote. A device that does not answer shows as unavailable."} else if prefix=="hue" {"Add lights, grouped room controls or scenes. Scenes go straight into this room’s Scenes button on the remote."} else {"Add lights, blinds or thermostats. Their controls adapt to the features Home Assistant exposes."}}</p>
         {(prefix=="hue").then(||view!{<label class="field">"Hue controls"<select aria-label="Hue controls" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());app.hue_room_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="rooms">"Hue rooms"</option><option value="scenes">"Hue scenes"</option></select></label>})}
         {(prefix=="ha").then(||view!{<label class="field">"Device type"<select aria-label="Home Assistant device type" prop:value=move ||category.get() disabled=move ||busy.get() on:change=move |e|{category.set(event_target_value(&e));app.device_filter.set(String::new());list.set(Vec::new());fetch();}><option value="lights">"Lights"</option><option value="covers">"Blinds"</option><option value="climates">"Thermostats"</option></select></label>})}
         <button class="ghost" disabled=move ||busy.get() on:click=move |_|fetch()>"Refresh devices"</button>

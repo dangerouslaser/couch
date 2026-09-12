@@ -19,6 +19,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         ("tizen", "Samsung Tizen TV · experimental"),
         ("denon", "Denon AVR"),
         ("unifi-protect", "UniFi Protect"),
+        ("matter", "Matter · experimental"),
     ]
     .into_iter()
 
@@ -32,7 +33,7 @@ pub fn screen(app: App, config: &Config) -> AnyView {
         <div class="destination-grid">{existing.into_iter().map(|c|saved(app,c)).collect_view()}</div>
         <section class="creation"><h2>"Add a connection"</h2>
         <label class="field">"Connection type"<select aria-label="Connection type" prop:value=move || choice.get() on:change=move |e|choice.set(event_target_value(&e))><option value="">"Choose a type"</option>{available.into_iter().map(|(kind,label)|view!{<option value=kind>{label}</option>}).collect_view()}</select></label>
-        {move || match choice.get().as_str(){"unifi-protect"=>create_named(app,Provider::UnifiProtect),"sonos"=>super::sonos::form(app,None),"core-elec"=>super::coreelec::form(app,None),"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),"tizen"=>create_named(app,Provider::Tizen),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared is built into the remote and is configured on each device."</p>}.into_any()}}
+        {move || match choice.get().as_str(){"unifi-protect"=>create_named(app,Provider::UnifiProtect),"matter"=>create_named(app,Provider::Matter),"sonos"=>super::sonos::form(app,None),"core-elec"=>super::coreelec::form(app,None),"denon"=>denon_form(app,None),"kodi"=>local_form(app,None,false),"home-assistant"=>create_named(app,Provider::HomeAssistant),"hue"=>create_named(app,Provider::Hue),"web-os"=>create_named(app,Provider::WebOs),"android-tv"=>create_named(app,Provider::AndroidTv),"apple-tv"=>create_named(app,Provider::AppleTv),"tizen"=>create_named(app,Provider::Tizen),_=>view!{<p class="dim">"Add multiple bridges, servers and TVs. Infrared is built into the remote and is configured on each device."</p>}.into_any()}}
         </section>
     }.into_any()
 }
@@ -48,6 +49,7 @@ fn saved(app: App, c: Connection) -> AnyView {
         Provider::Denon { .. } => view!{{denon_form(app, Some(c.clone()))}{denon_controls(app,c.id.to_string())}}.into_any(),
         Provider::Ir => local_form(app, Some(c.clone()), true),
         Provider::UnifiProtect => super::protect::setup(app, &c),
+        Provider::Matter => super::matter::setup(app, &c),
         Provider::HomeAssistant => super::home_assistant::setup(app, &c),
         Provider::Hue => super::hue::setup(app, &c),
         Provider::WebOs => super::webos::setup(app, &c),

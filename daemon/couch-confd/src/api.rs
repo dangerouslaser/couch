@@ -31,6 +31,7 @@ mod streaming_tv;
 mod updates;
 mod coreelec;
 mod sonos;
+mod matter;
 mod connections;
 mod denon;
 mod ir;

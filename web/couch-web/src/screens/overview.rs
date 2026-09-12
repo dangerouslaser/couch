@@ -64,6 +64,7 @@ pub fn connection_summary(integration: &Integration) -> String {
         Integration::WebOs => "LG webOS TV".into(),
         Integration::AndroidTv => "Android / Google TV".into(),
         Integration::UnifiProtect { .. } => "UniFi Protect".into(),
+        Integration::Matter { device } => format!("Matter · {device}"),
         Integration::AppleTv => "Apple TV".into(),
         Integration::Tizen => "Samsung Tizen TV".into(),
         Integration::None => "Not configured".into(),

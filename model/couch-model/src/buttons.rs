@@ -262,7 +262,7 @@ pub fn functions(integration: &Integration) -> &'static [(&'static str, &'static
             ("fast-forward", "Fast forward"),
         ],
         Integration::HomeAssistant { entity_id } if !entity_id.rsplit('/').next().unwrap_or("").starts_with("light.") => &[],
-        Integration::Hue { .. } | Integration::HomeAssistant { .. } => {
+        Integration::Hue { .. } | Integration::HomeAssistant { .. } | Integration::Matter { .. } => {
             &[("on", "On"), ("off", "Off"), ("toggle", "Toggle on / off")]
         }
         _ => &[],

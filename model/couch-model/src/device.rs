@@ -188,6 +188,9 @@ pub enum Integration {
     AppleTv,
     Tizen,
     UnifiProtect { camera_id: String },
+    // Resolved form only: `<connection_id>/<node_id>/<endpoint>`. Saved devices
+    // refer to the Matter connection with `<node_id>/<endpoint>` as resource ID.
+    Matter { device: String },
     HomeAssistant {
         entity_id: String,
     },
@@ -215,6 +218,7 @@ impl Integration {
             Integration::AppleTv => "apple-tv",
             Integration::Tizen => "tizen",
             Integration::UnifiProtect { .. } => "unifi-protect",
+            Integration::Matter { .. } => "matter",
             Integration::HomeAssistant { .. } => "home-assistant",
             Integration::Ir { .. } => "ir",
             Integration::Denon { .. } => "denon",

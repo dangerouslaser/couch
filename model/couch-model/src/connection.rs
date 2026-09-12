@@ -23,6 +23,9 @@ pub enum Provider {
     AppleTv,
     Tizen,
     UnifiProtect,
+    /// A Matter fabric this remote administers; devices are commissioned
+    /// onto it with a pairing code and identified by node ID and endpoint.
+    Matter,
     Ir,
 }
 impl Provider {
@@ -39,6 +42,7 @@ impl Provider {
             Self::AppleTv => "apple-tv",
             Self::Tizen => "tizen",
             Self::UnifiProtect => "unifi-protect",
+            Self::Matter => "matter",
             Self::Ir => "ir",
         }
     }
@@ -55,6 +59,7 @@ impl Provider {
             Self::AppleTv => "Apple TV",
             Self::Tizen => "Samsung Tizen",
             Self::UnifiProtect => "UniFi Protect",
+            Self::Matter => "Matter",
             Self::Ir => "Infrared",
         }
     }
@@ -99,6 +104,7 @@ impl Config {
             Provider::AppleTv => Integration::AppleTv,
             Provider::Tizen => Integration::Tizen,
             Provider::UnifiProtect => Integration::UnifiProtect { camera_id: alloc::format!("{connection_id}/{resource_id}") },
+            Provider::Matter => Integration::Matter { device: alloc::format!("{connection_id}/{resource_id}") },
             Provider::Ir => Integration::Ir {
                 codeset: resource_id.clone(),
             },
@@ -330,5 +336,33 @@ mod protect_tests {
         config.rooms[0].devices[0].kind=DeviceKind::Light;assert!(config.validate().is_err());
         config.rooms[0].devices[0].kind=DeviceKind::Camera;
         config.rooms[0].devices[0].integration=Integration::Connection{connection_id:"protect".into(),resource_id:"../other".into()};assert!(config.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod matter_tests {
+    use super::*;
+    use crate::{Device, DeviceKind, Room};
+    use alloc::vec;
+    #[test]
+    fn matter_devices_resolve_to_node_and_endpoint_and_reject_bad_resources() {
+        let mut config = Config::default();
+        config.connections.push(Connection { id: "matter".into(), name: "Matter".into(), provider: Provider::Matter });
+        config.rooms.push(Room { id: "den".into(), name: "Den".into(), icon: None, devices: vec![
+            Device::new("lamp".into(), "Lamp", DeviceKind::Light)
+                .with_integration(Integration::Connection { connection_id: "matter".into(), resource_id: "7/1".into() }),
+        ] });
+        assert!(config.validate().is_ok());
+        let resolved = config.resolve_integration(&config.rooms[0].devices[0].integration);
+        assert_eq!(resolved, Some(Integration::Matter { device: "matter/7/1".into() }));
+        assert_eq!(resolved.as_ref().map(Integration::via), Some("matter"));
+        assert!(crate::commands::Function::Toggle.supports(resolved.as_ref().unwrap()));
+        assert!(!crate::commands::Function::VolumeUp.supports(resolved.as_ref().unwrap()));
+        assert_eq!(Provider::Matter.kind(), "matter");
+        assert_eq!(serde_json::to_value(&Provider::Matter).unwrap(), serde_json::json!({"kind":"matter"}));
+        for bad in ["", "7", "7/0", "0/1", "7/1/2", "a/1", "7/65536", "123456789012345678901/1"] {
+            config.rooms[0].devices[0].integration = Integration::Connection { connection_id: "matter".into(), resource_id: bad.into() };
+            assert!(config.validate().is_err(), "{bad:?} should be rejected");
+        }
     }
 }

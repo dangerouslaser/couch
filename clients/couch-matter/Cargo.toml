@@ -1,0 +1,19 @@
+[package]
+name = "couch-matter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Matter controller for Couch: its own small fabric, joined by sharing codes over the LAN"
+
+# `matc` is a controller-side Matter implementation in pure Rust: SPAKE2+,
+# CASE, the Interaction Model and generated cluster codecs, with no C in it,
+# so the static musl cross-build stays a one-liner. It needs tokio; this crate
+# keeps that runtime private on one worker thread and exposes blocking calls,
+# so the daemon and GUI keep their thread-per-request shape.
+[dependencies]
+matc = "=0.1.3"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
+anyhow = "1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
