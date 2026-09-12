@@ -151,3 +151,64 @@ impl HueFleet {
         }
     }
 }
+
+/// Matter fabrics, one controller per connection, opened on first use and kept
+/// so light reads reuse the bound sockets. Lights carry `<connection>/<node>/<endpoint>`
+/// like Hue resources, so the room list needs no new state shape.
+#[derive(Default)]
+pub struct MatterFleet {
+    controllers: Mutex<HashMap<String, Arc<couch_matter::Controller>>>,
+}
+impl MatterFleet {
+    fn get(&self, id: &str) -> Result<Arc<couch_matter::Controller>, String> {
+        if !valid(id, Provider::Matter) {
+            return Err("Matter connection was removed".into());
+        }
+        let mut controllers = self.controllers.lock().unwrap();
+        if let Some(c) = controllers.get(id) {
+            return Ok(c.clone());
+        }
+        let dir = file(id, "matter").with_file_name("matter");
+        let controller = Arc::new(couch_matter::Controller::open(&dir).map_err(|e| e.to_string())?);
+        controllers.insert(id.into(), controller.clone());
+        Ok(controller)
+    }
+    fn light(id: &str, light: couch_matter::Light) -> couch_ha::Light {
+        couch_ha::Light {
+            entity_id: format!("{id}/{}", light.entity_id),
+            name: light.name,
+            on: light.on,
+            brightness_percent: light.brightness_percent,
+            dimmable: light.dimmable,
+        }
+    }
+    pub fn lights(&self) -> Vec<couch_ha::Light> {
+        let ids = ids(Provider::Matter);
+        self.controllers.lock().unwrap().retain(|id, _| ids.contains(id));
+        let mut lights = vec![];
+        for id in ids {
+            if let Ok(controller) = self.get(&id) {
+                lights.extend(controller.lights().into_iter().map(|l| Self::light(&id, l)));
+            }
+        }
+        lights
+    }
+    pub fn toggle(&self, resource: &str) -> Result<couch_ha::Light, String> {
+        let (id, raw) = split(resource);
+        let controller = self.get(id)?;
+        let state = controller.light(raw).map_err(|e| e.to_string())?;
+        let command = match state.on {
+            Some(true) => couch_matter::Command::Off,
+            Some(false) => couch_matter::Command::On,
+            None => return Err("This device is unavailable".into()),
+        };
+        controller.command(raw, command).map(|l| Self::light(id, l)).map_err(|e| e.to_string())
+    }
+    pub fn brightness(&self, resource: &str, percent: u8) -> Result<couch_ha::Light, String> {
+        let (id, raw) = split(resource);
+        self.get(id)?
+            .command(raw, couch_matter::Command::Brightness(percent))
+            .map(|l| Self::light(id, l))
+            .map_err(|e| e.to_string())
+    }
+}

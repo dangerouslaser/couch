@@ -137,6 +137,7 @@ impl Config {
                             crate::Provider::Kodi{..}|crate::Provider::CoreElec{..}|crate::Provider::Sonos{..}|crate::Provider::Denon{..}|crate::Provider::WebOs|crate::Provider::AndroidTv|crate::Provider::AppleTv|crate::Provider::Tizen=>resource_id.is_empty(),
                             crate::Provider::UnifiProtect=>device.kind==crate::DeviceKind::Camera && !resource_id.is_empty() && resource_id.len()<=128 && resource_id.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-' || b==b'_'),
                             crate::Provider::HomeAssistant=>valid_ha_resource(resource_id, device.kind),
+                            crate::Provider::Matter=>valid_matter_resource(resource_id),
                             crate::Provider::Hue=>{ let id=resource_id.strip_prefix("room:").unwrap_or(resource_id); id.len()==36 && id.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_hexdigit()}) },
                             crate::Provider::Ir=>!resource_id.is_empty() && resource_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_'||b==b'-'),
                         };
@@ -279,6 +280,16 @@ fn check_entity<'a>(
     } else {
         seen.push(id);
     }
+}
+
+/// `<node_id>/<endpoint>`: both decimal, node IDs are operational (non-zero)
+/// and endpoint 0 is the root node rather than a controllable device.
+pub fn valid_matter_resource(id: &str) -> bool {
+    let Some((node, endpoint)) = id.split_once('/') else { return false; };
+    node.len() <= 20
+        && node.bytes().all(|b| b.is_ascii_digit())
+        && node.parse::<u64>().is_ok_and(|n| n != 0)
+        && endpoint.parse::<u16>().is_ok_and(|e| e != 0)
 }
 
 fn valid_ha_resource(id: &str, kind: crate::DeviceKind) -> bool {

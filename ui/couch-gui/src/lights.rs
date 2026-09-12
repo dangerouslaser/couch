@@ -93,6 +93,7 @@ struct Entry {
     id: String,
     state: Option<DeviceState>,
     hue: bool,
+    matter: bool,
 }
 enum Operation {
     IrCheck(Id, String, bool, Arc<couch_model::Config>, Input),
@@ -153,6 +154,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                         id: entity_id.clone(),
                         state: None,
                         hue: false,
+                        matter: false,
                     })
                 }
                 Some(Integration::Hue { light_id }) if !light_id.starts_with("scene:") => {
@@ -162,14 +164,24 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                         id: format!("hue:{light_id}"),
                         state: None,
                         hue: true,
+                        matter: false,
                     })
                 }
+                Some(Integration::Matter { device }) => Some(Entry {
+                    name: d.name.clone(),
+                    icon: d.effective_icon(),
+                    id: format!("matter:{device}"),
+                    state: None,
+                    hue: false,
+                    matter: true,
+                }),
                 _ => Some(Entry {
                     name: d.name.clone(),
                     icon: d.effective_icon(),
                     id: format!("device:{}", d.id),
                     state: None,
                     hue: false,
+                    matter: false,
                 }),
             },
         )
@@ -185,6 +197,7 @@ fn configured(room: &Id) -> Result<Vec<Entry>, String> {
                 id: format!("activity:{}", a.id),
                 state: None,
                 hue: false,
+                matter: false,
             }),
     );
     Ok(entries)
@@ -200,6 +213,7 @@ fn perform(
     room: &Id,
     operation: Operation,
     hue: &crate::connections::HueFleet,
+    matter: &crate::connections::MatterFleet,
     current: &dyn Fn() -> bool,
 ) -> Result<Answer, String> {
     let mut entries = configured(room)?;
@@ -227,7 +241,7 @@ fn perform(
         Operation::List => {
             let ha_states = if entries
                 .iter()
-                .any(|e| !e.hue && !e.id.starts_with("device:"))
+                .any(|e| !e.hue && !e.matter && !e.id.starts_with("device:"))
             {
                 crate::connections::ha_room_states()
             } else {
@@ -242,9 +256,14 @@ fn perform(
             } else {
                 Vec::new()
             };
+            let matter_states = if entries.iter().any(|e| e.matter) {
+                matter.lights().into_iter().map(DeviceState::Light).collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             for e in &mut entries {
-                let states = if e.hue { &hue_states } else { &ha_states };
-                let id = e.id.strip_prefix("hue:").unwrap_or(&e.id);
+                let states = if e.hue { &hue_states } else if e.matter { &matter_states } else { &ha_states };
+                let id = e.id.strip_prefix("hue:").or_else(|| e.id.strip_prefix("matter:")).unwrap_or(&e.id);
                 e.state = states.iter().find(|s| s.id() == id).cloned().map(|mut s| {
                     s.set_id(e.id.clone());
                     s
@@ -258,6 +277,8 @@ fn perform(
             }
             let mut state = if let Some(raw) = id.strip_prefix("hue:") {
                 DeviceState::Light(hue.brightness(raw, percent).map_err(|e| e.to_string())?)
+            } else if let Some(raw) = id.strip_prefix("matter:") {
+                DeviceState::Light(matter.brightness(raw, percent)?)
             } else if id.starts_with("device:") {
                 return Err("This device does not support brightness".into());
             } else {
@@ -289,6 +310,9 @@ fn perform(
                     result.is_ok()
                 );
                 DeviceState::Light(result?)
+            } else if let Some(raw) = id.strip_prefix("matter:") {
+                // Matter reads before toggling, like Home Assistant: no push cache yet.
+                DeviceState::Light(matter.toggle(raw)?)
             } else if id.starts_with("device:") {
                 return Err("Controls for this device are not available yet".into());
             } else {
@@ -336,6 +360,9 @@ impl Controller {
         let (events, rx) = mpsc::channel();
         let hue = Arc::new(crate::connections::HueFleet::default());
         let worker_hue = hue.clone();
+        // Matter has no push cache and nothing the GUI thread asks for directly,
+        // so the fleet lives on the worker alone and opens fabrics on first use.
+        let worker_matter = Arc::new(crate::connections::MatterFleet::default());
         let active = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_active = active.clone();
         std::thread::spawn(move || {
@@ -343,7 +370,7 @@ impl Controller {
             while let Ok((generation, room, op)) = requests.recv() {
                 let _ = events.send((
                     generation,
-                    perform(&room, op, &worker_hue, &|| {
+                    perform(&room, op, &worker_hue, &worker_matter, &|| {
                         worker_active.load(std::sync::atomic::Ordering::SeqCst) == generation
                     }),
                 ));

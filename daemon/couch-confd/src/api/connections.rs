@@ -64,6 +64,23 @@ impl Api {
                 None => Reply::error(404, "Sonos connection not found"),
             };
         }
+        if let [id, "matter", rest @ ..] = path {
+            let dir = self.with(|s| match s.config().connection(&Id::new(*id))?.provider {
+                Provider::Matter => Some(
+                    s.path()
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .join("connections")
+                        .join(id)
+                        .join("matter"),
+                ),
+                _ => None,
+            });
+            return match dir {
+                Some(dir) => super::matter::route_at(method, rest, body, dir),
+                None => Reply::error(404, "Matter connection not found"),
+            };
+        }
         if let [id, "coreelec", rest @ ..] = path {
             let settings = self.with(|s| match &s.config().connection(&Id::new(*id))?.provider {
                 Provider::CoreElec { host, port } => Some((
