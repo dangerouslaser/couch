@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "kind": "couch-firmware-restore-pin",
+  "model": "sanytron-ha100",
+  "purpose": "restore-factory-firmware",
+  "installable": false,
+  "redistribution_authorized": false,
+  "source": {
+    "drive_file_id": "1jOGJGGb-KPJJ8Ct4HqUtb1d-rKdEmKm9",
+    "drive_url": "https://drive.google.com/file/d/1jOGJGGb-KPJJ8Ct4HqUtb1d-rKdEmKm9/view",
+    "archive_name": "RS30_HAOS_HA100_V1.0.4_20260702_RLS.zip",
+    "member_root": "binpackage/",
+    "ownership": "Sanytron vendor factory firmware (SP Flash Tool binpackage)"
+  },
+  "archive": {
+    "version": "V1.0.4_20260702",
+    "size": 589620077,
+    "sha256": "cc9ad8e573a68e2cd0712c5b56d60b63ef5ccdeb7a52f048f734007e5b093c1f"
+  },
+  "scatter": {
+    "member": "binpackage/MT6580_Android_scatter.txt",
+    "size": 11070,
+    "sha256": "261aa81a4988d2b0a86c56ea7785b5551999b9c14a48acf59ff2678056e2a795",
+    "platform": "MT6580",
+    "project": "x15cm_s90_kr"
+  },
+  "preloader": {
+    "member": "binpackage/preloader_x15cm_s90_kr.bin",
+    "size": 107944,
+    "sha256": "030f1667be332913c331de3a9ff5d84a22f7cfe4e57940cd38280394c2598327",
+    "flashed": false,
+    "note": "The factory preloader already on the device is preserved; the restore never writes it."
+  },
+  "source_members": {
+    "boot": {"member": "binpackage/boot.img", "size": 8030208, "sha256": "8c8d3123161dc8dc52b6e49ccc10b7bb64dd65f7c3be66529b43701902736a32", "format": "android-boot"},
+    "recovery": {"member": "binpackage/recovery.img", "size": 11814912, "sha256": "d52c3f01c607af088266b4f6d2fecfb2cea71954d475ac3be9a78751a3db13d4", "format": "android-boot"},
+    "lk": {"member": "binpackage/lk.img", "size": 292368, "sha256": "a598a5c6118f18e890c8c4972ce5944a4410c30c881c992f0e8de6cd2b9bcdda", "format": "mtk-bootloader"},
+    "logo": {"member": "binpackage/logo.bin", "size": 384880, "sha256": "4afb4390aa67c381e5f7cb21d70202530cfb59b83327f4bd9896740dc0d1c550", "format": "mtk-logo"},
+    "odmdtbo": {"member": "binpackage/odmdtbo.img", "size": 34960, "sha256": "e64e44a74f9c746175172e17603c58e36caaccccf1d1e9933f8da452638f3aff", "format": "mtk-dtbo"},
+    "secro": {"member": "binpackage/secro.img", "size": 135168, "sha256": "e611f9e174809471f064b9f2b9cc5d4b39afddb80b11be06a8d34af69b41e1f8", "format": "raw"},
+    "vendor": {"member": "binpackage/vendor.img", "size": 95988544, "sha256": "b6aa734b7e2b1b5235ae8432ce61100b1b2191287fa1c39275ab6849601e2c24", "format": "android-sparse-ext4"},
+    "system": {"member": "binpackage/system.img", "size": 1011661060, "sha256": "e4ad98b562cee3bbfc6e8a52805e8b75f22cc8501f9731b6c22cc2d905bd9886", "format": "android-sparse-ext4"},
+    "cache": {"member": "binpackage/cache.img", "size": 6086804, "sha256": "23ebf6d6b3fe0a018010630b36ca6eaefeb81df96f1bcf285ec5f0de57f36535", "format": "android-sparse-ext4"},
+    "userdata_placeholder": {"member": "binpackage/userdata.img", "size": 57624, "sha256": "cd18afc669bbf7f0122d9d3a91a64e5432f03c62236910a75cc242788ae52870", "format": "android-sparse-placeholder", "flashed": false}
+  },
+  "restore_images": {
+    "system": {"partition": "system", "size": 1283457024, "sha256": "1e480c10d4af427db925a02117784562cbe71de1589f91e294dde60017883687", "from": "binpackage/system.img (sparse expanded, zero-padded to partition)"},
+    "vendor": {"partition": "vendor", "size": 301989888, "sha256": "3dc849226645dc98b22a94aeb4efbde051b6fcb27a1c9cea94dffe56ac53f893", "from": "binpackage/vendor.img (sparse expanded to partition)"},
+    "boot": {"partition": "boot", "size": 16777216, "sha256": "36e7a0acb7e33cb17c384011fc113c2b4b12853222dc59f8ec4dff96e714ae23", "from": "binpackage/boot.img (zero-padded to partition)"},
+    "recovery": {"partition": "recovery", "size": 16777216, "sha256": "27f82264e94febb678f133deb8e3b6e7d9c2dfc1fff1d937b4a7781a278882bf", "from": "binpackage/recovery.img (zero-padded to partition)"},
+    "lk": {"partition": "lk", "size": 393216, "sha256": "43a7b068c279118fc84ba5d0816ae350a62d312f569caca6dbf882595f93af98", "from": "binpackage/lk.img (zero-padded to partition)"},
+    "lk2": {"partition": "lk2", "size": 393216, "sha256": "43a7b068c279118fc84ba5d0816ae350a62d312f569caca6dbf882595f93af98", "from": "binpackage/lk.img (zero-padded to partition)"},
+    "logo": {"partition": "logo", "size": 8388608, "sha256": "384f1f50be3418c43acd1dcb3c72e9fc5c664c1483da454874266ea78509c292", "from": "binpackage/logo.bin (zero-padded to partition)"},
+    "odmdtbo": {"partition": "odmdtbo", "size": 16777216, "sha256": "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760", "from": "binpackage/odmdtbo.img (zero-padded to partition)"},
+    "secro": {"partition": "secro", "size": 6291456, "sha256": "fc2ec327e0294318ad17977dda92934e5333723deff2cf941965c652909bdb7c", "from": "binpackage/secro.img (zero-padded to partition)"},
+    "cache": {"partition": "cache", "size": 117440512, "sha256": "b0abb02260a9883bbfb5b4520682f453c88c925b9ef84ee460ef8b7168a81e80", "from": "binpackage/cache.img (sparse expanded, empty ext4 grown to partition)"},
+    "userdata": {"partition": "userdata", "size": 5905055744, "sha256": "378ec33f5d9a07c37d5e2230af7eea711b9e6af3e719d032b56fd8f92d2b3653", "from": "fresh empty F2FS sized to the partition; the factory userdata member is only a sparse placeholder", "reproducible_hash": false}
+  },
+  "preserved": ["preloader", "proinfo", "nvram", "nvdata", "protect1", "protect2", "seccfg", "para", "expdb", "frp", "metadata", "oemkeystore", "keystore", "pgpt", "sgpt", "flashinfo"],
+  "userdata": {
+    "partition": "userdata",
+    "filesystem": "f2fs",
+    "partition_size": 5905055744,
+    "superblock_magic_le32": "0xf2f52010",
+    "superblock_offsets": [1024, 5120],
+    "reproducible_hash": false
+  },
+  "provenance": "All source values derive from the pinned Sanytron factory firmware binpackage (RS30_HAOS_HA100_V1.0.4_20260702). source_members are the binpackage images as shipped (system/vendor/cache are Android-sparse); restore_images are the full-partition images the factory restore actually flashes, produced by expanding the sparse members and padding every image to its exact device partition size. The preloader and every calibration/identity partition are preserved and never written. The restore /data is a fresh empty F2FS sized to the partition (the factory userdata member is only a placeholder), so it has no reproducible content hash and is verified structurally by its two F2FS superblocks. Nothing here redistributes firmware bytes: the installer fetches the archive from the vendor Drive source and trusts only these repo-pinned hashes."
+}

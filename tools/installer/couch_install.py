@@ -15,8 +15,35 @@ MODEL = "sanytron-ha100"
 IDENTITY_PARTITIONS = {"proinfo", "nvram", "nvdata", "protect1", "protect2"}
 REQUIRED_IMAGES = {"recovery", "userdata", "boot"}
 WRITE_ORDER = ("recovery", "userdata", "logo", "odmdtbo", "boot")
+# A full vendor factory restore rewrites the whole OS (system/vendor) and its
+# boot chain as well, unlike a Couch install/restore which only touches the five
+# partitions above. This broader set is permitted ONLY for a manifest whose
+# purpose is "factory-restore" (see allowed_write_targets). The bootloader
+# (preloader) is deliberately never written — the factory preloader already on
+# the device is preserved — and no calibration/identity partition is ever
+# writable through either order. OS and data first, boot chain last, so an
+# interrupted flash leaves the old boot in place (and the preserved preloader
+# always keeps the device re-flashable over the download agent).
+FACTORY_WRITE_ORDER = ("system", "vendor", "secro", "odmdtbo", "logo", "cache",
+                       "userdata", "recovery", "lk2", "lk", "boot")
+# Partitions that must never be written by any path: calibration/identity plus
+# the bootloader and the invisible/reserved firmware regions.
+NEVER_WRITE = IDENTITY_PARTITIONS | {"preloader", "seccfg", "para", "expdb", "frp",
+                                     "metadata", "oemkeystore", "keystore", "pgpt",
+                                     "sgpt", "flashinfo"}
+assert set(WRITE_ORDER).isdisjoint(NEVER_WRITE), "Couch write order touches a protected partition"
+assert set(FACTORY_WRITE_ORDER).isdisjoint(NEVER_WRITE), "Factory write order touches a protected partition"
 CHUNK = 1024 * 1024
 REPO = Path(__file__).resolve().parents[2]
+
+
+def allowed_write_targets(release):
+    """Writable partitions permitted for this manifest. The broad factory set is
+    only unlocked by an explicit purpose; every other manifest keeps the narrow
+    Couch install/restore set. Neither set can name a protected partition."""
+    order = FACTORY_WRITE_ORDER if release.get("purpose") == "factory-restore" else WRITE_ORDER
+    require(set(order).isdisjoint(NEVER_WRITE), "Write order names a protected partition")
+    return set(order)
 
 
 class InstallError(Exception):
