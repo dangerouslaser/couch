@@ -83,6 +83,14 @@ jobs:
               print(f'::warning::Firmware download failed ({error}); skipping without a pull request.')
               pathlib.Path(os.environ['GITHUB_OUTPUT']).write_text('status=download-failed\n')
               sys.exit(0)
+          # Drive often answers the confirm GET with another HTML page, not the
+          # file. Require a real ZIP so a later step never dies on BadZipFile.
+          with out.open('rb') as probe:
+              magic = probe.read(4)
+          if magic != b'PK\x03\x04':
+              print('::warning::Drive did not return a ZIP (interstitial or quota); skipping without a pull request.')
+              pathlib.Path(os.environ['GITHUB_OUTPUT']).write_text('status=not-a-zip\n')
+              sys.exit(0)
           with pathlib.Path(os.environ['GITHUB_OUTPUT']).open('a') as handle:
               handle.write('status=downloaded\n')
               handle.write(f'ota={out}\n')
@@ -92,7 +100,10 @@ jobs:
         working-directory: tools/release
         shell: python
         run: |
-          import hashlib, json, os, pathlib
+          import hashlib, json, os, pathlib, sys
+          # shell: python runs this from a temp file, so cwd (tools/release) is
+          # not on sys.path; add it before importing the release module.
+          sys.path.insert(0, os.getcwd())
           import firmware_restore
           ota = pathlib.Path(os.environ['OTA'])
           pin = firmware_restore.load()
@@ -103,44 +114,39 @@ jobs:
               firmware_restore.check(ota, pin)
               output.write_text('changed=false\n')
               print('Vendor firmware still matches the pinned restore values.')
-          else:
+              sys.exit(0)
+          # The firmware changed. Derivation may itself fail on an unexpected
+          # archive; keep the job green and still open a notice either way.
+          try:
               derived = firmware_restore.derive(ota, with_formatter=True)
-              body = pathlib.Path(os.environ['RUNNER_TEMP']) / 'firmware-change.md'
-              body.write_text(
-                  '## Vendor Android firmware changed\n\n'
-                  'The pinned vendor OTA no longer matches `tools/release/ha100_firmware_restore.json`.\n'
-                  'This pull request updates the repo-pinned hashes. A human must review the\n'
-                  'new firmware before merging; no firmware bytes are redistributed.\n\n'
-                  '```json\n' + json.dumps(derived, indent=2, sort_keys=True) + '\n```\n')
-              with output.open('w') as handle:
-                  handle.write('changed=true\n')
-                  handle.write(f'sha256={digest}\n')
-                  handle.write(f'size={ota.stat().st_size}\n')
-                  handle.write(f'body={body}\n')
+              derived_block = '```json\n' + json.dumps(derived, indent=2, sort_keys=True) + '\n```\n'
+          except Exception as error:  # noqa: BLE001 - report, never go red
+              derived_block = f'Automated derivation failed ({error}); derive the new values by hand.\n'
+          report = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / 'tools/release/firmware-drift-report.md'
+          report.write_text(
+              '# Vendor Android firmware changed\n\n'
+              f'The pinned vendor OTA no longer matches the repo pins. New archive sha256 `{digest}`, size {ota.stat().st_size}.\n\n'
+              'A maintainer must update, in one reviewed change, all three coupled pins: the archive and member\n'
+              'hashes in `ha100_official_runtime.json`, the `BOOTSTRAP_MEMBERS` constant in `prepare_official_inputs.py`,\n'
+              'and `ha100_firmware_restore.json` (regenerated with `firmware_restore.py --derive`). No firmware bytes\n'
+              'are redistributed. This report file is the drift signal, not a finished pin update.\n\n'
+              + derived_block)
+          output.write_text('changed=true\n')
         env:
           OTA: ${{ steps.fetch.outputs.ota }}
-      - name: Rewrite the pinned hashes
-        if: steps.compare.outputs.changed == 'true'
-        working-directory: tools/release
-        shell: python
-        run: |
-          import json, os, pathlib
-          path = pathlib.Path('ha100_firmware_restore.json')
-          pin = json.loads(path.read_text())
-          pin['archive']['sha256'] = os.environ['SHA256']
-          pin['archive']['size'] = int(os.environ['SIZE'])
-          path.write_text(json.dumps(pin, indent=2) + '\n')
-        env:
-          SHA256: ${{ steps.compare.outputs.sha256 }}
-          SIZE: ${{ steps.compare.outputs.size }}
       - name: Open a review pull request
         if: steps.compare.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           branch: firmware-watch/pin-update
           title: 'firmware: vendor Android OTA changed; update restore pins'
-          body-path: ${{ steps.compare.outputs.body }}
-          commit-message: 'firmware: update pinned Android restore hashes'
+          body: |
+            Automated drift detection. The pinned vendor Android OTA changed.
+            See `tools/release/firmware-drift-report.md` on this branch for the new
+            values and the three coupled pins a maintainer must update together.
+            No firmware bytes are redistributed.
+          add-paths: tools/release/firmware-drift-report.md
+          commit-message: 'firmware: record vendor OTA drift for review'
           labels: firmware-watch
           delete-branch: true
       - name: Optionally upload the firmware for review (opt-in)

@@ -114,25 +114,63 @@ impl SavedEnrollment {
         observed: &ObservedHardware,
         session: &mut SessionGuard,
     ) -> Result<BoundEnrollment> {
+        self.rebind_mode(observed, session, false)
+    }
+
+    /// `restore` binds an enrollment to a device whose OS partitions this
+    /// operation is about to overwrite (a stock-Android restore runs on a
+    /// device currently holding Couch). The immutable hardware identity — chip,
+    /// CID encoding, eMMC CID, capacity — and the five calibration partitions
+    /// still must match, so the device and its saved originals are proven the
+    /// same unit. The partition-layout map and the mutable OS partitions
+    /// (boot/recovery/logo/odmdtbo via `retained_sha256`) are not required to
+    /// match, because a restore legitimately overwrites them and the write
+    /// geometry comes from the live device read, not this stored map.
+    pub fn rebind_mode(
+        self,
+        observed: &ObservedHardware,
+        session: &mut SessionGuard,
+        restore: bool,
+    ) -> Result<BoundEnrollment> {
         ensure!(
             matches!(session.phase(), Phase::Created | Phase::InputsVerified),
             "rebind must precede install phase transitions"
         );
+        // Name each check so a mismatch is diagnosable rather than opaque.
         ensure!(
-            observed.hwcode == 0x6580
-                && observed.cid_encoding == "mt6580-legacy-le32-registers"
-                && observed.cid == self.record.cid
-                && observed.capacity == self.record.capacity
-                && observed.partitions == self.record.partitions
-                && observed.identity_sha256 == self.record.identity_sha256
-                && self
-                    .retained_sha256
+            observed.hwcode == 0x6580,
+            "live chip is not the MT6580 this enrollment recorded"
+        );
+        ensure!(
+            observed.cid_encoding == "mt6580-legacy-le32-registers",
+            "live CID encoding differs from the retained enrollment"
+        );
+        ensure!(
+            observed.cid == self.record.cid,
+            "live eMMC CID differs from the retained enrollment"
+        );
+        ensure!(
+            observed.capacity == self.record.capacity,
+            "live eMMC capacity differs from the retained enrollment"
+        );
+        ensure!(
+            observed.identity_sha256 == self.record.identity_sha256,
+            "live calibration partitions differ from the retained enrollment"
+        );
+        if !restore {
+            ensure!(
+                observed.partitions == self.record.partitions,
+                "live partition layout differs from the retained enrollment"
+            );
+            ensure!(
+                self.retained_sha256
                     .iter()
                     .all(|(name, hash)| observed.retained_sha256.get(name) == Some(hash)),
-            "live hardware differs from retained enrollment"
-        );
+                "live OS partitions differ from the retained enrollment"
+            );
+        }
         session.checkpoint(
-            &json!({"event":"imported_enrollment_rebound","enrollment_sha256":self.sha256}),
+            &json!({"event":"imported_enrollment_rebound","enrollment_sha256":self.sha256,"restore":restore}),
         )?;
         Ok(BoundEnrollment { saved: self })
     }
@@ -636,6 +674,49 @@ mod tests {
             };
             assert_eq!(saved.rebind(&live, &mut session).is_ok(), changed == 0);
             assert_eq!(session.phase(), Phase::Created);
+        }
+    }
+    #[test]
+    fn restore_binds_across_changed_os_partitions_but_not_changed_hardware() {
+        // A restore runs on a device whose OS partitions differ from the saved
+        // Android enrollment; the gate must accept differing layout/OS state but
+        // still reject a different CID or changed calibration.
+        for changed in 0..4 {
+            let root = private_root();
+            let mut session = SessionGuard::create(&root.path().join("new")).unwrap();
+            let record = record();
+            let mut live = observed(&record);
+            let expect = match changed {
+                0 => {
+                    live.retained_sha256
+                        .insert("odmdtbo".into(), "b".repeat(64));
+                    live.partitions.get_mut("boot").unwrap().size += 4096;
+                    true
+                }
+                1 => {
+                    live.cid = "34".repeat(16);
+                    false
+                }
+                2 => {
+                    live.identity_sha256.insert("nvram".into(), "b".repeat(64));
+                    false
+                }
+                _ => {
+                    live.capacity += 4096;
+                    false
+                }
+            };
+            let saved = SavedEnrollment {
+                retained_sha256: BTreeMap::from([(
+                    "odmdtbo".into(),
+                    record.originals["odmdtbo"].sha256.clone(),
+                )]),
+                record,
+                root: root.path().join("saved"),
+                sha256: "a".repeat(64),
+                provenance: "fixture",
+            };
+            assert_eq!(saved.rebind_mode(&live, &mut session, true).is_ok(), expect);
         }
     }
     #[test]

@@ -633,8 +633,8 @@ fn install(
                 .collect(),
             retained_sha256: originals.clone(),
         };
-        let proof = saved.rebind(&observation, session)?;
-        session.transition(Phase::AndroidBound,&json!({"event":"retained_enrollment_bound","cid":cid,"original_os":"Couch","enrollment_sha256":proof.enrollment().sha256(),"usb":bound}))?;
+        let proof = saved.rebind_mode(&observation, session, restore)?;
+        session.transition(Phase::AndroidBound,&json!({"event":"retained_enrollment_bound","cid":cid,"original_os":"Couch","enrollment_sha256":proof.enrollment().sha256(),"usb":bound,"restore":restore}))?;
         Some(proof)
     } else {
         let profile = enrollment::stock_prefixes(session, &prepared)?;

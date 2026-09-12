@@ -14,6 +14,19 @@ not-yet-validated Wi-Fi stock-restore feature).
   + 90 s socket wait). Both budgets are now 180 s and the host reports the last
   stage status on timeout instead of a generic message.
 
+## Fixed after the first review pass
+
+- **#10 restore rebind gate** now binds a restore by immutable hardware identity
+  (chip, CID encoding, eMMC CID, capacity) and the five calibration partitions,
+  and no longer requires the mutable OS partitions or the layout map to match;
+  each check is named so a mismatch is diagnosable. `SavedEnrollment::rebind_mode`.
+- **#6/#8 firmware-watch** add `sys.path` for the `import` under `shell: python`
+  and reject a non-ZIP Drive response before derivation, so the job runs and
+  fails soft instead of dying on `ModuleNotFoundError`/`BadZipFile`.
+- **#7 firmware-watch auto-PR** no longer writes a half-update that fails its own
+  validation; it commits a `firmware-drift-report.md` drift notice (a green,
+  reviewable PR) naming the three coupled pins a maintainer must update together.
+
 ## Deferred (not on the hardware-validated install path)
 
 1. **Restore plan key and older stages.** The host sends `restore: true` only
