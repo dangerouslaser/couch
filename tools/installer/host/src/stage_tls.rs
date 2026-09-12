@@ -12,34 +12,54 @@ use std::{
 
 pub struct DeadlineSocket {
     socket: TcpStream,
-    deadline: Instant,
+    // An *idle* timeout, not a whole-transaction budget: reads and writes may run
+    // for as long as data keeps flowing. A multi-gigabyte image over slow Wi-Fi
+    // takes far longer than any fixed transaction deadline, so bounding the whole
+    // transaction by one clock aborted long transfers mid-stream ("stage phase
+    // deadline exceeded"). We instead fail only when the connection stalls with no
+    // progress for `idle`, which distinguishes a slow link from a dead one.
+    idle: Duration,
+    last: Instant,
 }
 impl DeadlineSocket {
     fn remaining(&self) -> io::Result<Duration> {
-        self.deadline
-            .checked_duration_since(Instant::now())
+        self.idle
+            .checked_sub(self.last.elapsed())
             .filter(|d| !d.is_zero())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "stage phase deadline exceeded"))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "stage connection stalled"))
+    }
+    fn progressed(&mut self) {
+        self.last = Instant::now();
     }
     pub fn set_phase_timeout(&mut self, timeout: Duration) -> Result<()> {
         ensure!(
             !timeout.is_zero() && timeout <= Duration::from_secs(1800),
-            "invalid stage phase deadline"
+            "invalid stage idle timeout"
         );
-        self.deadline = Instant::now() + timeout;
+        self.idle = timeout;
+        self.last = Instant::now();
         Ok(())
     }
 }
 impl Read for DeadlineSocket {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         self.socket.set_read_timeout(Some(self.remaining()?))?;
-        self.socket.read(bytes)
+        let n = self.socket.read(bytes)?;
+        // Any received byte is progress; extend the idle window from now.
+        if n > 0 {
+            self.progressed();
+        }
+        Ok(n)
     }
 }
 impl Write for DeadlineSocket {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.socket.set_write_timeout(Some(self.remaining()?))?;
-        self.socket.write(bytes)
+        let n = self.socket.write(bytes)?;
+        if n > 0 {
+            self.progressed();
+        }
+        Ok(n)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.remaining()?;
@@ -81,7 +101,8 @@ pub fn connect(
         connection,
         DeadlineSocket {
             socket,
-            deadline: Instant::now() + Duration::from_secs(15),
+            idle: Duration::from_secs(15),
+            last: Instant::now(),
         },
     );
     while stream.conn.is_handshaking() {
@@ -174,18 +195,34 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn socket_deadline_cannot_be_extended_by_trickled_reads() {
+    fn stalled_connection_times_out_but_progress_extends_the_idle_window() {
+        use std::io::Write as _;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (_peer, _) = listener.accept().unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        // Idle window already elapsed: a read with no data pending times out.
         let mut deadline = DeadlineSocket {
             socket,
-            deadline: Instant::now() - Duration::from_secs(1),
+            idle: Duration::from_secs(1),
+            last: Instant::now() - Duration::from_secs(2),
         };
         assert_eq!(
             deadline.read(&mut [0; 1]).unwrap_err().kind(),
             io::ErrorKind::TimedOut
         );
+        // A received byte resets the window: after progress a fresh read waits the
+        // full idle window again, so a slow-but-steady transfer never aborts.
+        deadline.set_phase_timeout(Duration::from_secs(1)).unwrap();
+        deadline.last = Instant::now() - Duration::from_millis(900);
+        peer.write_all(b"x").unwrap();
+        peer.flush().unwrap();
+        let mut byte = [0; 1];
+        assert_eq!(deadline.read(&mut byte).unwrap(), 1);
+        assert!(
+            deadline.remaining().unwrap() > Duration::from_millis(500),
+            "progress must extend the idle window"
+        );
+        // The idle window is still bounded and must be positive and <= 30 min.
         assert!(deadline.set_phase_timeout(Duration::ZERO).is_err());
         assert!(deadline
             .set_phase_timeout(Duration::from_secs(1801))
