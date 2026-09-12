@@ -150,12 +150,25 @@ def publish(directory, name, value):
     sync_directory(directory)
 
 
-def recover(proof, reader, writer_factory, output):
+def recover(proof, reader, writer_factory, output, *, current_boot_sha256=None, chain_receipt_sha256=None):
     """One boot write; caller owns exclusive USB, dependency pins and explicit restart.
 
     writer_factory(release, bundle, binding) must construct ConnectedMtkWriter on
     the SAME connected MTK instance as reader. No rediscovery, reconnect or retry.
+
+    By default the live boot must still be the failed session's temporary image.
+    After verified debug-stage transitions the boot slot holds the last debug
+    image instead; the caller then passes that hash, attested by the pinned
+    chain receipt it validated, as current_boot_sha256. The restoration source
+    and every retained-partition gate are unchanged.
     """
+    if current_boot_sha256 is None:
+        current_boot_sha256 = proof.temporary_boot_sha256
+    else:
+        require(valid_hash(current_boot_sha256) and valid_hash(chain_receipt_sha256 or ''),
+                'Explicit current debug boot and chain receipt hashes required')
+    require(current_boot_sha256 != proof.record['originals']['boot']['sha256'],
+            'Boot already holds the original image; nothing to restore')
     # Re-admit evidence immediately before consulting live hardware.
     checked = admit(proof.source, proof.temporary_boot_sha256)
     require(checked.record == proof.record and checked.evidence_sha256 == proof.evidence_sha256,
@@ -165,7 +178,7 @@ def recover(proof, reader, writer_factory, output):
             and observed['runtime_cid_sha256'] == sha(bytes.fromhex(proof.record['cid']))
             and observed['capacity'] == proof.record['capacity']
             and observed['partitions'] == proof.record['partitions'], 'Live hardware differs from failed session')
-    require(reader.hash('boot') == proof.temporary_boot_sha256, 'Current boot is not the verified temporary image')
+    require(reader.hash('boot') == current_boot_sha256, 'Current boot is not the verified temporary or debug image')
     retained = {name: item['sha256'] for name,item in proof.record['originals'].items() if name != 'boot'}
     for name, expected in sorted(retained.items()):
         require(reader.hash(name) == expected, 'Retained live partition changed')
@@ -174,6 +187,7 @@ def recover(proof, reader, writer_factory, output):
     output.mkdir(mode=0o700)  # Exclusive new recovery record; old session is untouched.
     publish(output, 'admitted.json', {'schema':1,'kind':'couch-native-bootstrap-restore',
             'snapshot_sha256':proof.snapshot_sha256,'temporary_boot_sha256':proof.temporary_boot_sha256,
+            'current_boot_sha256':current_boot_sha256,'debug_chain_receipt_sha256':chain_receipt_sha256,
             'original_boot_sha256':proof.record['originals']['boot']['sha256'],
             'source_evidence_sha256':proof.evidence_sha256,'write_targets':['boot'],'complete':False})
     binding = {**{k:observed[k] for k in ('storage_id','runtime_cid_sha256','partitions')},
@@ -185,7 +199,7 @@ def recover(proof, reader, writer_factory, output):
         # Construction may independently reread GPT; recheck all live gates on that facade.
         require(writer.description['runtime_cid_sha256'] == observed['runtime_cid_sha256']
                 and writer.description['partitions'] == observed['partitions'], 'Writer session changed')
-        require(writer.hash('boot') == proof.temporary_boot_sha256, 'Boot changed before restore')
+        require(writer.hash('boot') == current_boot_sha256, 'Boot changed before restore')
         for name, expected in sorted(retained.items()):require(writer.hash(name) == expected, 'Retained partition changed before restore')
         writer.write('boot', proof.source/original['file'])
         require(writer.hash('boot') == original['sha256'], 'Restored boot readback differs; do not retry')

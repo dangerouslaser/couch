@@ -208,6 +208,20 @@ debug_wait_snapshot() {
     } | $BB head -c 640 >> /tmp/couch-wifi-debug.wait
 }
 
+entropy_reads() {
+    # Only device interrupts feed the 3.18 random pool. The installer stage
+    # already carries the read-only recovery node for its hash operation;
+    # bounded direct reads of it raise eMMC interrupts, so the pool initializes
+    # in seconds rather than minutes. Reads only. The debug stage has no block
+    # node and skips this, which keeps its measurement of the natural pool.
+    [ -b /dev/mmcblk0p9 ] || return 0
+    [ "$(pool_state)" = seeding ] || return 0
+    timeline "entropy reads starting"
+    $BB dd if=/dev/mmcblk0p9 of=/dev/null bs=512 count=32768 iflag=direct 2>/dev/null || \
+        $BB dd if=/dev/mmcblk0p9 of=/dev/null bs=4096 count=4096 2>/dev/null
+    timeline "entropy reads finished"
+}
+
 start_supplicant() {
     # exec keeps $! bound to wpa_supplicant itself rather than a wrapper shell,
     # so liveness checks, /proc snapshots and the failure kill address the
@@ -337,6 +351,8 @@ timeline "supplicant starting"
 start_supplicant >/tmp/couch-wpa-startup.log 2>&1 &
 supplicant=$!
 supplicant_start=$($BB awk '{print $22}' "/proc/$supplicant/stat" 2>/dev/null)
+# The supplicant blocks in getrandom(2) until the pool is ready; feed it now.
+entropy_reads &
 n=0
 while [ ! -S /tmp/couch-wpa/wlan0 ]; do
     # These two outcomes are different faults and must not share a reason.

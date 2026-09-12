@@ -86,8 +86,14 @@ debug stage) for the control socket, execs the supplicant directly so `$!`,
 timeline with `entropy_avail` and the kernel's pool message at each step, and in
 the debug stage keeps observing a blocked supplicant after a timeout. The debug
 stage also opens the gen2 driver's dynamic-debug tap around power-on. Init keeps
-streaming startup diagnostics over serial until provisioning delivers a key. A
-bounded entropy accelerator for the installer stage remains a follow-up.
+streaming startup diagnostics over serial until provisioning delivers a key. The
+installer stage additionally performs bounded direct reads of its read-only
+recovery node while the supplicant starts: eMMC interrupts are the only fast
+entropy source on this board, and 16 MiB of 512-byte reads credits the pool in
+seconds. The debug stage has no block node and measures the natural pool instead.
+On 2026-09-12 the debug stage recorded the pool initializing at 20.8 s of uptime
+and the control socket appearing 10 s after the supplicant started, with the
+process parked in `SyS_getrandom` until then.
 
 Validation still required: WMT bring-up from this independent root, association,
 DHCP, pinned TLS over WiFi, USB disconnect survival, measured throughput and RAM

@@ -71,6 +71,32 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(json.loads((self.root/'recovery/verified.json').read_text())['complete'])
         self.assertEqual(before,{p.name:p.read_bytes() for p in self.source.iterdir()})
 
+    def test_verified_debug_boot_may_replace_the_temporary_pin_as_the_live_boot(self):
+        proof=self.admit();debug=recovery.sha(b'debug stage');chain=recovery.sha(b'chain receipt')
+        device=self.device();device.hashes['boot']=debug
+        # Without the explicit chain evidence a debug boot is still refused.
+        with self.assertRaises(InstallError):
+            recovery.recover(proof,device,lambda *a:device,self.root/'refused')
+        self.assertFalse((self.root/'refused').exists());self.assertEqual(device.writes,[])
+        result=recovery.recover(proof,device,lambda *a:device,self.root/'recovery',
+                                current_boot_sha256=debug,chain_receipt_sha256=chain)
+        self.assertEqual(result['restored'],['boot']);self.assertEqual(device.writes,['boot'])
+        admitted=json.loads((self.root/'recovery/admitted.json').read_text())
+        self.assertEqual(admitted['current_boot_sha256'],debug)
+        self.assertEqual(admitted['debug_chain_receipt_sha256'],chain)
+        self.assertEqual(admitted['temporary_boot_sha256'],self.stage)
+        # The chain receipt hash is mandatory alongside a debug boot.
+        with self.assertRaises(InstallError):
+            recovery.recover(proof,self.device(),lambda *a:device,self.root/'r2',current_boot_sha256=debug)
+        # A live boot that still holds the temporary image no longer matches the debug pin.
+        with self.assertRaises(InstallError):
+            recovery.recover(proof,self.device(),lambda *a:device,self.root/'r3',
+                             current_boot_sha256=debug,chain_receipt_sha256=chain)
+        # Restoring onto the original image is refused as a no-op.
+        with self.assertRaises(InstallError):
+            recovery.recover(proof,self.device(),lambda *a:device,self.root/'r4',
+                             current_boot_sha256=self.record['originals']['boot']['sha256'],chain_receipt_sha256=chain)
+
     def test_wrong_live_cid_boot_or_retained_partition_never_constructs_writer(self):
         proof=self.admit()
         for kind in ('cid','boot','recovery','odmdtbo','nvram'):
