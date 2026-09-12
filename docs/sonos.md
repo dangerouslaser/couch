@@ -44,13 +44,23 @@ and non-coordinator playback.
 ## API key
 
 Every request carries an `X-Sonos-Api-Key` header; without it a player answers
-HTTP 400 `ERROR_API_KEY_VALIDATION_FAILED`. The key is read, in order, from the
-`COUCH_SONOS_API_KEY` environment variable, then from a `sonos-api-key` file kept
-beside the other connection settings (`/opt/couch/sonos-api-key` on the remote;
-`COUCH_HOME_DIR` relocates it for development and `COUCH_SONOS_API_KEY_FILE`
-overrides the path outright), and finally from a built-in placeholder UUID that is
-not a credential. One key serves the whole household, so it sits next to
-`config.json` rather than inside a per-connection directory.
+HTTP 400 `ERROR_API_KEY_VALIDATION_FAILED`. The key is read, in order, from:
+
+1. the `COUCH_SONOS_API_KEY` environment variable, one operator override for the
+   whole remote;
+2. `api_key` in this connection's private settings file,
+   `connections/<id>/sonos-connection.json`, written at mode 0600 by
+   `couch_sdk::save_private` like every other credential (SDK path only);
+3. the shared `sonos-api-key` file beside `config.json`
+   (`/opt/couch/sonos-api-key` on the remote; `COUCH_HOME_DIR` relocates it for
+   development and `COUCH_SONOS_API_KEY_FILE` overrides the path outright);
+4. a built-in placeholder UUID that is not a credential.
+
+Both file locations exist because the key is a *household* credential, not a
+per-player one: the same developer key works for every speaker. The SDK's
+per-connection file is the right home when the daemon manages a connection, and
+the shared file avoids copying one key into five connection directories. Neither
+value ever reaches `config.json` or an exported house configuration.
 
 The supported value is a developer key from integration.sonos.com. Players that
 report `"allowGuestAccess":true` with `"credentialTypeAllowed":"API_KEY"` accept
@@ -83,6 +93,32 @@ vocabulary (`play`, `pause`, `play-pause`, `stop`, `next`, `previous`,
 `{"command":"volume","value":25}`. The saved connection supplies the address;
 command requests cannot override it. Mutations return acknowledgement separately
 from refresh failures so a failed observation does not invite replaying a write.
+
+## Developer SDK
+
+`clients/couch-sonos/src/sdk.rs` implements `couch_sdk::DeviceClient` for
+`Client` and `couch_sdk::ClientSettings` for `Settings` (`FILE_PREFIX` `"sonos"`,
+so `sonos-connection.json`), following `clients/couch-denon/src/sdk.rs` and the
+checklist in [docs/client-sdk.md](client-sdk.md). `KIND` is `"sonos"` and `LABEL`
+is `"Sonos"`, matching `Provider::kind()` and `Provider::label()`, and
+`capabilities()` is exactly
+`couch_model::buttons::functions(&Integration::Sonos { .. })` in the same order -
+`catalog_matches_the_model` fails if that stops being true.
+
+`execute` does not restate the command table: the declared ids are the closed
+vocabulary `Client::command` already parses, so the group coordinator check and
+the mute toggle's read-then-write pair stay in one place. `status` fills the
+SDK's `Status` with `muted`, `volume` and `playing` (from the group's playback
+state), and leaves `on` empty because a Sonos player has no power state to
+observe. Errors map to the SDK vocabulary: `Transport` stays transport, a
+malformed reply or an unexpected HTTP status is `Protocol`, an unknown command is
+`Unsupported`, and anything the player explained - an API error code, a
+non-coordinator refusal - arrives as `Remote` with that explanation.
+
+This is additive. The daemon and the GUI still call the crate's own API
+directly, as the other clients do; `docs/client-sdk.md` records that no
+migration is in progress and none is required, and Sonos is not registered with
+the `couch-control` broker.
 
 ## Commands and the requests they make
 
@@ -165,13 +201,23 @@ or the player listed in two groups) fails closed.
 ## Validation
 
 Run `cargo test -p couch-sonos --locked` and `cargo fmt -p couch-sonos --check`
-from `clients/`, `cargo test` from `daemon/`, `cargo check` from `ui/`, and
-`cargo check --target wasm32-unknown-unknown` from `web/`. Tests use loopback JSON fixtures, not speaker commands. They cover the API
+from `clients/`, `cargo test --locked` from `daemon/`, `cargo check --locked`
+from `ui/`, and `cargo check --locked --target wasm32-unknown-unknown` from
+`web/`. Tests use loopback JSON fixtures, not speaker commands. They cover the API
 key header and JSON content type, the path and body of every command, typed
 Control API errors, the 404 `groupCoordinatorChanged` refusal, member refusal from
 the group listing, the body limit, redirect refusal, freshness cancellation before
 a write, volume validation before the network, key sourcing, mDNS parsing of a
 hand-built compressed packet, and status composition.
+
+The SDK contract is checked with `couch_sdk::testing::contract_findings`, whose
+mock host is a scripted line protocol: it cannot speak HTTPS and JSON, and these
+settings carry no port to point at one, so the checker reports exactly one
+finding, `connect failed`, after passing every declaration, canonicality and
+0600 settings round-trip check it makes before connecting. The capability gate,
+the refusal of an undeclared function without a round trip, and the absence of a
+retry after a refused write are proved against the tiny_http fixture instead,
+which is the same accommodation `couch-ha` and `couch-hue` make.
 
 Physical acceptance on a four-player household (Arc, Amp, One SL, bonded Sub),
 firmware 97.1-80312, API version 1.54.1, using the placeholder key:
@@ -200,6 +246,12 @@ couch-sonos: Sonos API error ERROR_PLAYBACK_NO_CONTENT
 $ couch-sonos 192.168.1.217 play
 couch-sonos: Sonos API error ERROR_PLAYBACK_NO_CONTENT
 ```
+
+The SDK path was checked read-only against the same speaker:
+`DeviceClient::status` returned `Status { on: None, muted: Some(false),
+volume: Some(63), input: None, playing: Some(false), title: None }` and
+`DeviceClient::command(.., "power-off")` returned `Err(Unsupported)` without a
+request.
 
 Discovery returned all four players including the bonded Sub, which `connect`
 then refused. Every speaker was left in the state it was found in: nothing
