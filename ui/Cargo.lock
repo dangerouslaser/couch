@@ -1036,6 +1036,7 @@ dependencies = [
 name = "couch-sonos"
 version = "0.1.0"
 dependencies = [
+ "couch-sdk",
  "rustls",
  "serde",
  "serde_json",
