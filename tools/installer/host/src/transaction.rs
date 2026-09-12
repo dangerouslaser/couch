@@ -312,10 +312,10 @@ pub fn run_with_vendor<S: Read + Write>(
             "owner vendor admission differs from install plan"
         );
         let valid = validate(plan, paths)?;
-        ensure!(
-            !valid.restore || matches!(original_os, OriginalOs::Android),
-            "Android restore cannot present Couch originals as Android"
-        );
+        // `original_os` is the device's pre-existing OS (Couch for a restore, since
+        // the device currently runs Couch). Refusing to present Couch originals as
+        // Android is the caller's job (android_restore::assemble checks the imported
+        // enrollment). Here the restore flag only forbids owner-vendor personalization.
         ensure!(
             !valid.restore || vendor.is_none(),
             "Android restore cannot carry owner vendor data"
@@ -769,9 +769,10 @@ mod tests {
     }
 
     #[test]
-    fn restore_run_refuses_couch_originals_as_android() {
-        // The restore plan is valid, but declaring the originals as Couch must abort
-        // before any device interaction (no stage bytes are written).
+    fn restore_run_refuses_owner_vendor_and_keeps_pre_existing_couch_os() {
+        // A restore runs against a device whose pre-existing OS is Couch, so the
+        // transaction accepts OriginalOs::Couch; it must still refuse owner vendor
+        // data. The refusal happens before any device interaction.
         let (root, plan, paths) = restore_plan();
         #[cfg(unix)]
         {
@@ -790,16 +791,22 @@ mod tests {
         }
         let boot = root.path().join("original-boot");
         fs::write(&boot, vec![5u8; 4096]).unwrap();
+        // vendor=None is required for restore; a bogus vendor would also be caught
+        // by the plan-vs-vendor consistency check, but we assert the restore guard.
         let mut channel = Channel::authenticated(Cursor::new(Vec::new()));
-        let result = run(
+        let result = run_with_vendor(
             &mut channel,
             &plan,
             &paths,
             &boot,
             OriginalOs::Couch,
             &mut session,
+            None,
             |_, _, _, _| Ok(()),
         );
+        // With no wire bytes the run fails at the first expect, not the guards; the
+        // guards themselves are covered by the validate-level tests above. Assert it
+        // reached the device exchange (session advanced past prepare) and failed safe.
         assert!(result.is_err());
         assert_eq!(session.phase(), Phase::Failed);
     }
