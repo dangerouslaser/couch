@@ -92,8 +92,10 @@ pub enum Playback {
     Previous,
 }
 
-// Wire types. Every field is optional at the parser and checked afterwards, so a
-// firmware that drops or renames one fails closed instead of panicking.
+// Wire types. Fields are optional at the parser so a firmware that renames or
+// drops one is a refusal rather than a panic, and each field a decision depends
+// on is then checked for presence: a defaulted empty string, `0` or `false` is
+// not a reading, and must never be mistaken for one.
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct DeviceInfo {
@@ -145,10 +147,15 @@ struct Groups {
     players: Vec<Named>,
 }
 #[derive(Deserialize, Default)]
+struct PlayerVolumeBody {
+    #[serde(default)]
+    volume: Option<u16>,
+    #[serde(default)]
+    muted: Option<bool>,
+}
+/// A player volume reading with both fields confirmed present and in range.
 struct PlayerVolume {
-    #[serde(default)]
-    volume: u16,
-    #[serde(default)]
+    level: u8,
     muted: bool,
 }
 #[derive(Deserialize, Default)]
@@ -231,6 +238,9 @@ fn transport(state: &str) -> String {
 fn segment(value: &str) -> Result<&str> {
     if value.is_empty()
         || value.len() > 128
+        // Path navigation, not an identifier, whichever alphabet spells it.
+        || value == "."
+        || value == ".."
         || !value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:~".contains(&b))
@@ -429,7 +439,7 @@ impl Client {
             coordinator: group.coordinator,
             coordinator_name: group.coordinator_name,
             transport: group.transport,
-            volume: volume.volume as u8,
+            volume: volume.level,
             muted: volume.muted,
         })
     }
@@ -492,16 +502,25 @@ impl Client {
     pub fn command(&self, command: &str) -> Result<()> {
         self.command_if_current(command, &|| true)
     }
+    /// A reading missing either field is a failure, not a zero volume and an
+    /// unmuted speaker: a mute toggle decides its write from `muted`, and
+    /// reporting 0 for "did not say" would invite someone to turn it up.
     fn player_volume(&self) -> Result<PlayerVolume> {
         let path = format!("/players/{}/playerVolume", self.player.uuid);
-        let volume: PlayerVolume = json(&self.request(&path, None)?)?;
-        if volume.volume > 100 {
+        let body: PlayerVolumeBody = json(&self.request(&path, None)?)?;
+        let (Some(level), Some(muted)) = (body.volume, body.muted) else {
+            return Err(Error::Response);
+        };
+        if level > 100 {
             return Err(Error::Response);
         }
-        Ok(volume)
+        Ok(PlayerVolume {
+            level: level as u8,
+            muted,
+        })
     }
     pub fn volume(&self) -> Result<u8> {
-        Ok(self.player_volume()?.volume as u8)
+        Ok(self.player_volume()?.level)
     }
     pub fn muted(&self) -> Result<bool> {
         Ok(self.player_volume()?.muted)

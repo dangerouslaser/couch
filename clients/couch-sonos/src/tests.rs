@@ -330,6 +330,37 @@ fn status_reports_group_state_and_player_volume() {
     thread.join().unwrap();
 }
 #[test]
+fn an_incomplete_volume_reading_is_refused_rather_than_defaulted() {
+    // A mute toggle decides its write from `muted`; a field the player never
+    // sent must not become `false` and turn into a write nobody asked for.
+    let no_mute = serde_json::json!({"_objectType": "playerVolume", "volume": 20}).to_string();
+    let (base, thread) = server(vec![(200, info()), (200, no_mute)]);
+    let client = connect(&base);
+    assert_eq!(client.command("mute"), Err(Error::Response));
+    assert_eq!(
+        thread.join().unwrap().len(),
+        2,
+        "an unusable reading must not be followed by a write"
+    );
+    // And "did not say" is not volume zero.
+    for body in [
+        serde_json::json!({"_objectType": "playerVolume", "muted": false}).to_string(),
+        serde_json::json!({"_objectType": "playerVolume"}).to_string(),
+        volume(101, false),
+    ] {
+        let (base, thread) = server(vec![
+            (200, info()),
+            (200, groups(PLAYER, "PLAYBACK_STATE_IDLE")),
+            (200, body.clone()),
+            (200, body),
+        ]);
+        let client = connect(&base);
+        assert_eq!(client.status().err(), Some(Error::Response));
+        assert_eq!(client.volume(), Err(Error::Response));
+        thread.join().unwrap();
+    }
+}
+#[test]
 fn ambiguous_or_missing_topology_fails_closed() {
     let none = serde_json::json!({"groups": [], "players": []}).to_string();
     let twice = serde_json::json!({
@@ -341,19 +372,24 @@ fn ambiguous_or_missing_topology_fails_closed() {
     })
     .to_string();
     // A group id is spliced into a URL path: refuse one that could leave the origin.
-    let escaping = serde_json::json!({
-        "groups": [{"id": "../../players", "coordinatorId": PLAYER, "playerIds": [PLAYER]}],
-        "players": [],
-    })
-    .to_string();
-    for body in [none, twice, escaping] {
+    let escaping: Vec<String> = ["../../players", "..", "."]
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "groups": [{"id": id, "coordinatorId": PLAYER, "playerIds": [PLAYER]}],
+                "players": [],
+            })
+            .to_string()
+        })
+        .collect();
+    for body in [none, twice].into_iter().chain(escaping) {
         let (base, thread) = server(vec![(200, info()), (200, body)]);
         let client = connect(&base);
         assert_eq!(client.coordinator(), Err(Error::Response));
         thread.join().unwrap();
     }
     assert!(segment("RINCON_TEST:1").is_ok());
-    for bad in ["", "a/b", "a?b", "a#b", "a%2fb", "a b"] {
+    for bad in ["", ".", "..", "a/b", "a?b", "a#b", "a%2fb", "a b"] {
         assert_eq!(segment(bad), Err(Error::Response));
     }
 }
