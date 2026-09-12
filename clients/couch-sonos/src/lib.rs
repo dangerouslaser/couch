@@ -17,10 +17,15 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const KEY_HEADER: &str = "X-Sonos-Api-Key";
 /// One operator override for the whole remote, ahead of every file.
 pub const KEY_ENV: &str = "COUCH_SONOS_API_KEY";
+/// Moves the household key file, for every process that reads it.
+pub const KEY_FILE_ENV: &str = "COUCH_SONOS_API_KEY_FILE";
 const SERVICE: &str = "_sonos._tcp.local";
 const MDNS: (&str, u16) = ("224.0.0.251", 5353);
 /// File name, alongside the other connection settings, holding one API key for
 /// the household. Keep real keys out of Git.
+///
+/// Every reader resolves it the same way: [`KEY_FILE_ENV`] if set, otherwise
+/// this name in the directory that holds `config.json`.
 pub const KEY_FILE: &str = "sonos-api-key";
 /// Stand-in used when no key is configured. Players that allow guest access
 /// currently accept any non-empty key; a real developer key from
@@ -92,8 +97,10 @@ pub enum Playback {
     Previous,
 }
 
-// Wire types. Every field is optional at the parser and checked afterwards, so a
-// firmware that drops or renames one fails closed instead of panicking.
+// Wire types. Fields are optional at the parser so a firmware that renames or
+// drops one is a refusal rather than a panic, and each field a decision depends
+// on is then checked for presence: a defaulted empty string, `0` or `false` is
+// not a reading, and must never be mistaken for one.
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct DeviceInfo {
@@ -145,10 +152,15 @@ struct Groups {
     players: Vec<Named>,
 }
 #[derive(Deserialize, Default)]
+struct PlayerVolumeBody {
+    #[serde(default)]
+    volume: Option<u16>,
+    #[serde(default)]
+    muted: Option<bool>,
+}
+/// A player volume reading with both fields confirmed present and in range.
 struct PlayerVolume {
-    #[serde(default)]
-    volume: u16,
-    #[serde(default)]
+    level: u8,
     muted: bool,
 }
 #[derive(Deserialize, Default)]
@@ -175,22 +187,38 @@ struct Membership {
     transport: String,
 }
 
+/// A resolved API key, and whether a configured value had to be passed over to
+/// reach it. The rejected value is never kept, returned or logged; a caller that
+/// wants to tell someone has only the fact that it happened.
+pub struct KeyChoice {
+    pub key: String,
+    pub rejected: bool,
+}
+
 /// Read the household API key: environment first, then the settings file, then
 /// the placeholder. Never log the result.
 pub fn api_key() -> String {
-    api_key_at(&key_file())
+    api_key_choice().key
 }
 pub fn api_key_at(file: &Path) -> String {
-    choose_key([key_from_env(), std::fs::read_to_string(file).ok()])
+    api_key_choice_at(file).key
+}
+/// The same resolution, keeping whether a configured key was unusable. A silent
+/// fall back to the placeholder looks exactly like "no key is configured" and
+/// then fails at the player, which is a long way from the mistake.
+pub fn api_key_choice() -> KeyChoice {
+    api_key_choice_at(&key_file())
+}
+pub fn api_key_choice_at(file: &Path) -> KeyChoice {
+    resolve_key([key_from_env(), std::fs::read_to_string(file).ok()])
 }
 fn key_from_env() -> Option<String> {
     std::env::var(KEY_ENV).ok()
 }
 /// Default key location, mirroring where the GUI keeps connection settings.
+/// For a process that already knows the configuration directory - the daemon
+/// owns `config.json` - use [`key_file_in`] so both agree.
 pub fn key_file() -> PathBuf {
-    if let Some(path) = std::env::var_os("COUCH_SONOS_API_KEY_FILE") {
-        return PathBuf::from(path);
-    }
     let root = std::env::var_os("COUCH_HOME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -200,16 +228,39 @@ pub fn key_file() -> PathBuf {
                 "/opt/couch"
             })
         });
-    root.join(KEY_FILE)
+    key_file_in(&root)
+}
+/// The household key file for a given configuration directory. The override
+/// outranks the directory, so moving the key moves it for every reader rather
+/// than only for the ones that guess the same path.
+pub fn key_file_in(home: &Path) -> PathBuf {
+    match std::env::var_os(KEY_FILE_ENV) {
+        Some(path) => PathBuf::from(path),
+        None => home.join(KEY_FILE),
+    }
 }
 /// The first usable key in order of precedence, or the placeholder.
 fn choose_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> String {
-    candidates
-        .into_iter()
-        .flatten()
-        .map(|value| value.trim().to_owned())
-        .find(|value| key_ok(value))
-        .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_owned())
+    resolve_key(candidates).key
+}
+fn resolve_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> KeyChoice {
+    let mut rejected = false;
+    for value in candidates.into_iter().flatten() {
+        let value = value.trim();
+        if key_ok(value) {
+            return KeyChoice {
+                key: value.to_owned(),
+                rejected,
+            };
+        }
+        // An unset variable or an empty file is "not configured"; anything else
+        // is a value somebody meant to send, and this client will not send it.
+        rejected |= !value.is_empty();
+    }
+    KeyChoice {
+        key: PLACEHOLDER_API_KEY.to_owned(),
+        rejected,
+    }
 }
 /// A key reaches the wire as a header value: refuse anything that is not
 /// printable ASCII rather than letting a stray newline split the request.
@@ -231,6 +282,9 @@ fn transport(state: &str) -> String {
 fn segment(value: &str) -> Result<&str> {
     if value.is_empty()
         || value.len() > 128
+        // Path navigation, not an identifier, whichever alphabet spells it.
+        || value == "."
+        || value == ".."
         || !value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:~".contains(&b))
@@ -262,6 +316,11 @@ fn check_base(base: &str) -> Result<()> {
     }
     Ok(())
 }
+/// Where a player's API lives. A real player is always TLS on 1443; the scheme
+/// and port are pinned here so a change to either is one edit and one test.
+fn api_root(address: Ipv4Addr) -> String {
+    format!("https://{address}:{PORT}/api/v1")
+}
 fn action(command: Playback) -> &'static str {
     match command {
         Playback::Play => "play",
@@ -284,7 +343,7 @@ impl Client {
         Self::connect_with_key(address, &api_key())
     }
     pub fn connect_with_key(address: Ipv4Addr, key: &str) -> Result<Self> {
-        Self::connect_url(&format!("https://{address}:{PORT}/api/v1"), key)
+        Self::connect_url(&api_root(address), key)
     }
     /// Connect to an explicit API root, e.g. `https://192.0.2.10:1443/api/v1`.
     ///
@@ -429,7 +488,7 @@ impl Client {
             coordinator: group.coordinator,
             coordinator_name: group.coordinator_name,
             transport: group.transport,
-            volume: volume.volume as u8,
+            volume: volume.level,
             muted: volume.muted,
         })
     }
@@ -492,16 +551,25 @@ impl Client {
     pub fn command(&self, command: &str) -> Result<()> {
         self.command_if_current(command, &|| true)
     }
+    /// A reading missing either field is a failure, not a zero volume and an
+    /// unmuted speaker: a mute toggle decides its write from `muted`, and
+    /// reporting 0 for "did not say" would invite someone to turn it up.
     fn player_volume(&self) -> Result<PlayerVolume> {
         let path = format!("/players/{}/playerVolume", self.player.uuid);
-        let volume: PlayerVolume = json(&self.request(&path, None)?)?;
-        if volume.volume > 100 {
+        let body: PlayerVolumeBody = json(&self.request(&path, None)?)?;
+        let (Some(level), Some(muted)) = (body.volume, body.muted) else {
+            return Err(Error::Response);
+        };
+        if level > 100 {
             return Err(Error::Response);
         }
-        Ok(volume)
+        Ok(PlayerVolume {
+            level: level as u8,
+            muted,
+        })
     }
     pub fn volume(&self) -> Result<u8> {
-        Ok(self.player_volume()?.volume as u8)
+        Ok(self.player_volume()?.level)
     }
     pub fn muted(&self) -> Result<bool> {
         Ok(self.player_volume()?.muted)
@@ -585,8 +653,11 @@ fn query(service: &str) -> Vec<u8> {
     packet.extend_from_slice(&[0, 0, 12, 0, 1]);
     packet
 }
-/// Decompress one name. Pointers must point backwards, which makes loops
-/// impossible, and the caller continues after the first pointer.
+/// Decompress one name. A pointer must point backwards, but that does not bound
+/// the walk on its own - a backwards pointer can land on a label that runs
+/// forward into the same pointer again - so the hop budget below and the
+/// 255-byte name cap are what end it. The caller continues after the first
+/// pointer.
 fn read_name(message: &[u8], start: usize) -> Option<(String, usize)> {
     let mut name = String::new();
     let mut pos = start;

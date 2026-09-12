@@ -118,6 +118,24 @@ fn server_with(
 fn connect(base: &str) -> Client {
     Client::connect_url(base, KEY).unwrap()
 }
+/// A directory this run alone owns. A fixed name under a shared temporary
+/// directory is a symlink somebody else can plant and a collision between two
+/// concurrent runs, so the name carries the process, the clock and a counter,
+/// and `create_dir` refuses to adopt anything already there.
+fn scratch() -> std::path::PathBuf {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "couch-sonos-test-{}-{nanos}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&path).expect("a scratch directory of this run's own");
+    path
+}
 
 #[test]
 fn connect_identifies_the_player_and_sends_the_api_key() {
@@ -330,6 +348,37 @@ fn status_reports_group_state_and_player_volume() {
     thread.join().unwrap();
 }
 #[test]
+fn an_incomplete_volume_reading_is_refused_rather_than_defaulted() {
+    // A mute toggle decides its write from `muted`; a field the player never
+    // sent must not become `false` and turn into a write nobody asked for.
+    let no_mute = serde_json::json!({"_objectType": "playerVolume", "volume": 20}).to_string();
+    let (base, thread) = server(vec![(200, info()), (200, no_mute)]);
+    let client = connect(&base);
+    assert_eq!(client.command("mute"), Err(Error::Response));
+    assert_eq!(
+        thread.join().unwrap().len(),
+        2,
+        "an unusable reading must not be followed by a write"
+    );
+    // And "did not say" is not volume zero.
+    for body in [
+        serde_json::json!({"_objectType": "playerVolume", "muted": false}).to_string(),
+        serde_json::json!({"_objectType": "playerVolume"}).to_string(),
+        volume(101, false),
+    ] {
+        let (base, thread) = server(vec![
+            (200, info()),
+            (200, groups(PLAYER, "PLAYBACK_STATE_IDLE")),
+            (200, body.clone()),
+            (200, body),
+        ]);
+        let client = connect(&base);
+        assert_eq!(client.status().err(), Some(Error::Response));
+        assert_eq!(client.volume(), Err(Error::Response));
+        thread.join().unwrap();
+    }
+}
+#[test]
 fn ambiguous_or_missing_topology_fails_closed() {
     let none = serde_json::json!({"groups": [], "players": []}).to_string();
     let twice = serde_json::json!({
@@ -341,19 +390,24 @@ fn ambiguous_or_missing_topology_fails_closed() {
     })
     .to_string();
     // A group id is spliced into a URL path: refuse one that could leave the origin.
-    let escaping = serde_json::json!({
-        "groups": [{"id": "../../players", "coordinatorId": PLAYER, "playerIds": [PLAYER]}],
-        "players": [],
-    })
-    .to_string();
-    for body in [none, twice, escaping] {
+    let escaping: Vec<String> = ["../../players", "..", "."]
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "groups": [{"id": id, "coordinatorId": PLAYER, "playerIds": [PLAYER]}],
+                "players": [],
+            })
+            .to_string()
+        })
+        .collect();
+    for body in [none, twice].into_iter().chain(escaping) {
         let (base, thread) = server(vec![(200, info()), (200, body)]);
         let client = connect(&base);
         assert_eq!(client.coordinator(), Err(Error::Response));
         thread.join().unwrap();
     }
     assert!(segment("RINCON_TEST:1").is_ok());
-    for bad in ["", "a/b", "a?b", "a#b", "a%2fb", "a b"] {
+    for bad in ["", ".", "..", "a/b", "a?b", "a#b", "a%2fb", "a b"] {
         assert_eq!(segment(bad), Err(Error::Response));
     }
 }
@@ -413,6 +467,23 @@ fn redirects_are_not_followed() {
     assert_eq!(thread.join().unwrap().len(), 1);
 }
 #[test]
+fn a_player_is_addressed_over_tls_on_the_control_api_port() {
+    assert_eq!(
+        api_root(Ipv4Addr::new(192, 168, 1, 114)),
+        "https://192.168.1.114:1443/api/v1"
+    );
+    assert_eq!(check_base(&api_root(Ipv4Addr::new(10, 0, 0, 1))), Ok(()));
+    // And the agent that address is used with does not verify the player's
+    // certificate: that is the documented trust level, not an accident of
+    // configuration, so a change to the TLS wiring fails here.
+    let (base, thread) = server(vec![(200, info())]);
+    let client = connect(&base);
+    let config = client.agent.config();
+    assert!(config.tls_config().disable_verification());
+    assert_eq!(config.max_redirects(), 0);
+    thread.join().unwrap();
+}
+#[test]
 fn only_loopback_may_drop_tls() {
     for base in [
         "https://192.0.2.10:1443/api/v1",
@@ -438,20 +509,48 @@ fn api_key_prefers_environment_then_file_then_placeholder() {
     assert_eq!(choose_key([None, Some(" file \n".into())]), "file");
     assert_eq!(choose_key([Some("  ".into()), Some("file".into())]), "file");
     assert_eq!(choose_key([None, None]), PLACEHOLDER_API_KEY);
-    // Header-unsafe or oversized values are ignored rather than sent.
+    // Header-unsafe or oversized values are ignored rather than sent, and the
+    // caller can tell that happened without ever being handed the value.
     assert_eq!(choose_key([Some("a\nb".into())]), PLACEHOLDER_API_KEY);
     assert_eq!(choose_key([Some("k".repeat(257))]), PLACEHOLDER_API_KEY);
-    let file = std::env::temp_dir().join("couch-sonos-key-fixture");
+    assert!(resolve_key([Some("a\nb".into())]).rejected);
+    assert!(resolve_key([Some("a\nb".into()), Some("good".into())]).rejected);
+    assert_eq!(
+        resolve_key([Some("a\nb".into()), Some("good".into())]).key,
+        "good"
+    );
+    // Nothing configured, and whitespace where a key would go, are not mistakes
+    // worth reporting: both mean the same as an absent file.
+    assert!(!resolve_key([None, None]).rejected);
+    assert!(!resolve_key([Some(String::new()), Some("  \n".into())]).rejected);
+    let directory = scratch();
+    let file = directory.join(KEY_FILE);
     std::fs::write(&file, "from-file\n").unwrap();
-    if std::env::var_os("COUCH_SONOS_API_KEY").is_none() {
+    if std::env::var_os(KEY_ENV).is_none() {
         assert_eq!(api_key_at(&file), "from-file");
         assert_eq!(
             api_key_at(Path::new("/nonexistent/sonos-api-key")),
             PLACEHOLDER_API_KEY
         );
+        std::fs::write(&file, "one two\n").unwrap();
+        let choice = api_key_choice_at(&file);
+        assert_eq!(choice.key, PLACEHOLDER_API_KEY);
+        assert!(choice.rejected, "an unusable configured key is reported");
     }
-    std::fs::remove_file(&file).ok();
+    std::fs::remove_dir_all(&directory).ok();
     assert!(key_file().ends_with(KEY_FILE));
+    // The daemon knows its own configuration directory; the override still wins,
+    // so no reader can end up looking at a different file from the others.
+    if std::env::var_os(KEY_FILE_ENV).is_none() {
+        assert_eq!(
+            key_file_in(Path::new("/srv/couch")),
+            Path::new("/srv/couch").join(KEY_FILE)
+        );
+        assert_eq!(
+            key_file_in(Path::new("/srv/couch")),
+            key_file_in(Path::new("/srv/couch"))
+        );
+    }
 }
 
 // Multicast DNS fixtures. Names are compressed exactly as players compress them.
