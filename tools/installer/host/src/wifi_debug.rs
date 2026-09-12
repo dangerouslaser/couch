@@ -816,18 +816,21 @@ mod tests {
 
     #[test]
     fn chained_transition_requires_a_pinned_parent_and_target_binding() {
-        let legacy = json!({"source":"/retained", "temporary_boot_sha256":"a".repeat(64),
+        // Absolute on every platform: a bare "/name" is relative on Windows.
+        let root = std::env::temp_dir();
+        let at = |name: &str| root.join(name);
+        let legacy = json!({"source":at("retained"), "temporary_boot_sha256":"a".repeat(64),
             "original_boot_sha256":"b".repeat(64), "snapshot_sha256":"c".repeat(64),
-            "image":"/current-debug.img", "image_sha256":"d".repeat(64),
-            "metadata":"/current-debug.json", "metadata_sha256":"e".repeat(64)});
-        let chained = json!({"parent":{"receipt":"/completed.json", "sha256":"f".repeat(64),
-            "inputs":legacy}, "candidate_receipt":"/candidate-receipt.json",
+            "image":at("current-debug.img"), "image_sha256":"d".repeat(64),
+            "metadata":at("current-debug.json"), "metadata_sha256":"e".repeat(64)});
+        let chained = json!({"parent":{"receipt":at("completed.json"), "sha256":"f".repeat(64),
+            "inputs":legacy}, "candidate_receipt":at("candidate-receipt.json"),
             "candidate_receipt_sha256":"1".repeat(64), "source_commit":"2".repeat(40),
             "stage_base_commit":"3".repeat(40), "probe_sha256":"4".repeat(64),
-            "image":"/next-debug.img", "image_sha256":"5".repeat(64),
-            "metadata":"/next-debug.json", "metadata_sha256":"6".repeat(64)});
+            "image":at("next-debug.img"), "image_sha256":"5".repeat(64),
+            "metadata":at("next-debug.json"), "metadata_sha256":"6".repeat(64)});
         let value = json!({"schema":1,"bus":1,"ports":[2],"expected_stage":"wifi-debug-v1",
-            "runtime_root":"/runtime","runtime_receipt_sha256":"7".repeat(64),
+            "runtime_root":at("runtime"),"runtime_receipt_sha256":"7".repeat(64),
             "transition":chained});
         assert!(serde_json::from_value::<Config>(value.clone())
             .unwrap()
