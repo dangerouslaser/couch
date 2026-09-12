@@ -15,6 +15,8 @@ const PORT: u16 = 1443;
 const LIMIT: u64 = 512 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const KEY_HEADER: &str = "X-Sonos-Api-Key";
+/// One operator override for the whole remote, ahead of every file.
+pub const KEY_ENV: &str = "COUCH_SONOS_API_KEY";
 const SERVICE: &str = "_sonos._tcp.local";
 const MDNS: (&str, u16) = ("224.0.0.251", 5353);
 /// File name, alongside the other connection settings, holding one API key for
@@ -179,10 +181,10 @@ pub fn api_key() -> String {
     api_key_at(&key_file())
 }
 pub fn api_key_at(file: &Path) -> String {
-    choose_key(
-        std::env::var("COUCH_SONOS_API_KEY").ok(),
-        std::fs::read_to_string(file).ok(),
-    )
+    choose_key([key_from_env(), std::fs::read_to_string(file).ok()])
+}
+fn key_from_env() -> Option<String> {
+    std::env::var(KEY_ENV).ok()
 }
 /// Default key location, mirroring where the GUI keeps connection settings.
 pub fn key_file() -> PathBuf {
@@ -200,19 +202,19 @@ pub fn key_file() -> PathBuf {
         });
     root.join(KEY_FILE)
 }
-fn choose_key(env: Option<String>, file: Option<String>) -> String {
-    [env, file]
+/// The first usable key in order of precedence, or the placeholder.
+fn choose_key<I: IntoIterator<Item = Option<String>>>(candidates: I) -> String {
+    candidates
         .into_iter()
         .flatten()
         .map(|value| value.trim().to_owned())
-        // A key reaches the wire as a header value: refuse anything that is not
-        // printable ASCII rather than letting a stray newline split the request.
-        .find(|value| {
-            !value.is_empty()
-                && value.len() <= 256
-                && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
-        })
+        .find(|value| key_ok(value))
         .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_owned())
+}
+/// A key reaches the wire as a header value: refuse anything that is not
+/// printable ASCII rather than letting a stray newline split the request.
+fn key_ok(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
 fn json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
@@ -295,7 +297,7 @@ impl Client {
         // Refuse a key we cannot put in a header rather than letting a stray
         // newline split the request; the player reports the same code itself.
         let key = key.trim().to_owned();
-        if choose_key(Some(key.clone()), None) != key {
+        if !key_ok(&key) {
             return Err(Error::Api("ERROR_API_KEY_VALIDATION_FAILED".into()));
         }
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -694,6 +696,9 @@ fn routable(address: &Ipv4Addr) -> bool {
         && !address.is_multicast()
         && !address.is_broadcast()
 }
+
+mod sdk;
+pub use sdk::Settings;
 
 #[cfg(test)]
 mod tests;

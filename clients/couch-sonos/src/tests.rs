@@ -3,11 +3,11 @@
 use super::*;
 use std::net::SocketAddr;
 
-const PLAYER: &str = "RINCON_TEST";
+pub(crate) const PLAYER: &str = "RINCON_TEST";
 const OTHER: &str = "RINCON_OTHER";
-const KEY: &str = "fixture-key";
+pub(crate) const KEY: &str = "fixture-key";
 
-fn info() -> String {
+pub(crate) fn info() -> String {
     serde_json::json!({
         "_objectType": "discoveryInfo",
         "playerId": PLAYER,
@@ -25,7 +25,7 @@ fn info() -> String {
     })
     .to_string()
 }
-fn groups(coordinator: &str, state: &str) -> String {
+pub(crate) fn groups(coordinator: &str, state: &str) -> String {
     serde_json::json!({
         "_objectType": "groups",
         "groups": [{
@@ -43,7 +43,7 @@ fn groups(coordinator: &str, state: &str) -> String {
     })
     .to_string()
 }
-fn volume(level: u16, muted: bool) -> String {
+pub(crate) fn volume(level: u16, muted: bool) -> String {
     serde_json::json!({"_objectType": "playerVolume", "volume": level, "muted": muted, "fixed": false})
         .to_string()
 }
@@ -51,17 +51,17 @@ fn ok() -> (u16, String) {
     (200, "{}".into())
 }
 
-struct Recorded {
+pub(crate) struct Recorded {
     method: String,
     url: String,
     key: String,
     content_type: String,
     body: String,
 }
-type Fixture = (String, std::thread::JoinHandle<Vec<Recorded>>);
+pub(crate) type Fixture = (String, std::thread::JoinHandle<Vec<Recorded>>);
 /// Serve exactly the scripted replies, then assert nothing further was sent:
 /// a refusal path must not leave a mutation on the wire.
-fn server(replies: Vec<(u16, String)>) -> Fixture {
+pub(crate) fn server(replies: Vec<(u16, String)>) -> Fixture {
     server_with(replies, vec![])
 }
 fn server_with(
@@ -434,13 +434,13 @@ fn only_loopback_may_drop_tls() {
 }
 #[test]
 fn api_key_prefers_environment_then_file_then_placeholder() {
-    assert_eq!(choose_key(Some("env".into()), Some("file".into())), "env");
-    assert_eq!(choose_key(None, Some(" file \n".into())), "file");
-    assert_eq!(choose_key(Some("  ".into()), Some("file".into())), "file");
-    assert_eq!(choose_key(None, None), PLACEHOLDER_API_KEY);
+    assert_eq!(choose_key([Some("env".into()), Some("file".into())]), "env");
+    assert_eq!(choose_key([None, Some(" file \n".into())]), "file");
+    assert_eq!(choose_key([Some("  ".into()), Some("file".into())]), "file");
+    assert_eq!(choose_key([None, None]), PLACEHOLDER_API_KEY);
     // Header-unsafe or oversized values are ignored rather than sent.
-    assert_eq!(choose_key(Some("a\nb".into()), None), PLACEHOLDER_API_KEY);
-    assert_eq!(choose_key(Some("k".repeat(257)), None), PLACEHOLDER_API_KEY);
+    assert_eq!(choose_key([Some("a\nb".into())]), PLACEHOLDER_API_KEY);
+    assert_eq!(choose_key([Some("k".repeat(257))]), PLACEHOLDER_API_KEY);
     let file = std::env::temp_dir().join("couch-sonos-key-fixture");
     std::fs::write(&file, "from-file\n").unwrap();
     if std::env::var_os("COUCH_SONOS_API_KEY").is_none() {
