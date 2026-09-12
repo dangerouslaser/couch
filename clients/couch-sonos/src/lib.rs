@@ -1,17 +1,31 @@
-//! Blocking local Sonos UPnP client. Run on a worker thread, never the GUI thread.
-//! Playback affects the selected coordinator's group; volume/mute address one player.
-use serde::Serialize;
+//! Blocking client for the official Sonos Control API, spoken directly to a
+//! player on the local network (HTTPS, port 1443, no cloud gateway and no OAuth).
+//! Run it on a worker thread, never the GUI thread. Playback affects the selected
+//! coordinator's group; volume and mute address one player.
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
+    net::{Ipv4Addr, SocketAddr, UdpSocket},
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
+/// Players serve the Control API over TLS on 1443; 1400 was the legacy UPnP port.
+const PORT: u16 = 1443;
 const LIMIT: u64 = 512 * 1024;
-const AV: &str = "urn:schemas-upnp-org:service:AVTransport:1";
-const RC: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
-const ZG: &str = "urn:schemas-upnp-org:service:ZoneGroupTopology:1";
-const ST: &str = "urn:schemas-upnp-org:device:ZonePlayer:1";
+const TIMEOUT: Duration = Duration::from_secs(5);
+const KEY_HEADER: &str = "X-Sonos-Api-Key";
+const SERVICE: &str = "_sonos._tcp.local";
+const MDNS: (&str, u16) = ("224.0.0.251", 5353);
+/// File name, alongside the other connection settings, holding one API key for
+/// the household. Keep real keys out of Git.
+pub const KEY_FILE: &str = "sonos-api-key";
+/// Stand-in used when no key is configured. Players that allow guest access
+/// currently accept any non-empty key; a real developer key from
+/// integration.sonos.com replaces this through `COUCH_SONOS_API_KEY` or the
+/// `sonos-api-key` file. This constant is not a credential.
+pub const PLACEHOLDER_API_KEY: &str = "00000000-0000-4000-8000-000000000000";
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -20,7 +34,7 @@ pub enum Error {
     Response,
     Unsupported,
     Http(u16),
-    Soap(u16),
+    Api(String),
     Volume,
     Cancelled,
     Command,
@@ -32,10 +46,10 @@ impl std::fmt::Display for Error {
             Self::Transport => f.write_str("Cannot reach Sonos within the network timeout"),
             Self::Response => f.write_str("Invalid or oversized Sonos response"),
             Self::Unsupported => {
-                f.write_str("Player does not advertise the required Sonos UPnP services")
+                f.write_str("Host is not a Sonos player with local playback control")
             }
             Self::Http(code) => write!(f, "Sonos HTTP error {code}"),
-            Self::Soap(code) => write!(f, "Sonos UPnP error {code}"),
+            Self::Api(code) => write!(f, "Sonos API error {code}"),
             Self::Cancelled => f.write_str("Sonos command expired before dispatch"),
             Self::Command => f.write_str("Unsupported Sonos command"),
             Self::Volume => f.write_str("Volume must be between 0 and 100"),
@@ -57,8 +71,11 @@ pub struct Player {
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
     pub player: Player,
+    /// Coordinator player id, comparable with `player.uuid`.
     pub coordinator: String,
-    /// Transport state reported by this player; a group member may report a proxy state.
+    /// Coordinator room name when the household listing supplies one, else its id.
+    pub coordinator_name: String,
+    /// Group playback state with the `PLAYBACK_STATE_` prefix removed.
     pub transport: String,
     pub volume: u8,
     pub muted: bool,
@@ -68,229 +85,373 @@ pub enum Playback {
     Play,
     Pause,
     Stop,
+    PlayPause,
     Next,
     Previous,
+}
+
+// Wire types. Every field is optional at the parser and checked afterwards, so a
+// firmware that drops or renames one fails closed instead of panicking.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct DeviceInfo {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    model_display_name: String,
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct DiscoveryInfo {
+    #[serde(rename = "_objectType", default)]
+    object: String,
+    #[serde(default)]
+    player_id: String,
+    #[serde(default)]
+    household_id: String,
+    #[serde(default)]
+    device: DeviceInfo,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Group {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    coordinator_id: String,
+    #[serde(default)]
+    playback_state: String,
+    #[serde(default)]
+    player_ids: Vec<String>,
+}
+#[derive(Deserialize, Default)]
+struct Named {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+}
+#[derive(Deserialize, Default)]
+struct Groups {
+    #[serde(default)]
+    groups: Vec<Group>,
+    #[serde(default)]
+    players: Vec<Named>,
+}
+#[derive(Deserialize, Default)]
+struct PlayerVolume {
+    #[serde(default)]
+    volume: u16,
+    #[serde(default)]
+    muted: bool,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ApiError {
+    #[serde(default)]
+    error_code: String,
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CoordinatorChanged {
+    #[serde(rename = "_objectType", default)]
+    object: String,
+    #[serde(default)]
+    group_name: String,
+    #[serde(default)]
+    player_id: String,
+}
+/// The group this player belongs to, as one household read.
+struct Membership {
+    id: String,
+    coordinator: String,
+    coordinator_name: String,
+    transport: String,
+}
+
+/// Read the household API key: environment first, then the settings file, then
+/// the placeholder. Never log the result.
+pub fn api_key() -> String {
+    api_key_at(&key_file())
+}
+pub fn api_key_at(file: &Path) -> String {
+    choose_key(
+        std::env::var("COUCH_SONOS_API_KEY").ok(),
+        std::fs::read_to_string(file).ok(),
+    )
+}
+/// Default key location, mirroring where the GUI keeps connection settings.
+pub fn key_file() -> PathBuf {
+    if let Some(path) = std::env::var_os("COUCH_SONOS_API_KEY_FILE") {
+        return PathBuf::from(path);
+    }
+    let root = std::env::var_os("COUCH_HOME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(if Path::new("/mnt/alpine/opt/couch").is_dir() {
+                "/mnt/alpine/opt/couch"
+            } else {
+                "/opt/couch"
+            })
+        });
+    root.join(KEY_FILE)
+}
+fn choose_key(env: Option<String>, file: Option<String>) -> String {
+    [env, file]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim().to_owned())
+        // A key reaches the wire as a header value: refuse anything that is not
+        // printable ASCII rather than letting a stray newline split the request.
+        .find(|value| {
+            !value.is_empty()
+                && value.len() <= 256
+                && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
+        })
+        .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_owned())
+}
+
+fn json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
+    serde_json::from_str(text).map_err(|_| Error::Response)
+}
+fn transport(state: &str) -> String {
+    state
+        .strip_prefix("PLAYBACK_STATE_")
+        .unwrap_or(state)
+        .to_owned()
+}
+/// Device-supplied identifiers become URL path segments; keep them inside the
+/// connected origin and out of the query and path-traversal alphabets.
+fn segment(value: &str) -> Result<&str> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:~".contains(&b))
+    {
+        return Err(Error::Response);
+    }
+    Ok(value)
+}
+/// Accept an API root on one origin. Plain HTTP is allowed only for loopback
+/// fixtures; a real player is always HTTPS.
+fn check_base(base: &str) -> Result<()> {
+    let rest = match base.strip_prefix("https://") {
+        Some(rest) => rest,
+        None => {
+            let rest = base.strip_prefix("http://").ok_or(Error::Unsupported)?;
+            let host = rest.split(['/', ':']).next().unwrap_or_default();
+            if host != "localhost" && !host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback()) {
+                return Err(Error::Unsupported);
+            }
+            rest
+        }
+    };
+    if rest.is_empty()
+        || rest.ends_with('/')
+        || !rest.is_ascii()
+        || rest.contains(['@', '?', '#', ' '])
+    {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
+}
+fn action(command: Playback) -> &'static str {
+    match command {
+        Playback::Play => "play",
+        // The Control API has no stop; pause is the closest non-destructive match.
+        Playback::Pause | Playback::Stop => "pause",
+        Playback::PlayPause => "togglePlayPause",
+        Playback::Next => "skipToNextTrack",
+        Playback::Previous => "skipToPreviousTrack",
+    }
 }
 
 pub struct Client {
     base: String,
     agent: ureq::Agent,
+    key: String,
     player: Player,
-    av_path: String,
-    rc_path: String,
-    zg_path: String,
-}
-fn xml(text: &str) -> Result<roxmltree::Document<'_>> {
-    // roxmltree rejects DTDs by default; do not enable entity expansion.
-    roxmltree::Document::parse(text).map_err(|_| Error::Response)
-}
-fn field(doc: &roxmltree::Document<'_>, name: &str) -> Result<String> {
-    let mut nodes = doc
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == name);
-    let value = nodes.next().ok_or(Error::Response)?.text().unwrap_or("");
-    if nodes.next().is_some() {
-        return Err(Error::Response);
-    }
-    Ok(value.to_owned())
-}
-fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-fn envelope(service: &str, action: &str, args: &[(&str, String)]) -> String {
-    let fields: String = args
-        .iter()
-        .map(|(key, value)| format!("<{key}>{}</{key}>", escape(value)))
-        .collect();
-    format!(
-        r#"<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:{action} xmlns:u="{service}">{fields}</u:{action}></s:Body></s:Envelope>"#
-    )
-}
-fn response(mut response: ureq::http::Response<ureq::Body>) -> Result<String> {
-    let status = response.status().as_u16();
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(LIMIT)
-        .read_to_string()
-        .map_err(|_| Error::Response)?;
-    let doc = xml(&body)?;
-    if doc
-        .descendants()
-        .any(|n| n.has_tag_name(("http://schemas.xmlsoap.org/soap/envelope/", "Fault")))
-    {
-        return Err(Error::Soap(
-            field(&doc, "errorCode")?
-                .parse()
-                .map_err(|_| Error::Response)?,
-        ));
-    }
-    if !(200..300).contains(&status) {
-        return Err(Error::Http(status));
-    }
-    Ok(body)
-}
-fn service_path(doc: &roxmltree::Document<'_>, service: &str) -> Result<String> {
-    let node = doc
-        .descendants()
-        .find(|n| {
-            n.has_tag_name("service")
-                && n.children()
-                    .any(|c| c.has_tag_name("serviceType") && c.text() == Some(service))
-        })
-        .ok_or(Error::Unsupported)?;
-    let path = node
-        .children()
-        .find(|n| n.has_tag_name("controlURL"))
-        .and_then(|n| n.text())
-        .ok_or(Error::Response)?;
-    // Accept only same-origin, plain absolute paths; never follow a device-supplied host.
-    if !path.starts_with('/')
-        || path.starts_with("//")
-        || !path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/-_".contains(&b))
-    {
-        return Err(Error::Response);
-    }
-    Ok(path.to_owned())
 }
 impl Client {
     pub fn connect(address: Ipv4Addr) -> Result<Self> {
-        Self::connect_at(SocketAddrV4::new(address, 1400))
+        Self::connect_with_key(address, &api_key())
     }
-    fn connect_at(address: SocketAddrV4) -> Result<Self> {
+    pub fn connect_with_key(address: Ipv4Addr, key: &str) -> Result<Self> {
+        Self::connect_url(&format!("https://{address}:{PORT}/api/v1"), key)
+    }
+    /// Connect to an explicit API root, e.g. `https://192.0.2.10:1443/api/v1`.
+    ///
+    /// Player certificates are leaves issued by the Sonos device CA, which is in
+    /// no system trust store and is not sent in the chain, so peer verification
+    /// is disabled: this is the same trust level as the legacy plain-HTTP
+    /// protocol, namely a trusted LAN and no peer authentication.
+    pub fn connect_url(base: &str, key: &str) -> Result<Self> {
+        check_base(base)?;
+        // Refuse a key we cannot put in a header rather than letting a stray
+        // newline split the request; the player reports the same code itself.
+        let key = key.trim().to_owned();
+        if choose_key(Some(key.clone()), None) != key {
+            return Err(Error::Api("ERROR_API_KEY_VALIDATION_FAILED".into()));
+        }
         let agent: ureq::Agent = ureq::Agent::config_builder()
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .disable_verification(true)
+                    .build(),
+            )
             .proxy(None)
             .max_redirects(0)
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(5)))
+            .timeout_global(Some(TIMEOUT))
             .build()
             .into();
-        let base = format!("http://{address}");
-        let body = response(
-            agent
-                .get(format!("{base}/xml/device_description.xml"))
-                .call()
-                .map_err(|_| Error::Transport)?,
-        )?;
-        let doc = xml(&body)?;
-        // Root device identity only: descriptions can contain embedded renderer devices.
-        let device = doc
-            .root_element()
-            .children()
-            .find(|n| n.has_tag_name("device"))
-            .ok_or(Error::Response)?;
-        let get = |tag| {
-            device
-                .children()
-                .find(|n| n.has_tag_name(tag))
-                .and_then(|n| n.text())
-                .map(str::to_owned)
-                .ok_or(Error::Response)
+        let client = Self {
+            base: base.to_owned(),
+            agent,
+            key,
+            player: Player {
+                uuid: String::new(),
+                name: String::new(),
+                model: String::new(),
+            },
         };
-        if get("deviceType")? != ST || !get("manufacturer")?.starts_with("Sonos") {
+        let info: DiscoveryInfo = json(&client.request("/players/local/info", None)?)?;
+        if info.object != "discoveryInfo"
+            || info.household_id.is_empty()
+            || info.device.name.is_empty()
+            || !info.device.capabilities.iter().any(|c| c == "PLAYBACK")
+        {
             return Err(Error::Unsupported);
         }
-        let udn = get("UDN")?;
-        let uuid = udn
-            .strip_prefix("uuid:")
-            .filter(|s| !s.is_empty())
-            .ok_or(Error::Response)?
+        let uuid = segment(&info.player_id)
+            .map_err(|_| Error::Unsupported)?
             .to_owned();
+        let model = if info.device.model_display_name.is_empty() {
+            info.device.model
+        } else {
+            info.device.model_display_name
+        };
         Ok(Self {
-            base,
-            agent,
             player: Player {
                 uuid,
-                name: get("friendlyName")?,
-                model: get("modelName")?,
+                name: info.device.name,
+                model,
             },
-            av_path: service_path(&doc, AV)?,
-            rc_path: service_path(&doc, RC)?,
-            zg_path: service_path(&doc, ZG)?,
+            ..client
         })
     }
     pub fn player(&self) -> &Player {
         &self.player
     }
-    fn call(
-        &self,
-        service: &str,
-        path: &str,
-        action: &str,
-        args: &[(&str, String)],
-    ) -> Result<String> {
-        let body = response(
-            self.agent
-                .post(format!("{}{path}", self.base))
-                .header("Content-Type", "text/xml; charset=\"utf-8\"")
-                .header("SOAPAction", format!("\"{service}#{action}\""))
-                .send(envelope(service, action, args))
-                .map_err(|_| Error::Transport)?,
-        )?;
-        let doc = xml(&body)?;
-        if !doc
-            .descendants()
-            .any(|n| n.has_tag_name((service, format!("{action}Response").as_str())))
-        {
+    fn request(&self, path: &str, body: Option<&str>) -> Result<String> {
+        let url = format!("{}{path}", self.base);
+        let sent = match body {
+            Some(body) => self
+                .agent
+                .post(&url)
+                .header(KEY_HEADER, &self.key)
+                .header("Content-Type", "application/json")
+                .send(body),
+            None => self.agent.get(&url).header(KEY_HEADER, &self.key).call(),
+        };
+        let mut response = sent.map_err(|_| Error::Transport)?;
+        let status = response.status().as_u16();
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(LIMIT)
+            .read_to_string()
+            .map_err(|_| Error::Response)?;
+        if (200..300).contains(&status) {
+            return Ok(text);
+        }
+        // The group moved to another coordinator between the topology read and
+        // this request; report it like any other member refusal.
+        if let Ok(moved) = serde_json::from_str::<CoordinatorChanged>(&text) {
+            if moved.object == "groupCoordinatorChanged" {
+                let coordinator = if moved.group_name.is_empty() {
+                    moved.player_id
+                } else {
+                    moved.group_name
+                };
+                if !coordinator.is_empty() {
+                    return Err(Error::NotCoordinator { coordinator });
+                }
+            }
+        }
+        match serde_json::from_str::<ApiError>(&text) {
+            Ok(error) if !error.error_code.is_empty() => Err(Error::Api(error.error_code)),
+            _ => Err(Error::Http(status)),
+        }
+    }
+    /// One household read: the group holding this player, its coordinator and
+    /// that group's playback state.
+    fn membership(&self) -> Result<Membership> {
+        let body = self.request("/households/local/groups", None)?;
+        let groups: Groups = json(&body)?;
+        let mut matching = groups
+            .groups
+            .iter()
+            .filter(|g| g.player_ids.contains(&self.player.uuid));
+        let group = matching.next().ok_or(Error::Response)?;
+        // Ambiguous topology fails closed rather than guessing a target group.
+        if matching.next().is_some() || group.coordinator_id.is_empty() {
             return Err(Error::Response);
         }
-        Ok(body)
+        let coordinator_name = groups
+            .players
+            .iter()
+            .find(|p| p.id == group.coordinator_id && !p.name.is_empty())
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| group.coordinator_id.clone());
+        Ok(Membership {
+            id: segment(&group.id)?.to_owned(),
+            coordinator: group.coordinator_id.clone(),
+            coordinator_name,
+            transport: transport(&group.playback_state),
+        })
     }
     pub fn coordinator(&self) -> Result<String> {
-        let body = self.call(ZG, &self.zg_path, "GetZoneGroupState", &[])?;
-        let state = field(&xml(&body)?, "ZoneGroupState")?;
-        coordinator(&state, &self.player.uuid)
+        Ok(self.membership()?.coordinator)
     }
     pub fn status(&self) -> Result<Status> {
-        let coordinator = self.coordinator()?;
-        let body = self.call(
-            AV,
-            &self.av_path,
-            "GetTransportInfo",
-            &[("InstanceID", "0".into())],
-        )?;
-        let transport = field(&xml(&body)?, "CurrentTransportState")?;
+        let group = self.membership()?;
+        let volume = self.player_volume()?;
         Ok(Status {
             player: self.player.clone(),
-            coordinator,
-            transport,
-            volume: self.volume()?,
-            muted: self.muted()?,
+            coordinator: group.coordinator,
+            coordinator_name: group.coordinator_name,
+            transport: group.transport,
+            volume: volume.volume as u8,
+            muted: volume.muted,
         })
     }
     pub fn playback(&self, command: Playback) -> Result<()> {
         self.playback_if_current(command, &|| true)
     }
     fn playback_if_current(&self, command: Playback, current: &dyn Fn() -> bool) -> Result<()> {
-        let coordinator = self.coordinator()?;
-        if coordinator != self.player.uuid {
-            return Err(Error::NotCoordinator { coordinator });
-        }
-        let action = match command {
-            Playback::Play => "Play",
-            Playback::Pause => "Pause",
-            Playback::Stop => "Stop",
-            Playback::Next => "Next",
-            Playback::Previous => "Previous",
-        };
-        let mut args = vec![("InstanceID", "0".into())];
-        if matches!(command, Playback::Play) {
-            args.push(("Speed", "1".into()));
+        let group = self.membership()?;
+        if group.coordinator != self.player.uuid {
+            return Err(Error::NotCoordinator {
+                coordinator: group.coordinator_name,
+            });
         }
         if !current() {
             return Err(Error::Cancelled);
         }
-        self.call(AV, &self.av_path, action, &args).map(|_| ())
+        self.request(
+            &format!("/groups/{}/playback/{}", group.id, action(command)),
+            Some("{}"),
+        )
+        .map(|_| ())
     }
-    /// Execute a closed button vocabulary, checking freshness after preparatory reads.
-    /// A sent command cannot be recalled. This method never retries a write.
+    /// Execute a closed button vocabulary, checking freshness after preparatory
+    /// reads. A sent command cannot be recalled. This method never retries a write.
     pub fn command_if_current(&self, command: &str, current: &dyn Fn() -> bool) -> Result<()> {
         if !current() {
             return Err(Error::Cancelled);
@@ -299,43 +460,22 @@ impl Client {
             "play" => Some(Playback::Play),
             "pause" => Some(Playback::Pause),
             "stop" => Some(Playback::Stop),
+            "play-pause" => Some(Playback::PlayPause),
             "next" => Some(Playback::Next),
             "previous" => Some(Playback::Previous),
-            "play-pause" => {
-                let body = self.call(
-                    AV,
-                    &self.av_path,
-                    "GetTransportInfo",
-                    &[("InstanceID", "0".into())],
-                )?;
-                Some(
-                    if field(&xml(&body)?, "CurrentTransportState")? == "PLAYING" {
-                        Playback::Pause
-                    } else {
-                        Playback::Play
-                    },
-                )
-            }
             _ => None,
         };
         if let Some(command) = playback {
             return self.playback_if_current(command, current);
         }
         match command {
+            // One relative write: no read, so nothing can go stale in between.
             "volume-up" | "volume-down" => {
-                let volume = self.volume()?;
-                if !current() {
-                    return Err(Error::Cancelled);
-                }
-                self.set_volume(if command == "volume-up" {
-                    volume.saturating_add(1).min(100)
-                } else {
-                    volume.saturating_sub(1)
-                })
+                self.nudge_volume(if command == "volume-up" { 1 } else { -1 })
             }
             "mute" | "mute-on" | "mute-off" => {
                 let muted = if command == "mute" {
-                    !self.muted()?
+                    !self.player_volume()?.muted
                 } else {
                     command == "mute-on"
                 };
@@ -350,67 +490,58 @@ impl Client {
     pub fn command(&self, command: &str) -> Result<()> {
         self.command_if_current(command, &|| true)
     }
-    pub fn volume(&self) -> Result<u8> {
-        let body = self.call(RC, &self.rc_path, "GetVolume", &channel())?;
-        let volume: u8 = field(&xml(&body)?, "CurrentVolume")?
-            .parse()
-            .map_err(|_| Error::Response)?;
-        if volume > 100 {
+    fn player_volume(&self) -> Result<PlayerVolume> {
+        let path = format!("/players/{}/playerVolume", self.player.uuid);
+        let volume: PlayerVolume = json(&self.request(&path, None)?)?;
+        if volume.volume > 100 {
             return Err(Error::Response);
         }
         Ok(volume)
     }
+    pub fn volume(&self) -> Result<u8> {
+        Ok(self.player_volume()?.volume as u8)
+    }
     pub fn muted(&self) -> Result<bool> {
-        let body = self.call(RC, &self.rc_path, "GetMute", &channel())?;
-        match field(&xml(&body)?, "CurrentMute")?.as_str() {
-            "1" | "true" => Ok(true),
-            "0" | "false" => Ok(false),
-            _ => Err(Error::Response),
-        }
+        Ok(self.player_volume()?.muted)
+    }
+    /// The playerVolume commands bind to the object itself (setVolume) and to
+    /// `/relative` and `/mute`; the command names are the websocket spelling.
+    fn volume_write(&self, command: &str, body: serde_json::Value) -> Result<()> {
+        self.request(
+            &format!("/players/{}/playerVolume{command}", self.player.uuid),
+            Some(&body.to_string()),
+        )
+        .map(|_| ())
     }
     pub fn set_volume(&self, volume: u8) -> Result<()> {
         if volume > 100 {
             return Err(Error::Volume);
         }
-        let mut args = channel();
-        args.push(("DesiredVolume", volume.to_string()));
-        self.call(RC, &self.rc_path, "SetVolume", &args).map(|_| ())
+        self.volume_write("", serde_json::json!({ "volume": volume }))
+    }
+    pub fn nudge_volume(&self, delta: i8) -> Result<()> {
+        self.volume_write("/relative", serde_json::json!({ "volumeDelta": delta }))
     }
     pub fn set_muted(&self, muted: bool) -> Result<()> {
-        let mut args = channel();
-        args.push(("DesiredMute", if muted { "1" } else { "0" }.into()));
-        self.call(RC, &self.rc_path, "SetMute", &args).map(|_| ())
+        self.volume_write("/mute", serde_json::json!({ "muted": muted }))
     }
 }
-fn channel() -> Vec<(&'static str, String)> {
-    vec![("InstanceID", "0".into()), ("Channel", "Master".into())]
-}
-fn coordinator(state: &str, uuid: &str) -> Result<String> {
-    let doc = xml(state)?;
-    let mut groups = doc.descendants().filter(|n| {
-        n.has_tag_name("ZoneGroup") && n.descendants().any(|m| m.attribute("UUID") == Some(uuid))
-    });
-    let coordinator = groups
-        .next()
-        .and_then(|n| n.attribute("Coordinator"))
-        .filter(|s| !s.is_empty())
-        .ok_or(Error::Response)?;
-    if groups.next().is_some() {
-        return Err(Error::Response);
-    }
-    Ok(coordinator.into())
-}
-/// Discover IPv4 responders in at most three seconds. Results are untrusted candidates;
-/// connect verifies the device description. No LOCATION URL is fetched automatically.
+
+/// Discover IPv4 responders in at most three seconds with one multicast DNS
+/// query for `_sonos._tcp.local`. Results are untrusted candidates; `connect`
+/// verifies each one. The advertised TXT `location` URL is never fetched.
 pub fn discover() -> Result<Vec<Ipv4Addr>> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|_| Error::Transport)?;
+    socket.set_multicast_ttl_v4(255).ok();
     socket
         .set_write_timeout(Some(Duration::from_secs(1)))
         .map_err(|_| Error::Transport)?;
-    socket.send_to(format!("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {ST}\r\n\r\n").as_bytes(),("239.255.255.250",1900)).map_err(|_| Error::Transport)?;
+    socket
+        .send_to(&query(SERVICE), MDNS)
+        .map_err(|_| Error::Transport)?;
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut found = BTreeSet::new();
-    let mut buffer = [0; 8192];
+    let mut buffer = [0; 9000];
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         if left.is_zero() {
             break;
@@ -419,8 +550,10 @@ pub fn discover() -> Result<Vec<Ipv4Addr>> {
             .set_read_timeout(Some(left))
             .map_err(|_| Error::Transport)?;
         match socket.recv_from(&mut buffer) {
-            Ok((len, SocketAddr::V4(peer))) if ssdp(&buffer[..len]) => {
-                found.insert(*peer.ip());
+            Ok((len, SocketAddr::V4(peer))) => {
+                for address in addresses(&buffer[..len], *peer.ip()) {
+                    found.insert(address);
+                }
                 if found.len() >= 256 {
                     break;
                 }
@@ -437,232 +570,130 @@ pub fn discover() -> Result<Vec<Ipv4Addr>> {
             Err(_) => return Err(Error::Transport),
         }
     }
-    Ok(found.into_iter().collect())
+    Ok(found.into_iter().take(256).collect())
 }
-fn ssdp(bytes: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
+/// One PTR question. Queries from a port other than 5353 are answered by unicast,
+/// so a plain unbound socket receives the replies.
+fn query(service: &str) -> Vec<u8> {
+    let mut packet = vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    for label in service.split('.') {
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.extend_from_slice(&[0, 0, 12, 0, 1]);
+    packet
+}
+/// Decompress one name. Pointers must point backwards, which makes loops
+/// impossible, and the caller continues after the first pointer.
+fn read_name(message: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut name = String::new();
+    let mut pos = start;
+    let mut after = None;
+    for _ in 0..128 {
+        let length = *message.get(pos)? as usize;
+        match length & 0xc0 {
+            0 => {
+                pos += 1;
+                if length == 0 {
+                    return Some((name, after.unwrap_or(pos)));
+                }
+                let label = message.get(pos..pos + length)?;
+                if name.len() + length > 255 {
+                    return None;
+                }
+                if !name.is_empty() {
+                    name.push('.');
+                }
+                name.push_str(&String::from_utf8_lossy(label).to_ascii_lowercase());
+                pos += length;
+            }
+            0xc0 => {
+                let target = ((length & 0x3f) << 8) | *message.get(pos + 1)? as usize;
+                after.get_or_insert(pos + 2);
+                if target >= pos {
+                    return None;
+                }
+                pos = target;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+/// Owner name, record type and the bounds of the record data, for every record
+/// in a response. Lengths are checked against the message before use.
+fn records(message: &[u8]) -> Option<Vec<(String, u16, usize, usize)>> {
+    let count =
+        |i: usize| Some(u16::from_be_bytes([*message.get(i)?, *message.get(i + 1)?]) as usize);
+    if message.len() < 12 || (count(2)? & 0x8000) == 0 {
+        return None;
+    }
+    let mut pos = 12;
+    for _ in 0..count(4)? {
+        pos = read_name(message, pos)?.1 + 4;
+    }
+    let total = count(6)? + count(8)? + count(10)?;
+    if total > 256 {
+        return None;
+    }
+    let mut found = Vec::with_capacity(total);
+    for _ in 0..total {
+        let (name, next) = read_name(message, pos)?;
+        let rtype = count(next)?;
+        let length = count(next + 8)?;
+        let start = next + 10;
+        if message.len() < start + length {
+            return None;
+        }
+        found.push((name, rtype as u16, start, length));
+        pos = start + length;
+    }
+    Some(found)
+}
+/// PTR proves the responder offers the Sonos service; SRV names its host and the
+/// A record gives that host's address. Responses without a usable A record fall
+/// back to the responder itself, which is the player that answered.
+fn addresses(message: &[u8], peer: Ipv4Addr) -> Vec<Ipv4Addr> {
+    let Some(records) = records(message) else {
+        return vec![];
     };
-    let mut lines = text.lines();
-    lines
-        .next()
-        .is_some_and(|line| line.trim() == "HTTP/1.1 200 OK")
-        && lines.any(|line| {
-            line.split_once(':')
-                .is_some_and(|(key, value)| key.eq_ignore_ascii_case("ST") && value.trim() == ST)
+    if !records
+        .iter()
+        .any(|(name, rtype, ..)| *rtype == 12 && name == SERVICE)
+    {
+        return vec![];
+    }
+    let targets: Vec<String> = records
+        .iter()
+        .filter(|(name, rtype, ..)| *rtype == 33 && name.ends_with(SERVICE))
+        .filter_map(|(_, _, start, _)| read_name(message, start + 6).map(|(name, _)| name))
+        .collect();
+    let mut found: Vec<Ipv4Addr> = records
+        .iter()
+        .filter(|(name, rtype, _, length)| {
+            *rtype == 1 && *length == 4 && targets.iter().any(|target| target == name)
         })
+        .map(|(_, _, start, _)| {
+            Ipv4Addr::new(
+                message[*start],
+                message[start + 1],
+                message[start + 2],
+                message[start + 3],
+            )
+        })
+        .filter(routable)
+        .collect();
+    if found.is_empty() && routable(&peer) {
+        found.push(peer);
+    }
+    found
+}
+fn routable(address: &Ipv4Addr) -> bool {
+    !address.is_unspecified()
+        && !address.is_loopback()
+        && !address.is_multicast()
+        && !address.is_broadcast()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn soap(service: &str, action: &str, inner: &str) -> String {
-        format!(
-            r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:{action}Response xmlns:u="{service}">{inner}</u:{action}Response></s:Body></s:Envelope>"#
-        )
-    }
-    fn description() -> String {
-        let services: String = [
-            (AV, "/MediaRenderer/AVTransport/Control"),
-            (RC, "/MediaRenderer/RenderingControl/Control"),
-            (ZG, "/ZoneGroupTopology/Control"),
-        ]
-        .into_iter()
-        .map(|(s, p)| {
-            format!("<service><serviceType>{s}</serviceType><controlURL>{p}</controlURL></service>")
-        })
-        .collect();
-        format!("<root xmlns=\"urn:schemas-upnp-org:device-1-0\"><device><deviceType>{ST}</deviceType><manufacturer>Sonos, Inc.</manufacturer><UDN>uuid:RINCON_TEST</UDN><friendlyName>Living room &amp; kitchen</friendlyName><modelName>Fixture</modelName><serviceList>{services}</serviceList></device></root>")
-    }
-    type RecordedRequest = (String, String, String);
-    fn server(
-        replies: Vec<(u16, String)>,
-    ) -> (SocketAddrV4, std::thread::JoinHandle<Vec<RecordedRequest>>) {
-        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-        let SocketAddr::V4(address) = server.server_addr().to_ip().unwrap() else {
-            panic!()
-        };
-        let thread = std::thread::spawn(move || {
-            let mut requests = vec![];
-            for (status, body) in replies {
-                let mut request = server
-                    .recv_timeout(Duration::from_secs(3))
-                    .unwrap()
-                    .expect("missing request");
-                let mut data = String::new();
-                request.as_reader().read_to_string(&mut data).unwrap();
-                let action = request
-                    .headers()
-                    .iter()
-                    .find(|h| h.field.equiv("SOAPAction"))
-                    .map(|h| h.value.as_str().to_owned())
-                    .unwrap_or_default();
-                requests.push((request.url().to_owned(), action, data));
-                request
-                    .respond(tiny_http::Response::from_string(body).with_status_code(status))
-                    .unwrap();
-            }
-            // Check rejection paths have not emitted a later mutation.
-            assert!(server
-                .recv_timeout(Duration::from_millis(100))
-                .unwrap()
-                .is_none());
-            requests
-        });
-        (address, thread)
-    }
-    #[test]
-    fn discovery_filters_and_never_trusts_location() {
-        assert!(ssdp(
-            format!("HTTP/1.1 200 OK\r\nst: {ST}\r\nLOCATION: http://evil.example/\r\n").as_bytes()
-        ));
-        assert!(!ssdp(b"HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\n"));
-        assert!(!ssdp(
-            format!("NOTIFY * HTTP/1.1\r\nST: {ST}\r\n").as_bytes()
-        ));
-    }
-    #[test]
-    fn xml_escaping_and_entity_rejection() {
-        let body = envelope(AV, "Play", &[("Value", "<&\"'>".into())]);
-        assert_eq!(field(&xml(&body).unwrap(), "Value").unwrap(), "<&\"'>");
-        assert!(xml(
-            "<!DOCTYPE root [<!ENTITY leak SYSTEM 'file:///etc/passwd'>]><root>&leak;</root>"
-        )
-        .is_err());
-        assert_eq!(
-            field(&xml("<root><v>1</v><v>2</v></root>").unwrap(), "v"),
-            Err(Error::Response)
-        );
-    }
-    #[test]
-    fn rejects_service_url_redirects() {
-        for path in [
-            "//other/Control",
-            "http://other/Control",
-            "/x?y=z",
-            "/../Control",
-        ] {
-            let body = description().replace("/MediaRenderer/AVTransport/Control", path);
-            assert_eq!(service_path(&xml(&body).unwrap(), AV), Err(Error::Response));
-        }
-    }
-    #[test]
-    fn group_member_playback_is_not_forwarded() {
-        let topology=escape("<ZoneGroups><ZoneGroup Coordinator=\"RINCON_OTHER\"><ZoneGroupMember UUID=\"RINCON_OTHER\"/><ZoneGroupMember UUID=\"RINCON_TEST\"/></ZoneGroup></ZoneGroups>");
-        let (address, thread) = server(vec![
-            (200, description()),
-            (
-                200,
-                soap(
-                    ZG,
-                    "GetZoneGroupState",
-                    &format!("<ZoneGroupState>{topology}</ZoneGroupState>"),
-                ),
-            ),
-        ]);
-        let client = Client::connect_at(address).unwrap();
-        assert_eq!(
-            client.playback(Playback::Pause),
-            Err(Error::NotCoordinator {
-                coordinator: "RINCON_OTHER".into()
-            })
-        );
-        assert_eq!(thread.join().unwrap().len(), 2);
-    }
-    #[test]
-    fn volume_has_master_channel_and_validates_before_network() {
-        let (address, thread) =
-            server(vec![(200, description()), (200, soap(RC, "SetVolume", ""))]);
-        let client = Client::connect_at(address).unwrap();
-        assert_eq!(client.player().name, "Living room & kitchen");
-        assert_eq!(client.set_volume(101), Err(Error::Volume));
-        client.set_volume(25).unwrap();
-        let requests = thread.join().unwrap();
-        assert_eq!(requests[1].0, "/MediaRenderer/RenderingControl/Control");
-        assert_eq!(requests[1].1, format!("\"{RC}#SetVolume\""));
-        let doc = xml(&requests[1].2).unwrap();
-        assert_eq!(field(&doc, "Channel").unwrap(), "Master");
-        assert_eq!(field(&doc, "DesiredVolume").unwrap(), "25");
-    }
-    #[test]
-    fn upnp_fault_is_typed_and_does_not_retry() {
-        let fault = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail><UPnPError><errorCode>701</errorCode></UPnPError></detail></s:Fault></s:Body></s:Envelope>"#;
-        let (address, thread) = server(vec![(200, description()), (500, fault.into())]);
-        let client = Client::connect_at(address).unwrap();
-        assert_eq!(client.set_muted(true), Err(Error::Soap(701)));
-        assert_eq!(thread.join().unwrap().len(), 2);
-    }
-    #[test]
-    fn oversized_description_is_rejected() {
-        let (address, thread) = server(vec![(
-            200,
-            format!("<root>{}</root>", "x".repeat(LIMIT as usize)),
-        )]);
-        assert!(matches!(Client::connect_at(address), Err(Error::Response)));
-        thread.join().unwrap();
-    }
-    #[test]
-    fn coordinator_play_and_status_use_expected_services() {
-        let topology = escape("<ZoneGroups><ZoneGroup Coordinator=\"RINCON_TEST\"><ZoneGroupMember UUID=\"RINCON_TEST\"/></ZoneGroup></ZoneGroups>");
-        let state = soap(
-            ZG,
-            "GetZoneGroupState",
-            &format!("<ZoneGroupState>{topology}</ZoneGroupState>"),
-        );
-        let (address, thread) = server(vec![
-            (200, description()),
-            (200, state.clone()),
-            (200, soap(AV, "Play", "")),
-            (200, state),
-            (
-                200,
-                soap(
-                    AV,
-                    "GetTransportInfo",
-                    "<CurrentTransportState>PLAYING</CurrentTransportState>",
-                ),
-            ),
-            (
-                200,
-                soap(RC, "GetVolume", "<CurrentVolume>17</CurrentVolume>"),
-            ),
-            (200, soap(RC, "GetMute", "<CurrentMute>0</CurrentMute>")),
-        ]);
-        let client = Client::connect_at(address).unwrap();
-        client.playback(Playback::Play).unwrap();
-        let status = client.status().unwrap();
-        assert_eq!(status.transport, "PLAYING");
-        assert_eq!(status.volume, 17);
-        assert!(!status.muted);
-        let requests = thread.join().unwrap();
-        let play = xml(&requests[2].2).unwrap();
-        assert_eq!(field(&play, "Speed").unwrap(), "1");
-        assert_eq!(field(&play, "InstanceID").unwrap(), "0");
-    }
-    #[test]
-    fn expired_volume_command_stops_after_read_without_writing() {
-        let (address, thread) = server(vec![
-            (200, description()),
-            (
-                200,
-                soap(RC, "GetVolume", "<CurrentVolume>10</CurrentVolume>"),
-            ),
-        ]);
-        let client = Client::connect_at(address).unwrap();
-        let checks = std::cell::Cell::new(0);
-        assert_eq!(
-            client.command_if_current("volume-up", &|| {
-                let n = checks.get();
-                checks.set(n + 1);
-                n == 0
-            }),
-            Err(Error::Cancelled)
-        );
-        assert_eq!(thread.join().unwrap().len(), 2);
-    }
-    #[test]
-    fn missing_or_ambiguous_group_fails_closed() {
-        assert_eq!(coordinator("<ZoneGroups/>", "X"), Err(Error::Response));
-        assert_eq!(coordinator("<ZoneGroups><ZoneGroup Coordinator=\"A\"><ZoneGroupMember UUID=\"X\"/></ZoneGroup><ZoneGroup Coordinator=\"B\"><ZoneGroupMember UUID=\"X\"/></ZoneGroup></ZoneGroups>","X"),Err(Error::Response));
-    }
-}
+mod tests;

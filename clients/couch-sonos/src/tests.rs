@@ -1,0 +1,535 @@
+//! Loopback JSON fixtures, not speaker commands: every test drives the real
+//! request path against a scripted server on 127.0.0.1.
+use super::*;
+use std::net::SocketAddr;
+
+const PLAYER: &str = "RINCON_TEST";
+const OTHER: &str = "RINCON_OTHER";
+const KEY: &str = "fixture-key";
+
+fn info() -> String {
+    serde_json::json!({
+        "_objectType": "discoveryInfo",
+        "playerId": PLAYER,
+        "householdId": "Sonos_test",
+        "groupId": "RINCON_TEST:1",
+        "restUrl": "https://192.0.2.10:1443/api",
+        "device": {
+            "_objectType": "deviceInfo",
+            "id": PLAYER,
+            "name": "Living room & kitchen",
+            "model": "S19",
+            "modelDisplayName": "Arc",
+            "capabilities": ["PLAYBACK", "CLOUD"],
+        },
+    })
+    .to_string()
+}
+fn groups(coordinator: &str, state: &str) -> String {
+    serde_json::json!({
+        "_objectType": "groups",
+        "groups": [{
+            "_objectType": "group",
+            "id": "RINCON_TEST:1",
+            "name": "Living room",
+            "coordinatorId": coordinator,
+            "playbackState": state,
+            "playerIds": [PLAYER, OTHER],
+        }],
+        "players": [
+            {"_objectType": "player", "id": PLAYER, "name": "Living room & kitchen"},
+            {"_objectType": "player", "id": OTHER, "name": "Sonos Arc"},
+        ],
+    })
+    .to_string()
+}
+fn volume(level: u16, muted: bool) -> String {
+    serde_json::json!({"_objectType": "playerVolume", "volume": level, "muted": muted, "fixed": false})
+        .to_string()
+}
+fn ok() -> (u16, String) {
+    (200, "{}".into())
+}
+
+struct Recorded {
+    method: String,
+    url: String,
+    key: String,
+    content_type: String,
+    body: String,
+}
+type Fixture = (String, std::thread::JoinHandle<Vec<Recorded>>);
+/// Serve exactly the scripted replies, then assert nothing further was sent:
+/// a refusal path must not leave a mutation on the wire.
+fn server(replies: Vec<(u16, String)>) -> Fixture {
+    server_with(replies, vec![])
+}
+fn server_with(
+    replies: Vec<(u16, String)>,
+    headers: Vec<(usize, &'static str, String)>,
+) -> Fixture {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let SocketAddr::V4(address) = server.server_addr().to_ip().unwrap() else {
+        panic!("expected IPv4 fixture address")
+    };
+    let thread = std::thread::spawn(move || {
+        let mut requests = vec![];
+        for (index, (status, body)) in replies.into_iter().enumerate() {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .expect("missing request");
+            let header = |name: &'static str| {
+                request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv(name))
+                    .map(|h| h.value.as_str().to_owned())
+                    .unwrap_or_default()
+            };
+            let (key, content_type) = (header(KEY_HEADER), header("Content-Type"));
+            let mut data = String::new();
+            request.as_reader().read_to_string(&mut data).unwrap();
+            requests.push(Recorded {
+                method: request.method().as_str().to_owned(),
+                url: request.url().to_owned(),
+                key,
+                content_type,
+                body: data,
+            });
+            let mut response = tiny_http::Response::from_string(body).with_status_code(status);
+            for (at, name, value) in &headers {
+                if *at == index {
+                    response.add_header(
+                        tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap(),
+                    );
+                }
+            }
+            request.respond(response).unwrap();
+        }
+        assert!(server
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .is_none());
+        requests
+    });
+    (format!("http://{address}/api/v1"), thread)
+}
+fn connect(base: &str) -> Client {
+    Client::connect_url(base, KEY).unwrap()
+}
+
+#[test]
+fn connect_identifies_the_player_and_sends_the_api_key() {
+    let (base, thread) = server(vec![(200, info())]);
+    let client = connect(&base);
+    assert_eq!(client.player().uuid, PLAYER);
+    assert_eq!(client.player().name, "Living room & kitchen");
+    assert_eq!(client.player().model, "Arc");
+    let requests = thread.join().unwrap();
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].url, "/api/v1/players/local/info");
+    assert_eq!(requests[0].key, KEY);
+}
+#[test]
+fn hosts_without_local_playback_control_are_rejected() {
+    // A bonded subwoofer answers the API but advertises no PLAYBACK capability.
+    let sub = serde_json::json!({
+        "_objectType": "discoveryInfo",
+        "playerId": "RINCON_SUB",
+        "householdId": "Sonos_test",
+        "device": {"name": "Sub", "modelDisplayName": "Sub", "capabilities": ["CLOUD"]},
+    })
+    .to_string();
+    for body in [sub, r#"{"hello":"world"}"#.into(), "{}".into()] {
+        let (base, thread) = server(vec![(200, body)]);
+        assert_eq!(
+            Client::connect_url(&base, KEY).err(),
+            Some(Error::Unsupported)
+        );
+        thread.join().unwrap();
+    }
+    let (base, thread) = server(vec![(200, "not json".into())]);
+    assert_eq!(Client::connect_url(&base, KEY).err(), Some(Error::Response));
+    thread.join().unwrap();
+}
+#[test]
+fn playback_commands_use_official_group_paths() {
+    let commands = [
+        ("play", "play"),
+        ("pause", "pause"),
+        // The Control API has no stop; Couch maps it to pause.
+        ("stop", "pause"),
+        ("play-pause", "togglePlayPause"),
+        ("next", "skipToNextTrack"),
+        ("previous", "skipToPreviousTrack"),
+    ];
+    let mut replies = vec![(200, info())];
+    for _ in commands {
+        replies.push((200, groups(PLAYER, "PLAYBACK_STATE_IDLE")));
+        replies.push(ok());
+    }
+    let (base, thread) = server(replies);
+    let client = connect(&base);
+    for (command, _) in commands {
+        client.command(command).unwrap();
+    }
+    let requests = thread.join().unwrap();
+    for (index, (_, action)) in commands.iter().enumerate() {
+        let topology = &requests[1 + index * 2];
+        assert_eq!(topology.method, "GET");
+        assert_eq!(topology.url, "/api/v1/households/local/groups");
+        let write = &requests[2 + index * 2];
+        assert_eq!(write.method, "POST");
+        assert_eq!(
+            write.url,
+            format!("/api/v1/groups/RINCON_TEST:1/playback/{action}")
+        );
+        assert_eq!(write.content_type, "application/json");
+        assert_eq!(write.key, KEY);
+        assert_eq!(write.body, "{}");
+    }
+}
+#[test]
+fn volume_and_mute_address_one_player() {
+    let (base, thread) = server(vec![
+        (200, info()),
+        ok(),
+        ok(),
+        ok(),
+        (200, volume(10, true)),
+        ok(),
+        ok(),
+        ok(),
+    ]);
+    let client = connect(&base);
+    assert_eq!(client.set_volume(101), Err(Error::Volume));
+    client.set_volume(25).unwrap();
+    client.command("volume-up").unwrap();
+    client.command("volume-down").unwrap();
+    // A toggle is the only volume path that still needs a read before its write.
+    client.command("mute").unwrap();
+    client.command("mute-on").unwrap();
+    client.command("mute-off").unwrap();
+    let requests = thread.join().unwrap();
+    let expected = [
+        ("", r#"{"volume":25}"#),
+        ("/relative", r#"{"volumeDelta":1}"#),
+        ("/relative", r#"{"volumeDelta":-1}"#),
+        ("", ""),
+        ("/mute", r#"{"muted":false}"#),
+        ("/mute", r#"{"muted":true}"#),
+        ("/mute", r#"{"muted":false}"#),
+    ];
+    for (index, (command, body)) in expected.iter().enumerate() {
+        let request = &requests[index + 1];
+        assert_eq!(
+            request.url,
+            format!("/api/v1/players/{PLAYER}/playerVolume{command}")
+        );
+        assert_eq!(request.body, *body);
+        assert_eq!(request.key, KEY);
+        assert_eq!(request.method, if body.is_empty() { "GET" } else { "POST" });
+        if !body.is_empty() {
+            assert_eq!(request.content_type, "application/json");
+        }
+    }
+}
+#[test]
+fn group_member_playback_is_not_forwarded() {
+    let (base, thread) = server(vec![
+        (200, info()),
+        (200, groups(OTHER, "PLAYBACK_STATE_PLAYING")),
+    ]);
+    let client = connect(&base);
+    assert_eq!(
+        client.playback(Playback::Pause),
+        Err(Error::NotCoordinator {
+            coordinator: "Sonos Arc".into()
+        })
+    );
+    assert_eq!(thread.join().unwrap().len(), 2);
+}
+#[test]
+fn coordinator_moving_during_a_write_is_reported() {
+    let moved = serde_json::json!({
+        "_objectType": "groupCoordinatorChanged",
+        "groupStatus": "GROUP_STATUS_MOVED",
+        "groupName": "Sonos Arc",
+        "websocketUrl": "wss://192.0.2.11:1443/websocket/api",
+        "playerId": OTHER,
+    })
+    .to_string();
+    let (base, thread) = server(vec![
+        (200, info()),
+        (200, groups(PLAYER, "PLAYBACK_STATE_IDLE")),
+        (404, moved),
+    ]);
+    let client = connect(&base);
+    assert_eq!(
+        client.command("play"),
+        Err(Error::NotCoordinator {
+            coordinator: "Sonos Arc".into()
+        })
+    );
+    assert_eq!(thread.join().unwrap().len(), 3);
+}
+#[test]
+fn api_error_json_is_typed_and_never_retried() {
+    let empty = r#"{"errorCode":"ERROR_PLAYBACK_NO_CONTENT","reason":"queue is empty"}"#;
+    let (base, thread) = server(vec![
+        (200, info()),
+        (200, groups(PLAYER, "PLAYBACK_STATE_IDLE")),
+        (400, empty.into()),
+    ]);
+    let client = connect(&base);
+    assert_eq!(
+        client.command("play"),
+        Err(Error::Api("ERROR_PLAYBACK_NO_CONTENT".into()))
+    );
+    assert_eq!(
+        Error::Api("ERROR_PLAYBACK_NO_CONTENT".into()).to_string(),
+        "Sonos API error ERROR_PLAYBACK_NO_CONTENT"
+    );
+    assert_eq!(thread.join().unwrap().len(), 3);
+}
+#[test]
+fn missing_api_key_error_is_surfaced_from_the_player() {
+    let refused = r#"{"_objectType":"globalError","errorCode":"ERROR_API_KEY_VALIDATION_FAILED","reason":"Invalid api key"}"#;
+    let (base, thread) = server(vec![(400, refused.into())]);
+    assert_eq!(
+        Client::connect_url(&base, KEY).err(),
+        Some(Error::Api("ERROR_API_KEY_VALIDATION_FAILED".into()))
+    );
+    thread.join().unwrap();
+    // A key that cannot be a header value never reaches the network.
+    assert_eq!(
+        Client::connect_url("https://192.0.2.10:1443/api/v1", "bad\nkey").err(),
+        Some(Error::Api("ERROR_API_KEY_VALIDATION_FAILED".into()))
+    );
+}
+#[test]
+fn status_reports_group_state_and_player_volume() {
+    let (base, thread) = server(vec![
+        (200, info()),
+        (200, groups(PLAYER, "PLAYBACK_STATE_PLAYING")),
+        (200, volume(17, false)),
+    ]);
+    let client = connect(&base);
+    let status = client.status().unwrap();
+    assert_eq!(status.player.uuid, PLAYER);
+    assert_eq!(status.coordinator, PLAYER);
+    assert_eq!(status.coordinator_name, "Living room & kitchen");
+    assert_eq!(status.transport, "PLAYING");
+    assert_eq!(status.volume, 17);
+    assert!(!status.muted);
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["player"]["name"], "Living room & kitchen");
+    assert_eq!(json["transport"], "PLAYING");
+    assert_eq!(json["muted"], false);
+    thread.join().unwrap();
+}
+#[test]
+fn ambiguous_or_missing_topology_fails_closed() {
+    let none = serde_json::json!({"groups": [], "players": []}).to_string();
+    let twice = serde_json::json!({
+        "groups": [
+            {"id": "a", "coordinatorId": PLAYER, "playerIds": [PLAYER]},
+            {"id": "b", "coordinatorId": OTHER, "playerIds": [PLAYER]},
+        ],
+        "players": [],
+    })
+    .to_string();
+    // A group id is spliced into a URL path: refuse one that could leave the origin.
+    let escaping = serde_json::json!({
+        "groups": [{"id": "../../players", "coordinatorId": PLAYER, "playerIds": [PLAYER]}],
+        "players": [],
+    })
+    .to_string();
+    for body in [none, twice, escaping] {
+        let (base, thread) = server(vec![(200, info()), (200, body)]);
+        let client = connect(&base);
+        assert_eq!(client.coordinator(), Err(Error::Response));
+        thread.join().unwrap();
+    }
+    assert!(segment("RINCON_TEST:1").is_ok());
+    for bad in ["", "a/b", "a?b", "a#b", "a%2fb", "a b"] {
+        assert_eq!(segment(bad), Err(Error::Response));
+    }
+}
+#[test]
+fn expired_mute_command_stops_after_read_without_writing() {
+    let (base, thread) = server(vec![(200, info()), (200, volume(10, false))]);
+    let client = connect(&base);
+    let checks = std::cell::Cell::new(0);
+    assert_eq!(
+        client.command_if_current("mute", &|| {
+            let n = checks.get();
+            checks.set(n + 1);
+            n == 0
+        }),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(thread.join().unwrap().len(), 2);
+}
+#[test]
+fn expired_playback_command_stops_after_topology_read() {
+    let (base, thread) = server(vec![
+        (200, info()),
+        (200, groups(PLAYER, "PLAYBACK_STATE_IDLE")),
+    ]);
+    let client = connect(&base);
+    let checks = std::cell::Cell::new(0);
+    assert_eq!(
+        client.command_if_current("play", &|| {
+            let n = checks.get();
+            checks.set(n + 1);
+            n == 0
+        }),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(thread.join().unwrap().len(), 2);
+    assert_eq!(client.command("power-on"), Err(Error::Command));
+}
+#[test]
+fn oversized_response_is_rejected() {
+    let (base, thread) = server(vec![(
+        200,
+        format!("{{\"pad\":\"{}\"}}", "x".repeat(LIMIT as usize)),
+    )]);
+    assert_eq!(Client::connect_url(&base, KEY).err(), Some(Error::Response));
+    thread.join().unwrap();
+}
+#[test]
+fn redirects_are_not_followed() {
+    let (base, thread) = server_with(
+        vec![(302, String::new())],
+        vec![(0, "Location", "http://192.0.2.99/api/v1".into())],
+    );
+    assert_eq!(
+        Client::connect_url(&base, KEY).err(),
+        Some(Error::Http(302))
+    );
+    assert_eq!(thread.join().unwrap().len(), 1);
+}
+#[test]
+fn only_loopback_may_drop_tls() {
+    for base in [
+        "https://192.0.2.10:1443/api/v1",
+        "http://127.0.0.1:8080/api/v1",
+        "http://localhost:8080/api/v1",
+    ] {
+        assert_eq!(check_base(base), Ok(()));
+    }
+    for base in [
+        "http://192.0.2.10:1443/api/v1",
+        "ftp://192.0.2.10/api/v1",
+        "https://user@192.0.2.10/api/v1",
+        "https://192.0.2.10/api/v1?x=1",
+        "https://192.0.2.10/api/v1/",
+        "https://",
+    ] {
+        assert_eq!(check_base(base), Err(Error::Unsupported));
+    }
+}
+#[test]
+fn api_key_prefers_environment_then_file_then_placeholder() {
+    assert_eq!(choose_key(Some("env".into()), Some("file".into())), "env");
+    assert_eq!(choose_key(None, Some(" file \n".into())), "file");
+    assert_eq!(choose_key(Some("  ".into()), Some("file".into())), "file");
+    assert_eq!(choose_key(None, None), PLACEHOLDER_API_KEY);
+    // Header-unsafe or oversized values are ignored rather than sent.
+    assert_eq!(choose_key(Some("a\nb".into()), None), PLACEHOLDER_API_KEY);
+    assert_eq!(choose_key(Some("k".repeat(257)), None), PLACEHOLDER_API_KEY);
+    let file = std::env::temp_dir().join("couch-sonos-key-fixture");
+    std::fs::write(&file, "from-file\n").unwrap();
+    if std::env::var_os("COUCH_SONOS_API_KEY").is_none() {
+        assert_eq!(api_key_at(&file), "from-file");
+        assert_eq!(
+            api_key_at(Path::new("/nonexistent/sonos-api-key")),
+            PLACEHOLDER_API_KEY
+        );
+    }
+    std::fs::remove_file(&file).ok();
+    assert!(key_file().ends_with(KEY_FILE));
+}
+
+// Multicast DNS fixtures. Names are compressed exactly as players compress them.
+fn labels(text: &str) -> Vec<u8> {
+    let mut out = vec![];
+    for label in text.split('.') {
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
+    }
+    out.push(0);
+    out
+}
+fn pointer(offset: usize) -> [u8; 2] {
+    [0xc0 | (offset >> 8) as u8, offset as u8]
+}
+fn announcement(service: &str, instance: &str, host: &str, address: Option<[u8; 4]>) -> Vec<u8> {
+    let additional = if address.is_some() { 2 } else { 1 };
+    let mut packet: Vec<u8> = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, additional];
+    let service_at = packet.len();
+    packet.extend_from_slice(&labels(service));
+    packet.extend_from_slice(&[0, 12, 0, 1, 0, 0, 0, 10]);
+    let mut rdata = vec![instance.len() as u8];
+    rdata.extend_from_slice(instance.as_bytes());
+    rdata.extend_from_slice(&pointer(service_at));
+    packet.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+    let instance_at = packet.len();
+    packet.extend_from_slice(&rdata);
+    packet.extend_from_slice(&pointer(instance_at));
+    packet.extend_from_slice(&[0, 33, 0, 1, 0, 0, 0, 10]);
+    let target = labels(host);
+    packet.extend_from_slice(&((6 + target.len()) as u16).to_be_bytes());
+    packet.extend_from_slice(&[0, 0, 0, 0, 0x05, 0xa3]);
+    let host_at = packet.len();
+    packet.extend_from_slice(&target);
+    if let Some(address) = address {
+        packet.extend_from_slice(&pointer(host_at));
+        packet.extend_from_slice(&[0, 1, 0, 1, 0, 0, 0, 10, 0, 4]);
+        packet.extend_from_slice(&address);
+    }
+    packet
+}
+#[test]
+fn mdns_answer_yields_the_advertised_address() {
+    let peer = Ipv4Addr::new(192, 0, 2, 50);
+    let packet = announcement(
+        SERVICE,
+        "RINCON_TEST@Living Room",
+        "sonos-test.local",
+        Some([192, 0, 2, 10]),
+    );
+    assert_eq!(addresses(&packet, peer), vec![Ipv4Addr::new(192, 0, 2, 10)]);
+    // Without a usable address record the responder itself is the candidate.
+    let no_address = announcement(SERVICE, "RINCON_TEST@Living Room", "sonos-test.local", None);
+    assert_eq!(addresses(&no_address, peer), vec![peer]);
+    // Another service, a truncated packet and a query are all ignored.
+    let other = announcement(
+        "_airplay._tcp.local",
+        "Some Speaker",
+        "other.local",
+        Some([192, 0, 2, 11]),
+    );
+    assert!(addresses(&other, peer).is_empty());
+    for cut in [11, packet.len() - 2] {
+        assert!(addresses(&packet[..cut], peer).is_empty());
+    }
+    let mut question = packet.clone();
+    question[2] = 0;
+    assert!(addresses(&question, peer).is_empty());
+    assert!(addresses(&query(SERVICE), peer).is_empty());
+}
+#[test]
+fn mdns_query_asks_for_the_sonos_service() {
+    let packet = query(SERVICE);
+    assert_eq!(packet[4..6], [0, 1]);
+    assert_eq!(&packet[12..19], b"\x06_sonos");
+    assert_eq!(packet[packet.len() - 4..], [0, 12, 0, 1]);
+    // A pointer that does not move backwards must not be followed.
+    let mut looping = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+    looping.extend_from_slice(&pointer(12));
+    assert!(read_name(&looping, 12).is_none());
+}

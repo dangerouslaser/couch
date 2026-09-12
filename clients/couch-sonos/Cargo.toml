@@ -3,13 +3,13 @@ name = "couch-sonos"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Local Sonos UPnP playback and player volume control"
+description = "Local Sonos Control API playback and player volume control"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ureq = { version = "=3.4.1", default-features = false }
-roxmltree = "0.20"
+ureq = { version = "=3.4.1", default-features = false, features = ["rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 tiny_http = "0.12"
