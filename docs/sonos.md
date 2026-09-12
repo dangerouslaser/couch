@@ -1,18 +1,22 @@
 # Sonos LAN client
 
 `clients/couch-sonos` is a blocking Rust library and JSON-output CLI for existing
-Sonos systems on the local IPv4 network. Call it from a worker thread. It uses
-legacy Sonos UPnP/SOAP over HTTP port 1400 without cloud registration or credentials.
-It does not provision speakers or implement the official cloud Control API.
+Sonos systems on the local IPv4 network. Call it from a worker thread. It speaks
+the official Sonos Control API directly to a player over HTTPS on port 1443, with
+no cloud gateway, no Sonos account and no OAuth: `api.ws.sonos.com` is never
+contacted. It does not provision speakers.
 
 ## Usage
 
 Build for the remote with `tools/build-sonos.sh`; use `--host` for a desktop binary.
-The runtime inventory requires the static ARM executable at
-`clients/target/armv7-unknown-linux-musleabihf/release/couch-sonos` and packages it
-as `/opt/couch/couch-sonos`, mode 0755, with a pinned SHA-256. Build it before
-running `tools/release/runtime_inventory.py`. The inventory also records the
-clients workspace dependency licenses and lockfile. Packaging includes the CLI alongside the GUI and configuration server integrations.
+On macOS the ARM build compiles ring's crypto primitives, so the script exports
+`CC_armv7_unknown_linux_musleabihf=tools/arm-musl-cc.py` and needs Zig, exactly
+like `tools/build-webui.sh`. The runtime inventory requires the static ARM
+executable at `clients/target/armv7-unknown-linux-musleabihf/release/couch-sonos`
+and packages it as `/opt/couch/couch-sonos`, mode 0755, with a pinned SHA-256.
+Build it before running `tools/release/runtime_inventory.py`. The inventory also
+records the clients workspace dependency licenses and lockfile. Packaging includes
+the CLI alongside the GUI and configuration server integrations.
 
 ```sh
 couch-sonos discover
@@ -24,15 +28,36 @@ couch-sonos 192.168.1.50 mute
 couch-sonos 192.168.1.50 unmute
 ```
 
-`stop`, `next`, and `previous` are also available. Play resumes the existing
-source/queue; it does not select music. A successful mutation prints
+`play-pause`, `stop`, `next`, and `previous` are also available. Play resumes the
+existing source/queue; it does not select music. A successful mutation prints
 `{"acknowledged":true}`; query `status` separately to observe current state.
 A network timeout has an unknown command outcome and is never retried automatically.
 
-Library entry points are `discover`, `Client::connect(Ipv4Addr)`, `player`,
-`coordinator`, `status`, `playback(Playback)`, `volume`, `muted`, `set_volume`, and
-`set_muted`. Errors distinguish transport, malformed responses, unsupported
-services, HTTP status, UPnP fault codes, invalid volume, and non-coordinator playback.
+Library entry points are `discover`, `Client::connect(Ipv4Addr)`,
+`Client::connect_with_key`, `Client::connect_url` (an explicit API root, for
+loopback fixtures), `player`, `coordinator`, `status`, `playback(Playback)`,
+`command`/`command_if_current`, `volume`, `muted`, `set_volume`, `nudge_volume`,
+and `set_muted`. Errors distinguish transport, malformed responses, unsupported
+hosts, HTTP status, Control API error codes, invalid volume, cancelled commands,
+and non-coordinator playback.
+
+## API key
+
+Every request carries an `X-Sonos-Api-Key` header; without it a player answers
+HTTP 400 `ERROR_API_KEY_VALIDATION_FAILED`. The key is read, in order, from the
+`COUCH_SONOS_API_KEY` environment variable, then from a `sonos-api-key` file kept
+beside the other connection settings (`/opt/couch/sonos-api-key` on the remote;
+`COUCH_HOME_DIR` relocates it for development and `COUCH_SONOS_API_KEY_FILE`
+overrides the path outright), and finally from a built-in placeholder UUID that is
+not a credential. One key serves the whole household, so it sits next to
+`config.json` rather than inside a per-connection directory.
+
+The supported value is a developer key from integration.sonos.com. Players that
+report `"allowGuestAccess":true` with `"credentialTypeAllowed":"API_KEY"` accept
+any non-empty key today, which is why the placeholder works on this network; do
+not rely on that. Keep the real key out of Git and off the browser: the daemon
+never echoes it, nothing logs it, and a value that cannot be a header (newlines,
+control characters, over 256 bytes) is refused before any request is sent.
 
 ## Web and remote controls
 
@@ -45,11 +70,11 @@ that connection as a speaker. An activity may use Sonos as its main screen or ma
 individual playback/volume/mute buttons to it.
 
 The remote’s speaker card opens Sonos playback, volume, mute and refresh controls.
-Playback failures on group members explain that the coordinator must be selected;
-there is no automatic forwarding. Status refreshes on open, after commands, and
-when the displayed observation ages out. Stale queued physical commands are
-cancelled before writes, including after preparatory network reads; leaving the
-screen or changing configuration invalidates the queued target.
+Playback failures on group members name the coordinating room; there is no
+automatic forwarding. Status refreshes on open, after commands, and when the
+displayed observation ages out. Stale queued physical commands are cancelled
+before writes, including after preparatory network reads; leaving the screen or
+changing configuration invalidates the queued target.
 
 Authenticated daemon routes are `GET /api/connections/ID/sonos/status` and
 `POST /api/connections/ID/sonos/command`. Command bodies use a closed `command`
@@ -59,58 +84,140 @@ vocabulary (`play`, `pause`, `play-pause`, `stop`, `next`, `previous`,
 command requests cannot override it. Mutations return acknowledgement separately
 from refresh failures so a failed observation does not invite replaying a write.
 
+## Commands and the requests they make
+
+| Couch command | Request |
+| --- | --- |
+| `status` | `GET /households/local/groups` then `GET /players/{id}/playerVolume` |
+| `play`, `pause` | `POST /groups/{group}/playback/{play,pause}` |
+| `play-pause` | `POST /groups/{group}/playback/togglePlayPause` |
+| `stop` | `POST /groups/{group}/playback/pause` |
+| `next`, `previous` | `POST /groups/{group}/playback/{skipToNextTrack,skipToPreviousTrack}` |
+| `volume 0..100` | `POST /players/{id}/playerVolume` `{"volume":N}` |
+| `volume-up`, `volume-down` | `POST /players/{id}/playerVolume/relative` `{"volumeDelta":±1}` |
+| `mute-on`, `mute-off` | `POST /players/{id}/playerVolume/mute` `{"muted":bool}` |
+| `mute` | `GET` the player volume, then the same mute write |
+
+The Control API has no stop command, so `stop` pauses the group and the button
+keeps its familiar name. `play-pause` is one toggle request rather than a read
+followed by a guess, and relative volume is a single write, so only the mute
+toggle still reads before writing. Every write re-checks command freshness first
+and is never retried.
+
+Playback bodies are `{}` with `Content-Type: application/json`. Failures come back
+as JSON `{errorCode, reason}` with HTTP 400 or 499 and surface as
+`Error::Api(code)`, for example `ERROR_PLAYBACK_NO_CONTENT` when the group has an
+empty queue.
+
 ## Group behavior and compatibility
 
-Playback targets the selected player only after querying current topology and
-verifying it is the group coordinator. It affects that coordinator's current
-playback group. Selecting a member returns `NotCoordinator` with the coordinator
-UUID; the caller must explicitly select the coordinator's address. The client
-never follows topology URLs, forwards commands, or changes group membership.
-Topology can change between the check and command; there is no atomic group lock.
-Volume and mute target the selected player's Master channel, not group volume.
-`status.transport` is the selected player's reported state, which can be a proxy
-state on non-coordinators.
+Playback targets the selected player only after reading the household group list
+and verifying that the player coordinates its group. It affects that coordinator's
+current playback group. Selecting a member returns `NotCoordinator` with the
+coordinator's room name; the caller must explicitly select the coordinator's
+address. `status.coordinator` remains the coordinator's player id, comparable with
+`status.player.uuid`, and `status.coordinator_name` carries the name for display.
+The client never forwards commands or changes group membership; `createGroup`,
+`setGroupMembers` and `modifyGroupMembers` are not used. Topology can change
+between the check and the command; there is no atomic group lock. A player that
+answers for a group it no longer coordinates replies HTTP 404 with
+`groupCoordinatorChanged`, which is reported as the same `NotCoordinator` refusal.
+Volume and mute target the selected player, not group volume.
+`status.transport` is the group's playback state with the `PLAYBACK_STATE_`
+prefix removed: `IDLE`, `PLAYING`, `PAUSED` or `BUFFERING`.
 
-Compatibility is capability-based: the description must identify a Sonos
-ZonePlayer and advertise AVTransport, RenderingControl, and ZoneGroupTopology v1.
-The initial implementation has fixture validation only, not a tested speaker-model
-matrix. Firmware that removes or restricts legacy UPnP will not be supported.
-Source-dependent commands such as next on live radio can return UPnP faults.
-No grouping, queue editing, music-service authentication, push events, or artwork
-is implemented yet.
+Compatibility is capability-based: `GET /players/local/info` must return a
+`discoveryInfo` object with a player id, a household id, a device name, and the
+`PLAYBACK` capability. Bonded devices without their own playback, such as a Sub,
+are refused as unsupported rather than half-controlled, as are non-Sonos hosts.
+Validation covers the models on the network below, not a full model matrix.
+No grouping, queue editing, favorites, music-service authentication, push events,
+or artwork is implemented yet.
 
-## Network and parser boundaries
+## Network, trust and parser boundaries
 
-Discovery sends one SSDP M-SEARCH and listens for three seconds, returning at most
-256 responder IPv4 addresses. These are candidates until `connect` validates the
-device description; advertised LOCATION URLs are never fetched. Multicast routing
-and the host's selected interface determine discovery reachability; explicit IP
+Discovery multicasts one mDNS PTR query for `_sonos._tcp.local` to
+224.0.0.251:5353 and listens for three seconds, returning at most 256 IPv4
+candidates. Replies are parsed with a small in-crate DNS reader (PTR proves the
+service, SRV names the host, the A record supplies the address; name compression
+pointers must point backwards) and fall back to the responder's own address when
+a reply carries no usable A record. The advertised TXT `location` URL, which
+points at the legacy port 1400 description, is never fetched. Candidates stay
+untrusted until `connect` validates them. SSDP is no longer used. Multicast
+routing and the host's selected interface determine reachability; explicit IP
 addresses work without discovery.
 
-HTTP requests have a five-second total deadline and 512 KiB body limit; a composite
-status operation makes four sequential requests. Environment proxies and redirects
-are disabled. Control paths must remain on the selected origin. XML is parsed with
-DTD/entity expansion disabled, response action namespaces are checked, and SOAP
-arguments are escaped. Local HTTP provides no peer authentication or encryption;
-this client assumes a trusted LAN, like the legacy protocol itself.
+Player certificates are leaves issued by the "Sonos Device Authentication Root
+CA", which is in no system trust store and is not sent in the handshake chain, so
+this client disables certificate verification for the player connection. That is
+the same trust level as the legacy plain-HTTP protocol it replaces: a trusted LAN
+and no peer authentication. Traffic is encrypted but the peer is not
+authenticated, and the API key is not a secret the transport can protect.
+
+HTTP requests have a five-second total deadline and a 512 KiB body limit; a
+composite status operation makes two sequential requests. Environment proxies and
+redirects are disabled and every request stays on the connected origin: plain HTTP
+is accepted only for loopback test fixtures, and device-supplied group and player
+ids are restricted to an identifier alphabet before they are spliced into a URL
+path. Responses are parsed with serde as JSON only; ambiguous topology (no group,
+or the player listed in two groups) fails closed.
 
 ## Validation
 
-Run `cargo test -p couch-sonos --locked` and
-`cargo fmt -p couch-sonos --check` from `clients/`. Tests use loopback HTTP fixtures,
-not speaker commands. They cover request arguments, escaped XML, entity rejection,
-body limits, typed faults, coordinator refusal, discovery filtering, and status.
-Physical acceptance still needs discovery, coordinator/member behavior, playback,
-and per-player volume/mute checks on a consenting test system.
+Run `cargo test -p couch-sonos --locked` and `cargo fmt -p couch-sonos --check`
+from `clients/`, `cargo test` from `daemon/`, `cargo check` from `ui/`, and
+`cargo check --target wasm32-unknown-unknown` from `web/`. Tests use loopback JSON fixtures, not speaker commands. They cover the API
+key header and JSON content type, the path and body of every command, typed
+Control API errors, the 404 `groupCoordinatorChanged` refusal, member refusal from
+the group listing, the body limit, redirect refusal, freshness cancellation before
+a write, volume validation before the network, key sourcing, mDNS parsing of a
+hand-built compressed packet, and status composition.
+
+Physical acceptance on a four-player household (Arc, Amp, One SL, bonded Sub),
+firmware 97.1-80312, API version 1.54.1, using the placeholder key:
+
+```
+$ couch-sonos discover
+["192.168.1.27","192.168.1.114","192.168.1.217","192.168.1.245"]
+$ couch-sonos 192.168.1.114 status
+{"player":{"uuid":"RINCON_C43875B87D3B01400","name":"Sonos Arc","model":"Arc"},
+ "coordinator":"RINCON_C43875B87D3B01400","coordinator_name":"Sonos Arc",
+ "transport":"IDLE","volume":17,"muted":false}
+$ couch-sonos 192.168.1.217 status
+{"player":{"uuid":"RINCON_38420B7AA9D601400","name":"Laundry Room","model":"One SL"},
+ "coordinator":"RINCON_38420B7AA9D601400","coordinator_name":"Laundry Room",
+ "transport":"IDLE","volume":63,"muted":false}
+$ couch-sonos 192.168.1.27 status        # bonded Sub, no PLAYBACK capability
+couch-sonos: Host is not a Sonos player with local playback control
+$ couch-sonos 192.168.1.217 volume 63    # same value it already had
+{"acknowledged":true}
+$ couch-sonos 192.168.1.217 mute
+{"acknowledged":true}                    # status then reported "muted":true
+$ couch-sonos 192.168.1.217 unmute
+{"acknowledged":true}                    # restored to volume 63, "muted":false
+$ couch-sonos 192.168.1.217 pause        # group idle with an empty queue
+couch-sonos: Sonos API error ERROR_PLAYBACK_NO_CONTENT
+$ couch-sonos 192.168.1.217 play
+couch-sonos: Sonos API error ERROR_PLAYBACK_NO_CONTENT
+```
+
+Discovery returned all four players including the bonded Sub, which `connect`
+then refused. Every speaker was left in the state it was found in: nothing
+started playing, no group was created or modified, and no volume changed. The
+`groupCoordinatorChanged` refusal was observed on the device by asking the One SL
+about the Arc's group id; it is covered in the test suite because a single-player
+household cannot reproduce it through this client, which checks membership first.
 
 ## Protocol sources
 
-Sonos documents the separate cloud service in [About Control API](https://docs.sonos.com/reference/about-control-api)
-and LAN requirements in [Configure your firewall](https://support.sonos.com/en/article/configure-your-firewall-to-work-with-sonos).
-The local service wire format and coordinator checks were checked against the
-[SoCo implementation](https://github.com/SoCo/SoCo/blob/master/soco/core.py) and its
-[service definitions](https://github.com/SoCo/SoCo/blob/master/soco/services.py),
-plus the [device-derived AVTransport descriptions](https://github.com/svrooij/sonos-api-docs/blob/main/docs/services/av-transport.md)
-and [RenderingControl descriptions](https://github.com/svrooij/sonos-api-docs/blob/main/docs/services/rendering-control.md).
-These are independent implementations and device-derived documentation, not a
-Sonos commitment to continued legacy protocol support.
+Sonos documents the API in [Control](https://docs.sonos.com/docs/control),
+[playback](https://docs.sonos.com/reference/playback.md),
+[playerVolume](https://docs.sonos.com/reference/playervolume-object.md) and
+[groups](https://docs.sonos.com/reference/groups.md); appending `.md` to any
+documentation URL returns markdown, and [llms.txt](https://docs.sonos.com/llms.txt)
+indexes the set. Those pages describe the same namespaces and paths served by the
+cloud gateway, which Couch does not use. The local bindings used here - the
+HTTPS port, `players/local/info`, `households/local/groups`, and the API key
+header without OAuth - were confirmed against players on this network rather than
+from a Sonos commitment. LAN requirements are in
+[Configure your firewall](https://support.sonos.com/en/article/configure-your-firewall-to-work-with-sonos).
