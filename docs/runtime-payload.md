@@ -4,17 +4,13 @@
 
 ```sh
 tools/build-wmt-properties.sh
-tools/build-gui.sh
-tools/build-webui.sh
-(cd daemon && cargo build --release --locked --target armv7-unknown-linux-musleabihf -p couch-system)
-tools/build-sonos.sh
-(cd clients && cargo build --release --target armv7-unknown-linux-musleabihf -p couch-coreelec)
+tools/build-release.sh   # couch-gui, couch-confd, couch-system, couch-sonos, couch-coreelec
 python3 tools/release/runtime_inventory.py build/alpine-staging-input.json build/runtime-payload
 python3 tools/release/prepare_rootfs.py build/runtime-payload/staging-input.json \
   build/offline-armv7 build/packaged-runtime
 ```
 
-`BASE_SPEC` supplies the pinned clean Alpine input and timestamp. Its artifact list is replaced by the explicit runtime list. Run on the checkout holding the ARM build artifacts; when transferring to Ollie, preserve those relative source paths and hashes. The inventory's Git commit describes the audited checkout, **not** an attestation that existing binaries were built from that commit. Tracked payload changes are represented only by a cleanliness flag and diff hash; their contents are not copied into the report.
+`BASE_SPEC` supplies the pinned clean Alpine input and timestamp. Its artifact list is replaced by the explicit runtime list. Run on the checkout holding the ARM build artifacts; on the release host that is the checkout `tools/build-release.sh` just ran in ([releases.md](releases.md#build-host)). The inventory's Git commit describes the audited checkout, **not** an attestation that existing binaries were built from that commit. Tracked payload changes are represented only by a cleanliness flag and diff hash; their contents are not copied into the report.
 
 ## Runtime files
 

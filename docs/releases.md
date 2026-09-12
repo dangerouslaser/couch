@@ -36,6 +36,29 @@ Archive ownership and timestamps are normalized. Absolute symlinks are retained 
 
 Validation includes traversal/link attacks, private state and keys, wrong hashes/version, empty onboarding configuration, reproducible output, and the existing official 3.21.7 ARMv7 minirootfs (525 entries after generated directories/files). This is not yet a bootable release: do not flash its tarball.
 
+## Build host
+
+Releases are built and packaged on one Linux host (Ollie), so the binaries the
+inventory hashes are the ones the same checkout just produced and nothing is
+copied between machines. The host needs:
+
+- Rust stable with the `armv7-unknown-linux-musleabihf` and
+  `wasm32-unknown-unknown` targets;
+- `trunk` for the browser bundle (`cargo install --locked trunk`);
+- Zig 0.15.2, the ARM musl C compiler behind every HTTPS client's `ring`
+  build: `tools/fetch-zig.sh` downloads the pinned release for the host into
+  `build/toolchains` and verifies its SHA-256, and the build scripts find it
+  there through `tools/arm-cc-env.sh` on macOS and Linux alike;
+- the Sonos developer key in `build/sonos-api-key`
+  ([sonos.md](sonos.md#release-builds)), which is compiled into the GUI,
+  daemon and CLI and never committed.
+
+With those in place `tools/build-release.sh` produces every ARM binary the
+[runtime payload inventory](runtime-payload.md) lists, in one command that
+sets the compiler and key environment once for all of them, and the inventory
+and packaging steps below run on the same machine. A macOS checkout builds the same binaries with the same scripts for
+development; it is not the release host.
+
 ## Assemble offline packages
 
 On Ollie, `tools/release/prepare_rootfs.py SPEC CLOSURE NEW_OUTPUT` combines the same staging specification with a verified `package_closure.py` cache. It runs authenticated APK installation and its ARM maintainer scripts in an isolated container using Ollie's existing ARM binfmt emulator. No host binfmt registration, loop mount, device access or privileged container is used. The container has only the filesystem/chroot capabilities required for a disposable tmpfs root, no network, read-only inputs, and one new writable output directory.
