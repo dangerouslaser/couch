@@ -172,9 +172,23 @@ class TtyTransport:
             return len(data)
 
     def write(self, data, timeout=None):
+        """Deliver every byte, allowing a slow link while the port keeps draining.
+
+        libusb hands one bulk transfer to the kernel and the caller's timeout
+        bounds that single transfer. A callout device instead drains at the pace
+        the CDC ACM link and the device's receiver allow, and the DA writer
+        pushes a whole 1 MiB chunk in one call with a one-second timeout. Over
+        the preloader's full-speed link that chunk needs longer than a second,
+        which is why partition reads (which loop over small retried transfers)
+        succeeded while the first write did not. Treat the timeout as an
+        inactivity bound instead: a stalled or vanished port still fails within
+        it, while steady progress keeps the transfer alive. The caller's
+        enclosing bounded_operation remains the absolute cap.
+        """
         require(self.fd is not None, 'Serial transport closed')
         data = bytes(data)
-        deadline = time.monotonic() + self._timeout(timeout)
+        limit = self._timeout(timeout)
+        deadline = time.monotonic() + limit
         sent = 0
         while sent < len(data):
             remaining = deadline - time.monotonic()
@@ -184,13 +198,16 @@ class TtyTransport:
             if not writable:
                 self._timed_out()
             try:
-                sent += os.write(self.fd, data[sent:])
+                count = os.write(self.fd, data[sent:])
             except BlockingIOError:
                 continue
             except OSError as error:
                 if error.errno in (errno.ENXIO, errno.ENODEV, errno.EIO):
                     self._gone()
                 raise
+            if count:
+                sent += count
+                deadline = time.monotonic() + limit
         return sent
 
     def set_line_coding(self, baudrate=None, parity=0, databits=8, stopbits=1, isFtdi=False):

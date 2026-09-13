@@ -157,6 +157,35 @@ class TransportTests(unittest.TestCase):
         reader.join()
         self.assertEqual(bytes(received), payload)
 
+    def test_large_write_outlives_the_timeout_while_the_port_keeps_draining(self):
+        # The DA writer pushes a 1 MiB chunk with a one-second timeout; over the
+        # preloader's full-speed link that takes longer than one second.
+        payload = bytes(range(256)) * 1024
+        received = bytearray()
+        os.set_blocking(self.master, False)
+        def drain():
+            deadline = time.monotonic() + 10
+            while len(received) < len(payload) and time.monotonic() < deadline:
+                try:
+                    received.extend(os.read(self.master, 8192))
+                except BlockingIOError:
+                    pass
+                time.sleep(0.008)
+        reader = threading.Thread(target=drain)
+        reader.start()
+        started = time.monotonic()
+        self.assertEqual(self.transport.write(payload, 50), len(payload))
+        elapsed = time.monotonic() - started
+        reader.join(10)
+        self.assertEqual(bytes(received), payload)
+        self.assertGreater(elapsed, 0.05, "fixture did not exercise a slow drain")
+
+    def test_write_still_fails_when_the_port_stops_draining(self):
+        started = time.monotonic()
+        with self.assertRaises(FakeUSBTimeoutError):
+            self.transport.write(b"\x00" * (4 * 1024 * 1024), 50)
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_disconnected_port_reports_no_such_device(self):
         os.close(self.master)
         with self.assertRaises(FakeUSBError) as raised:
