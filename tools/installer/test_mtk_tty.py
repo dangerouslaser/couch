@@ -1,4 +1,5 @@
 import errno
+import fcntl
 import os
 import plistlib
 import struct
@@ -101,8 +102,13 @@ class TransportTests(unittest.TestCase):
             self.assertTrue(flags & os.O_NONBLOCK and flags & os.O_NOCTTY)
             os.set_blocking(slave, False)
             return slave
-        self.transport = TtyTransport("/dev/cu.fixture", USB, opener=opener,
-                                      ioctl=lambda fd, request, arg=None: self.ioctls.append((request, arg)))
+        def ioctl(fd, request, arg=None):
+            # The pacing query must hit the real pty so the fixture reflects a
+            # port that is or is not draining; everything else is recorded.
+            if request == termios.TIOCOUTQ:
+                return fcntl.ioctl(fd, request, arg)
+            self.ioctls.append((request, arg))
+        self.transport = TtyTransport("/dev/cu.fixture", USB, opener=opener, ioctl=ioctl)
         self.addCleanup(self.transport.close)
 
     def _close_master(self):
@@ -203,6 +209,37 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(trace.tb_frame.f_code.co_name, direction)
                 source = linecache.getline(trace.tb_frame.f_code.co_filename, trace.tb_lineno)
                 self.assertIn("raise self._timed_out()", source)
+
+    def test_large_write_waits_for_the_port_between_pieces_only(self):
+        from unittest.mock import patch
+        drains = []
+        original = TtyTransport._drain
+        def counting(transport, deadline):
+            drains.append(True)
+            return original(transport, deadline)
+        # A protocol field is smaller than one piece and must not wait at all.
+        with patch.object(TtyTransport, "_drain", counting):
+            self.assertEqual(self.transport.write(b"\xa0", 500), 1)
+        self.assertEqual(drains, [])
+        self.assertEqual(os.read(self.master, 16), b"\xa0")
+        # A bulk chunk waits between pieces, never after the last one.
+        payload = bytes(range(256)) * (TtyTransport.PACED_PIECE * 3 // 256)
+        received = bytearray()
+        os.set_blocking(self.master, False)
+        def reader():
+            deadline = time.monotonic() + 10
+            while len(received) < len(payload) and time.monotonic() < deadline:
+                try:
+                    received.extend(os.read(self.master, 8192))
+                except BlockingIOError:
+                    time.sleep(0.001)
+        thread = threading.Thread(target=reader)
+        thread.start()
+        with patch.object(TtyTransport, "_drain", counting):
+            self.assertEqual(self.transport.write(payload, 5000), len(payload))
+        thread.join(10)
+        self.assertEqual(bytes(received), payload)
+        self.assertEqual(len(drains), 2)
 
     def test_disconnected_port_reports_no_such_device(self):
         os.close(self.master)
