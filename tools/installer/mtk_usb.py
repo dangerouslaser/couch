@@ -110,6 +110,18 @@ def descriptor(device):
     return Candidate(device.bus, device.address, tuple(device.port_numbers or ()), device.idVendor, device.idProduct)
 
 
+# Absolute per-transfer ceiling for the reviewed protocols. Every caller runs
+# inside bounded_operation, which is the real cap and the only bound that
+# matters for safety; this decides only how long a still-alive but slow link may
+# take before one transfer is abandoned. It must exceed the time a single 1 MiB
+# chunk needs on the macOS callout device's full-speed link, and stay under the
+# enclosing operation bound so a genuine stall is reported as a timeout here
+# rather than by killing the worker. Smaller caller timeouts, such as the
+# handshake's 500 ms, are unaffected. Defined here so this buffer's clamp can
+# never silently cut a caller's step budget back to the old one second.
+STEP_TIMEOUT = 8000
+
+
 class PacketBufferedInput:
     """Read complete USB packets without losing surplus protocol bytes."""
     def __init__(self, endpoint):
@@ -125,7 +137,7 @@ class PacketBufferedInput:
     def read(self, size_or_buffer, timeout=None):
         size = size_or_buffer if isinstance(size_or_buffer, int) else len(size_or_buffer)
         require(0 <= size <= 1024 * 1024, "USB protocol read exceeds transfer limit")
-        timeout = min(1000, timeout) if timeout is not None and timeout > 0 else 1000
+        timeout = min(STEP_TIMEOUT, timeout) if timeout is not None and timeout > 0 else 1000
         empty_transfers = 0
         while len(self.pending) < size:
             remaining = size - len(self.pending)

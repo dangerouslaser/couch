@@ -186,6 +186,24 @@ class TransportTests(unittest.TestCase):
             self.transport.write(b"\x00" * (4 * 1024 * 1024), 50)
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_timeout_frame_names_the_stalled_direction_not_the_helper(self):
+        import linecache
+        for direction, call in (("read", lambda: self.transport.read(1, 20)),
+                                ("write", lambda: self.transport.write(b"x" * (4 * 1024 * 1024), 20))):
+            with self.subTest(direction=direction):
+                trace = None
+                try:
+                    call()
+                except FakeUSBTimeoutError as error:
+                    # assertRaises strips the traceback; keep it to check the frame.
+                    trace = error.__traceback__
+                self.assertIsNotNone(trace, "the fixture did not time out")
+                while trace.tb_next is not None:
+                    trace = trace.tb_next
+                self.assertEqual(trace.tb_frame.f_code.co_name, direction)
+                source = linecache.getline(trace.tb_frame.f_code.co_filename, trace.tb_lineno)
+                self.assertIn("raise self._timed_out()", source)
+
     def test_disconnected_port_reports_no_such_device(self):
         os.close(self.master)
         with self.assertRaises(FakeUSBError) as raised:
