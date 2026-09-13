@@ -640,7 +640,7 @@ fn install(
         session.transition(Phase::AndroidBound,&json!({"event":"retained_enrollment_bound","cid":cid,"original_os":"Couch","enrollment_sha256":proof.enrollment().sha256(),"usb":bound,"restore":restore}))?;
         Some(proof)
     } else {
-        let profile = enrollment::stock_prefixes(session, &prepared)?;
+        let profile = enrollment::android_originals(session.path())?;
         session.checkpoint(&json!({"event":"android_stock_profile_verified","profile":profile}))?;
         None
     };
