@@ -20,6 +20,7 @@ import time
 
 from couch_install import InstallError, require
 from mtk_session import Candidate, ReadPolicy, loader_bytes, select_candidate, source_pin
+from mtk_tty import TtyEndpoint, open_callout
 
 
 class _Deadline(BaseException):
@@ -204,8 +205,12 @@ def configuration_after_permissions(dev, *, platform=sys.platform, now=time.mono
 
 
 class ExactUsbBackend:
-    def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None, libusb_path=None):
+    def __init__(self, checkout, *, preloader=None, preloader_sha256=None, usb=None, bindings=None, libusb_path=None,
+                 platform=sys.platform, callout=open_callout):
         self.checkout = checkout
+        self.platform = platform
+        self.callout = callout
+        self.tty = None
         require((preloader is None) == (preloader_sha256 is None), "Provide both board preloader path and SHA-256")
         # Read-only board-data input. It is never passed to a partition writer
         # or used as the downloaded DA executable.
@@ -258,8 +263,18 @@ class ExactUsbBackend:
             if len(incoming) == len(outgoing) == 1:
                 candidates.append((interface, incoming[0], outgoing[0]))
         require(len(candidates) == 1, "Expected one CDC data interface with bulk IN/OUT")
-        self.interface, ep_in, self.ep_out = candidates[0]
-        self.ep_in = PacketBufferedInput(ep_in)
+        self.interface, ep_in, ep_out = candidates[0]
+        if self.platform == "darwin":
+            # Apple's CDC ACM driver owns the preloader's interfaces and only a
+            # privileged capture could detach it. Use the callout device the
+            # kernel created for this exact interface instead; libusb keeps
+            # serving descriptors and enumeration for the same device object.
+            self.tty = self.callout(expected, self.interface.bInterfaceNumber, self.usb)
+        if self.tty is not None:
+            self.ep_in = PacketBufferedInput(TtyEndpoint(self.tty, ep_in))
+            self.ep_out = TtyEndpoint(self.tty, ep_out)
+            return
+        self.ep_in, self.ep_out = PacketBufferedInput(ep_in), ep_out
         for number in dict.fromkeys((0, self.interface.bInterfaceNumber)):
             try:
                 active = dev.is_kernel_driver_active(number)
@@ -349,6 +364,13 @@ class ExactUsbBackend:
             cdc.vid, cdc.pid = self.device.idVendor, self.device.idProduct
             cdc.connected = True
             cdc.timeout = 1000
+            if self.tty is not None:
+                # Line coding and control lines go through the tty; the device
+                # object is descriptor-only and must not carry control transfers.
+                cdc.set_line_coding = self.tty.set_line_coding
+                cdc.setcontrollinestate = self.tty.setcontrollinestate
+                cdc.ctrl_transfer = self._forbidden
+                cdc.setbreak = self._forbidden
             # Disable every discovery/reset entry point before protocol work.
             cdc.connect = self._forbidden
             cdc.detectdevices = self._forbidden
@@ -440,6 +462,12 @@ class ExactUsbBackend:
     def close(self, reset=False):
         require(reset is False, "USB reset is disabled")
         errors = []
+        if self.tty is not None:
+            try:
+                self.tty.close()
+            except Exception as error:
+                errors.append(("close serial transport", error))
+            self.tty = None
         if self.device is not None:
             for number in reversed(self.interfaces):
                 try:

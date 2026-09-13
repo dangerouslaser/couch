@@ -56,7 +56,8 @@ class UsbBackendTests(unittest.TestCase):
         self.hwcode = 0x6580
         self.upload_result = True
         self.handshake_result = True
-        self.backend = ExactUsbBackend("unused-test-checkout", usb=self.usb, bindings=(self.config, self.mtk))
+        self.backend = ExactUsbBackend("unused-test-checkout", usb=self.usb, bindings=(self.config, self.mtk),
+                                       platform="linux")
         self.addCleanup(self.backend.close)
 
     def config(self, **kwargs):
@@ -103,6 +104,63 @@ class UsbBackendTests(unittest.TestCase):
         self.backend.close()
         self.assertEqual(self.events, [("detach", 0), ("claim", 0), ("detach", 1), ("claim", 1),
                                        ("release", 1), ("release", 0), ("attach", 1), ("attach", 0), "dispose"])
+
+    def darwin_backend(self, callout):
+        backend = ExactUsbBackend("unused-test-checkout", usb=self.usb, bindings=(self.config, self.mtk),
+                                  platform="darwin", callout=callout)
+        self.addCleanup(backend.close)
+        return backend
+
+    def test_macos_uses_the_kernel_serial_port_without_detaching_or_claiming(self):
+        resolved, closed = [], []
+        tests = self
+        class Transport:
+            def read(self, size, timeout=None):
+                return bytes([tests.handshake_bytes[-1] ^ 0xff])
+            def write(self, data, timeout=None):
+                tests.handshake_bytes.extend(data)
+                return len(data)
+            def set_line_coding(self, *args, **kwargs):
+                pass
+            def setcontrollinestate(self, **kwargs):
+                pass
+            def close(self):
+                closed.append(True)
+        transport = Transport()
+        def callout(candidate, interface_number, usb):
+            resolved.append((candidate, interface_number, usb))
+            return transport
+        backend = self.darwin_backend(callout)
+        backend.prepare(b"loader")
+        backend.claim(descriptor(self.dev))
+        self.assertEqual(resolved, [(descriptor(self.dev), 1, self.usb)])
+        self.assertIs(backend.device, self.dev)
+        self.assertEqual(backend.claimed_candidate(), descriptor(self.dev))
+        self.assertEqual(self.events, [])  # no detach, no claim
+        self.assertIs(backend.ep_in.endpoint.transport, transport)
+        self.assertEqual(backend.ep_in.wMaxPacketSize, 64)
+        mtk = backend.start_readonly(b"loader", ReadPolicy())
+        self.assertEqual(self.handshake_bytes, [0xa0, 0x0a, 0x50, 0x05])
+        self.assertEqual(mtk.port.cdc.set_line_coding, transport.set_line_coding)
+        self.assertEqual(mtk.port.cdc.setcontrollinestate, transport.setcontrollinestate)
+        with self.assertRaises(InstallError):
+            mtk.port.cdc.ctrl_transfer(0x21, 0x22, 0, 0, None)
+        backend.close()
+        self.assertEqual(closed, [True])
+        self.assertEqual(self.events, ["upload", "dispose"])
+
+    def test_macos_without_a_serial_client_claims_through_libusb(self):
+        backend = self.darwin_backend(lambda candidate, interface_number, usb: None)
+        backend.claim(descriptor(self.dev))
+        self.assertIsNone(backend.tty)
+        self.assertEqual(self.events, [("detach", 0), ("claim", 0), ("detach", 1), ("claim", 1)])
+
+    def test_other_platforms_never_consult_the_registry(self):
+        backend = ExactUsbBackend("unused-test-checkout", usb=self.usb, bindings=(self.config, self.mtk),
+                                  platform="linux", callout=lambda *args: self.fail("registry consulted"))
+        self.addCleanup(backend.close)
+        backend.claim(descriptor(self.dev))
+        self.assertEqual(self.events, [("detach", 0), ("claim", 0), ("detach", 1), ("claim", 1)])
 
     def test_prepare_uses_explicit_placeholder_without_claiming_usb(self):
         self.backend.prepare(b"loader")
@@ -233,7 +291,7 @@ class UsbBackendTests(unittest.TestCase):
             path = Path(root) / "original-preloader.img"
             data = b"synthetic original board data"
             path.write_bytes(data)
-            backend = ExactUsbBackend("unused", preloader=path,
+            backend = ExactUsbBackend("unused", platform="linux", preloader=path,
                                       preloader_sha256=hashlib.sha256(data).hexdigest(),
                                       usb=self.usb, bindings=(self.config, self.mtk))
             try:
