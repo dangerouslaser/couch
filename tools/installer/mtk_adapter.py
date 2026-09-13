@@ -355,12 +355,16 @@ def serve(wire, factory=Adapter):
         adapter.close()
 
 
-def failure_diagnostic(error):
-    """Expose only numeric codes and reviewed source locations, never error text."""
+CATEGORIES = {'USBError', 'USBTimeoutError', 'InstallError', 'OSError',
+              'PermissionError', 'TimeoutError', 'ValueError', 'TypeError',
+              'AttributeError', 'RuntimeError'}
+REVIEWED_SOURCES = {'mtk_adapter.py', 'mtk_usb.py', 'mtk_tty.py', 'mtk_readonly.py', 'mtk_writer.py'}
+
+
+def _observed(error):
+    """One exception as an allowlisted category, bounded codes and reviewed frame."""
     category = type(error).__name__
-    if category not in {'USBError', 'USBTimeoutError', 'InstallError', 'OSError',
-                        'PermissionError', 'TimeoutError', 'ValueError', 'TypeError',
-                        'AttributeError', 'RuntimeError'}:
+    if category not in CATEGORIES:
         category = 'WorkerError'
     result = {'category': category}
     for name in ('errno', 'backend_error_code'):
@@ -370,10 +374,29 @@ def failure_diagnostic(error):
     trace = error.__traceback__
     while trace is not None:
         filename = Path(trace.tb_frame.f_code.co_filename).name
-        if filename in {'mtk_adapter.py', 'mtk_usb.py', 'mtk_readonly.py', 'mtk_writer.py'}:
+        if filename in REVIEWED_SOURCES:
             result['source'] = filename
             result['line'] = trace.tb_lineno
         trace = trace.tb_next
+    return result
+
+
+def failure_diagnostic(error):
+    """Expose only numeric codes and reviewed source locations, never error text.
+
+    The writer reports any non-InstallError USB fault as one ambiguous write, so
+    the wrapper's own line is identical whatever actually failed and the
+    originating errno and frame are lost. Report the deepest chained cause as
+    well, under exactly the same allowlist: category, bounded numeric codes and
+    a reviewed filename and line, never message text.
+    """
+    result = _observed(error)
+    seen = {id(error)}
+    cause = error.__cause__ or error.__context__
+    while cause is not None and id(cause) not in seen and len(seen) <= 4:
+        seen.add(id(cause))
+        result['cause'] = _observed(cause)
+        cause = cause.__cause__ or cause.__context__
     return result
 
 
