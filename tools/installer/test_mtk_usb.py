@@ -393,6 +393,22 @@ class UsbBackendTests(unittest.TestCase):
         self.assertEqual(pauses, [0.03])
         self.assertEqual(incoming.pending, b"")
 
+    def test_host_polled_transport_backlog_of_banners_is_consumed_with_one_trigger(self):
+        # Apple's ACM driver drains the preloader's READY loop continuously, so
+        # dozens of banners precede the echo of the second A0 (seen on HA100).
+        writes, pauses = [], []
+        stream = bytearray(b"READY" * 40 + b"\x5f\xf5\xaf\xfa")
+        def read(size, timeout):
+            data, stream[:size] = bytes(stream[:size]), b""
+            return data
+        incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=read))
+        cdc = NS(EP_IN=incoming, EP_OUT=NS(write=lambda data, timeout: writes.append(data) or len(data)),
+                 set_line_coding=lambda *args: None, setcontrollinestate=lambda **kwargs: None)
+        strict_handshake(cdc, sleep=pauses.append)
+        self.assertEqual(writes, [b"\xa0", b"\xa0", b"\x0a", b"\x50", b"\x05"])
+        self.assertEqual(pauses, [0.03])
+        self.assertEqual(incoming.pending, b"")
+
     def test_ready_loop_is_bounded(self):
         writes = []
         incoming = PacketBufferedInput(NS(wMaxPacketSize=64, read=lambda size, timeout: b"READY"))

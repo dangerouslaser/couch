@@ -174,7 +174,13 @@ def strict_handshake(cdc, *, sleep=time.sleep):
         banner = reply + cdc.EP_IN.read(4, timeout=500)
         require(banner == b"READY", f"Unrecognized preloader preamble: {banner.hex()}")
         banners += 1
-        require(banners <= 8, "Too many READY banners before download handshake")
+        # libusb only lets the preloader deliver one banner per host read, so a
+        # libusb session sees one or two. A host-polled transport such as the
+        # macOS CDC ACM tty drains the preloader's 20 ms READY loop continuously,
+        # so the second A0's echo queues behind every banner buffered since the
+        # port opened. Consume that recognized backlog; the enclosing operation
+        # deadline still bounds the exchange absolutely.
+        require(banners <= 256, "Too many READY banners before download handshake")
         if banners == 1:
             # MT6580 usb_listen consumes the trigger A0 before entering the
             # download handler, which then expects its own four-byte sync.
