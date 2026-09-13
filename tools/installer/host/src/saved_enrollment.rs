@@ -412,28 +412,9 @@ fn journal(source: &Path, record: &Record, checksum: &str) -> Result<Vec<Vec<u8>
 }
 /// Import only copies verified originals; source is untouched, no old session resumes.
 pub fn import(source: &Path, destination: &mut SessionGuard) -> Result<SavedEnrollment> {
-    import_checked(
-        source,
-        destination,
-        &[
-            (
-                "boot",
-                8030464,
-                "dda78c8ebe7cb82095b08a10c2a1f779cbdbebc53464aee34c85bb3a7382cad7",
-            ),
-            (
-                "odmdtbo",
-                37120,
-                "a5cf1159f6e8c0a95bd1d3b8c1edaca3b2c9704642df50912dfe52df277f0575",
-            ),
-        ],
-    )
+    import_checked(source, destination)
 }
-fn import_checked(
-    source: &Path,
-    destination: &mut SessionGuard,
-    prefixes: &[(&str, usize, &str)],
-) -> Result<SavedEnrollment> {
+fn import_checked(source: &Path, destination: &mut SessionGuard) -> Result<SavedEnrollment> {
     ensure!(
         matches!(destination.phase(), Phase::Created | Phase::InputsVerified),
         "import must precede device binding"
@@ -449,27 +430,25 @@ fn import_checked(
     let events = journal(source, &record, &checksum)?;
     // Admit every opened snapshot before publishing any imported data.
     let mut files = Vec::new();
-    let mut stock_prefixes = BTreeMap::new();
+    let mut android = BTreeMap::new();
     for (name, entry) in &record.originals {
         let data = read(&source.join(&entry.file), entry.size)?;
         ensure!(
             data.len() as u64 == entry.size && digest(&data) == entry.sha256,
             "original backup changed"
         );
-        for &(target, size, expected) in prefixes {
-            if name == target {
-                stock_prefixes.insert(
-                    target,
-                    data.len() >= size && digest(&data[..size]) == expected,
-                );
-            }
+        if name == "boot" || name == "odmdtbo" {
+            android.insert(name.as_str(), data.clone());
         }
         files.push((entry.file.clone(), data));
     }
-    ensure!(
-        native_stock_evidence(&record, &stock_prefixes),
-        "saved originals do not establish a reviewed HA100 Android boot/overlay pair"
-    );
+    // The saved pair must be Android firmware of any version, never a Couch
+    // install: these files become the originals a stock restore writes back.
+    crate::android_images::android_originals(
+        android.get("boot").context("missing boot original")?,
+        android.get("odmdtbo").context("missing overlay original")?,
+    )
+    .context("saved originals are not HA100 Android boot/overlay images")?;
     let root = destination.path().join("imported-enrollment");
     crate::private_dir(&root)?;
     for (name, data) in files
@@ -508,19 +487,6 @@ fn import_checked(
 
 // Called only after the complete native journal and each original file hash are
 // verified. Reuse fresh enrollment's joint profile policy; never mix variants.
-fn native_stock_evidence(record: &Record, prefixes: &BTreeMap<&str, bool>) -> bool {
-    crate::enrollment::admitted_stock_pair(
-        [
-            prefixes.get("boot") == Some(&true),
-            prefixes.get("odmdtbo") == Some(&true),
-        ],
-        [
-            &record.originals["boot"].sha256,
-            &record.originals["odmdtbo"].sha256,
-        ],
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,24 +569,6 @@ mod tests {
                 .map(|entry| BTreeMap::from([("odmdtbo".into(), entry.sha256.clone())]))
                 .unwrap_or_default(),
         }
-    }
-    #[test]
-    fn native_import_reuses_joint_stock_policy_without_relaxing_journal_or_hash_checks() {
-        let mut saved = record();
-        let latest = BTreeMap::from([("boot", true), ("odmdtbo", true)]);
-        assert!(native_stock_evidence(&saved, &latest));
-        saved.originals.get_mut("boot").unwrap().sha256 =
-            "68f6baf03d3df9cf42503b6c7e205cb630ab0cb0bf64d2d93e19e0f551ef0e15".into();
-        saved.originals.get_mut("odmdtbo").unwrap().sha256 =
-            "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760".into();
-        assert!(native_stock_evidence(&saved, &BTreeMap::new()));
-        saved.originals.get_mut("odmdtbo").unwrap().sha256 = "a".repeat(64);
-        assert!(!native_stock_evidence(
-            &saved,
-            &BTreeMap::from([("boot", false), ("odmdtbo", true)])
-        ));
-        saved.originals.get_mut("boot").unwrap().sha256 = "b".repeat(64);
-        assert!(!native_stock_evidence(&saved, &BTreeMap::new()));
     }
     #[test]
     fn only_exact_android_profile_and_original_inventory_are_accepted() {
@@ -719,10 +667,8 @@ mod tests {
             assert_eq!(saved.rebind_mode(&live, &mut session, true).is_ok(), expect);
         }
     }
-    #[test]
-    fn complete_journal_and_full_hashes_are_required_before_copy() {
-        let root = private_root();
-        let source = root.path().join("source");
+    fn saved_source(root: &Path, label: &str, boot: Vec<u8>) -> (PathBuf, Record, Vec<u8>) {
+        let source = root.join(label);
         let mut original_session = SessionGuard::create(&source).unwrap();
         original_session
             .transition(Phase::InputsVerified, &json!({}))
@@ -732,7 +678,12 @@ mod tests {
             .unwrap();
         let mut record = record();
         for (name, entry) in &mut record.originals {
-            let data = vec![7; entry.size as usize];
+            let data = match name.as_str() {
+                "boot" => boot.clone(),
+                "odmdtbo" => crate::android_images::fixtures::mediatek_overlay(),
+                _ => vec![7; entry.size as usize],
+            };
+            assert_eq!(data.len() as u64, entry.size);
             entry.sha256 = digest(&data);
             fs::write(source.join(&entry.file), data).unwrap();
             if IDENTITY.contains(&name.as_str()) {
@@ -745,8 +696,9 @@ mod tests {
         let metadata = serde_json::to_vec(&record).unwrap();
         let hash = digest(&metadata);
         fs::write(source.join("enrollment.json"), &metadata).unwrap();
-        let mut incomplete = SessionGuard::create(&root.path().join("incomplete")).unwrap();
-        assert!(import_checked(&source, &mut incomplete, &[]).is_err());
+        let mut incomplete =
+            SessionGuard::create(&root.join(format!("{label}-incomplete"))).unwrap();
+        assert!(import_checked(&source, &mut incomplete).is_err());
         assert!(!incomplete.path().join("imported-enrollment").exists());
         original_session
             .transition(
@@ -754,28 +706,49 @@ mod tests {
                 &json!({"event":"enrollment_complete","enrollment_sha256":hash}),
             )
             .unwrap();
-        drop(original_session);
+        (source, record, metadata)
+    }
+    #[test]
+    fn complete_journal_and_full_hashes_are_required_before_copy() {
+        let root = private_root();
+        let (source, record, metadata) = saved_source(
+            root.path(),
+            "source",
+            crate::android_images::fixtures::android_boot(),
+        );
         let mut target = SessionGuard::create(&root.path().join("target")).unwrap();
-        let prefix = digest(&[7; 8]);
-        let imported = import_checked(
-            &source,
-            &mut target,
-            &[("boot", 8, &prefix), ("odmdtbo", 8, &prefix)],
-        )
-        .unwrap();
+        let imported = import_checked(&source, &mut target).unwrap();
         assert_eq!(imported.record().original_os, "Android");
         assert_eq!(target.phase(), Phase::Created);
         assert_eq!(fs::read(source.join("enrollment.json")).unwrap(), metadata);
         assert!(imported.rebind(&observed(&record), &mut target).is_ok());
         fs::write(source.join("bootstrap-logo.img"), b"corrupt").unwrap();
         let mut failed = SessionGuard::create(&root.path().join("failed")).unwrap();
-        assert!(import_checked(
-            &source,
-            &mut failed,
-            &[("boot", 8, &prefix), ("odmdtbo", 8, &prefix)]
-        )
-        .is_err());
+        assert!(import_checked(&source, &mut failed).is_err());
         assert!(!failed.path().join("imported-enrollment").exists());
+    }
+    #[test]
+    fn a_previous_couch_install_is_never_imported_as_android_originals() {
+        let root = private_root();
+        let (source, _, _) = saved_source(
+            root.path(),
+            "couch",
+            crate::android_images::fixtures::couch_boot(),
+        );
+        let mut target = SessionGuard::create(&root.path().join("target")).unwrap();
+        let error = import_checked(&source, &mut target)
+            .err()
+            .expect("Couch originals were admitted");
+        assert!(format!("{error:#}").contains("no init.rc"), "{error:#}");
+        assert!(!target.path().join("imported-enrollment").exists());
+        // Any other Android build is fine: the journal and hashes decide, not a version pin.
+        let (other, _, _) = saved_source(
+            root.path(),
+            "other-android",
+            crate::android_images::fixtures::boot_with(&[("init.rc", b"newer\n")]),
+        );
+        let mut accepted = SessionGuard::create(&root.path().join("accepted")).unwrap();
+        assert!(import_checked(&other, &mut accepted).is_ok());
     }
     #[test]
     fn legacy_import_preserves_evidence_and_requires_independent_pin_and_live_overlay() {

@@ -13,10 +13,14 @@ Start with working Android, enable USB debugging and authorize the connected
 computer. Enrollment must bind the selected ADB serial to its physical USB port
 and canonical eMMC CID before following that same port into download mode.
 
-The model string and MT6580 chip identifier are insufficient model evidence.
-The enrollment implementation checks the pinned official boot/overlay images
-and fixed partition boundaries, then captures and independently verifies the
-remote's calibration and original boot, recovery and overlay images. The vendor
+The model string and MT6580 chip identifier are insufficient model evidence on
+their own. The enrollment implementation binds the ADB serial to its USB port and
+eMMC CID, requires the exact HA100 partition boundaries, then captures and
+independently verifies the remote's calibration and original boot, recovery and
+overlay images. The saved boot must be an Android boot image with an Android
+ramdisk and the saved overlay a MediaTek dtbo; no particular vendor firmware
+version is required, so newer or older Android builds enrol alike. A previous
+Couch install is never admitted as an Android original. The vendor
 Device ID and Wi-Fi/Bluetooth addresses are separate recorded identity; do not
 substitute Android ID or a serial number for the vendor Device ID.
 

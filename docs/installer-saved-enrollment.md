@@ -21,9 +21,10 @@ failed installation does not turn these verified original snapshots into a new
 capture or authorize resuming its write session.
 
 The importer verifies exact HA100 partition boundaries, canonical CID, complete
-calibration inventory, file sizes and hashes, and either the pinned official Android
-boot/odmdtbo prefixes or the explicitly reviewed retained-stock full-image pair.
-Mixed or unknown stock pairs are rejected. Vendor Device ID and original MAC records remain private.
+calibration inventory, file sizes and hashes, and that the saved boot is an Android
+boot image with an Android ramdisk and the saved overlay a MediaTek dtbo. Any
+Android firmware version is accepted; Couch images are rejected as originals.
+Vendor Device ID and original MAC records remain private.
 The new host receives a `SavedEnrollment`; it does not receive write authority.
 
 ## Existing private Python trials

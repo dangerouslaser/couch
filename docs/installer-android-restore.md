@@ -16,8 +16,8 @@ shares the reinstall bootstrap path:
 
 - The device currently runs **Couch** (same USB CID-bound restart as reinstall).
 - A saved **Android enrollment** is imported and re-bound to the live hardware.
-  The importer already requires `original_os: Android` and a reviewed HA100
-  boot/overlay pair, so Couch backups can never be imported as Android originals.
+  The importer already requires `original_os: Android` and structurally Android
+  boot/overlay originals, so Couch backups can never be imported as Android originals.
 
 It then backs up the current Couch partitions first (YOLO may skip only the
 current Couch userdata, as it does today), and writes the Android restore set in
