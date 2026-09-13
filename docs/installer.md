@@ -29,6 +29,17 @@ interfaces. On Linux, prepare the appropriate device permissions for that user;
 working ADB alone does not establish access to the download interface. Close
 other tools that may own the remote before starting.
 
+On macOS, the built-in CDC ACM driver binds the remote's MediaTek download
+interface and exposes it as `/dev/cu.usbmodem*`. The installer keeps that
+binding and speaks the download protocol through the callout device that the
+I/O Registry attaches to the exact selected interface, so it never needs root
+and never detaches a kernel driver. Do not run it with `sudo`.
+
+The installer stops any running ADB server immediately before it binds the
+authorized ADB serial to a physical USB port, because a server holding the
+device makes Windows refuse the descriptor read. Later steps restart the
+server on demand; the device's USB debugging authorization is unaffected.
+
 On Windows, both the remote's MediaTek download interface and the Couch installer
 interface (VID `0e8d`, PID `201c`) need compatible **WinUSB** bindings. Android ADB
 uses its own interface and can work while these other interfaces remain
@@ -140,5 +151,7 @@ Private trial artifacts and session history are kept outside published releases.
 Worker startup failures report an allowlisted exception category, numeric USB error codes, and a reviewed adapter source filename/line. Exception messages, paths, locals, and device data are excluded. A failure stops the worker; the diagnostic does not authorize an automatic retry or restore.
 
 On Linux, a newly enumerated preloader node may appear before udev applies its existing permissions. The adapter allows up to one second for access to that exact selected device, retrying only libusb access-denied errors before any handshake. Persistent access denial stops installation: check that the installer user's effective groups include the group granted by the device's udev rule. Do not run the installer as root or broaden access to unrelated USB devices.
+
+On macOS, a libusb access error at the interface claim means the kernel's CDC ACM driver owns the preloader and no callout device was resolved for the selected interface. The adapter resolves the port by USB bus, address, vendor and product through `ioreg`; a missing or duplicate `/dev/cu.usbmodem*` under the selected data interface stops installation before any handshake.
 
 For a local acceptance build or an already-downloaded OS archive, pass `--local-payload /absolute/path/package.tar.gz` alongside `--config installer.json` and `--native-backend`. The installer copies the regular file into its private session with bounded progress and applies the same pinned size, SHA-256, manifest, and member checks as downloaded inputs. This option does not make dependency/official owner-input preparation offline and does not weaken HTTPS downloads.

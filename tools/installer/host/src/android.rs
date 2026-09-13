@@ -231,6 +231,14 @@ fn wifi_mac_with_radio(
     }
     Ok(found)
 }
+/// Stop the ADB server before libusb reads the remote's descriptors. A running
+/// server keeps the device handle open; Windows then refuses the string
+/// descriptor read that binds the ADB serial to a physical port. Later ADB
+/// commands restart the server on demand, and device authorization persists.
+pub fn stop_server(adb: &Path) -> Result<()> {
+    command(adb, &["kill-server"], DEADLINE)?;
+    Ok(())
+}
 /// Call only after binding this serial to the retained physical USB port and CID.
 /// An ambiguous failure is never retried: the remote may already have restarted.
 pub fn reboot(adb: &Path, serial: &str) -> Result<()> {
@@ -274,6 +282,26 @@ mod tests {
             canonical_cid(Some("A1234567890123456789012345678901\n".into())).as_deref(),
             Some("a1234567890123456789012345678901")
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stop_server_issues_kill_server_and_tolerates_a_missing_server() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let adb = root.path().join("adb");
+        std::fs::write(
+            &adb,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> calls\ncase \"$*\" in\n  'kill-server') exit \"$(cat status)\" ;;\n  *) exit 2 ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for status in ["0", "1"] {
+            std::fs::write(root.path().join("status"), status).unwrap();
+            stop_server(&adb).unwrap();
+        }
+        let calls = std::fs::read_to_string(root.path().join("calls")).unwrap();
+        assert_eq!(calls, "kill-server\nkill-server\n");
+        assert!(stop_server(&root.path().join("missing")).is_err());
     }
     #[cfg(unix)]
     #[test]

@@ -36,6 +36,7 @@ pub fn materialize(session: &SessionGuard) -> Result<std::path::PathBuf> {
             include_bytes!("../../mtk_adapter.py").as_slice(),
         ),
         ("mtk_usb.py", include_bytes!("../../mtk_usb.py").as_slice()),
+        ("mtk_tty.py", include_bytes!("../../mtk_tty.py").as_slice()),
         (
             "mtk_readonly.py",
             include_bytes!("../../mtk_readonly.py").as_slice(),
@@ -303,7 +304,11 @@ impl Worker {
                     .filter(|v| {
                         matches!(
                             *v,
-                            "mtk_adapter.py" | "mtk_usb.py" | "mtk_readonly.py" | "mtk_writer.py"
+                            "mtk_adapter.py"
+                                | "mtk_usb.py"
+                                | "mtk_tty.py"
+                                | "mtk_readonly.py"
+                                | "mtk_writer.py"
                         )
                     })
                     .unwrap_or("worker");

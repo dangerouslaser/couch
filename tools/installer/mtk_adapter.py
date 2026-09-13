@@ -195,11 +195,25 @@ class Adapter:
             require(set(command) == {'op', 'serial'} and self.backend is not None
                     and self.reader is None and isinstance(command['serial'], str)
                     and 1 <= len(command['serial']) <= 128, 'Invalid Android selection')
+            matches, unreadable = [], 0
             with self.wire.deadline(15):
-                matches = [d for d in self.backend.usb.core.find(find_all=True, idVendor=0x0e8d,
-                    backend=self.backend.usb_backend) if d.serial_number == command['serial']]
+                for device in self.backend.usb.core.find(find_all=True, idVendor=0x0e8d,
+                                                         backend=self.backend.usb_backend):
+                    # A descriptor read can fail while another process holds the
+                    # device (Windows refuses it under a running ADB server and
+                    # PyUSB then reports a missing langid). Never let an unrelated
+                    # MediaTek device abort the bind; report the count instead.
+                    try:
+                        serial = device.serial_number
+                    except Exception:
+                        unreadable += 1
+                        continue
+                    if serial == command['serial']:
+                        matches.append(device)
             require(len(matches) == 1 and matches[0].bus and matches[0].port_numbers,
-                    'Cannot bind authorized Android serial to one physical USB port')
+                    'Cannot bind authorized Android serial to one physical USB port'
+                    + (f'; {unreadable} MediaTek USB device(s) had unreadable descriptors: stop other ADB servers '
+                       'and tools holding the remote, then retry' if unreadable else ''))
             self.wire.send({'event': 'android_bound', 'bus': matches[0].bus,
                 'ports': list(matches[0].port_numbers),
                 'serial_sha256': hashlib.sha256(command['serial'].encode()).hexdigest()})

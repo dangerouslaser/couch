@@ -462,6 +462,9 @@ fn install(
         1,
     )?;
     let bound = if let Some(serial) = &serial {
+        // The ADB server must not hold the remote while the worker reads its
+        // USB serial descriptor (issue #89, Windows). Reboot restarts it.
+        android::stop_server(&dependencies.adb)?;
         let bound = simple(
             &mut worker,
             json!({"op":"android_bind","serial":serial}),
