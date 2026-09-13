@@ -18,6 +18,7 @@ from test_mtk_readonly import fake_session
 class Wire:
     def __init__(self, disk):
         self.disk = disk
+        self.chunk = CHUNK
         self.writes = []
         self.responses = []
         self.fields = []
@@ -44,7 +45,7 @@ class Wire:
                 assert self.fields[:3] == [COMMAND, b"\x01", b"\x08"]
                 self.offset = struct.unpack(">Q", self.fields[3])[0]
                 self.length = struct.unpack(">Q", self.fields[4])[0]
-                assert self.fields[5] == struct.pack(">I", CHUNK)
+                assert self.fields[5] == struct.pack(">I", self.chunk)
                 self.fields.clear()
                 self.responses.append(ACK)
                 self.phase = "ack"
@@ -53,7 +54,7 @@ class Wire:
             assert data == ACK
             self.phase = "data"
         elif self.phase == "data":
-            assert len(data) == min(CHUNK, self.length - self.count)
+            assert len(data) == min(self.chunk, self.length - self.count)
             self.data = data
             self.phase = "checksum"
         else:
@@ -152,6 +153,25 @@ class MtkWriterTests(unittest.TestCase):
         self.assertEqual(writer.hash("userdata"), self.release["images"]["userdata"]["sha256"])
         self.assertEqual([call["length"] for call in self.reads], [CHUNK, 512])
         self.assertFalse(writer.poisoned)
+
+    def test_transport_write_chunk_paces_the_header_and_the_transfer(self):
+        # A callout transport advertises a smaller burst than the reviewed 1 MiB.
+        self.wire.chunk = self.wire.max_write_chunk = 4096
+        writer = self.writer()
+        self.assertEqual(writer._chunk, 4096)
+        # userdata spans many chunks and ends on a partial one.
+        writer.write("userdata", self.bundle / "userdata.img")
+        region = self.binding["partitions"]["userdata"]
+        payload = (self.bundle / "userdata.img").read_bytes()
+        sent = [w for w in self.wire.writes if w in (b"R" * 4096, b"R" * 512)]
+        self.assertEqual(sent, [payload[o:o + 4096] for o in range(0, region["size"], 4096)])
+        self.assertEqual(len(sent), 257)
+        self.assertEqual(bytes(self.disk[region["offset"]:][:region["size"]]), payload)
+
+    def test_libusb_endpoints_keep_the_reviewed_chunk(self):
+        writer = self.writer()
+        self.assertEqual(writer._chunk, CHUNK)
+        self.assertFalse(hasattr(self.wire, "max_write_chunk"))
 
     def test_every_image_revalidated_before_any_write(self):
         writer = self.writer()
