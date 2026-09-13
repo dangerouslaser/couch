@@ -188,12 +188,20 @@ class ConnectedMtkWriter(ConnectedMtkReader):
                 require(stat.S_ISREG(info.st_mode) and info.st_size == self.description["partitions"][name]["size"],
                         f"Expected raw full-partition regular image: {name}")
                 self._sources[name]["stamp"] = _fd_stamp(fd)
-            self._validate_all()
             # Read exact endpoint counts directly: upstream usbwrite's bool
             # hides retries and partial transfers. Keep the buffered DA input.
             self._ep_out = mtk.port.cdc.EP_OUT
             self._ep_in = mtk.port.cdc.EP_IN
             require(callable(self._ep_out.write) and callable(self._ep_in.read), "Missing bound USB endpoints")
+            # A transport may cap how much the download agent can absorb in one
+            # burst before its acknowledgement paces the host. Announce the same
+            # size in the command header, transfer it, and hash the sources by
+            # it, so validation and transfer can never disagree. Settle this
+            # before validating, which computes the per-chunk digests.
+            self._chunk = min(CHUNK, int(getattr(self._ep_out, "max_write_chunk", CHUNK)))
+            require(512 <= self._chunk <= CHUNK and self._chunk % 512 == 0,
+                    "Unsupported download-agent write chunk")
+            self._validate_all()
             self.description.update(model=MODEL, model_verified=True,
                                     transport="mtkclient-connected-private-writer",
                                     identity_sha256=binding["identity_sha256"])
@@ -243,8 +251,8 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         chunks = []
         total = source["stamp"][2]
         self._report("Verify image", name, 0, total)
-        for offset in range(0, source["stamp"][2], CHUNK):
-            count = min(CHUNK, source["stamp"][2] - offset)
+        for offset in range(0, source["stamp"][2], self._chunk):
+            count = min(self._chunk, source["stamp"][2] - offset)
             data = _read_at(source["fd"], count, offset)
             require(len(data) == count, f"Short verified image: {name}")
             full.update(data)
@@ -292,12 +300,12 @@ class ConnectedMtkWriter(ConnectedMtkReader):
         try:
             with bounded_operation(10):
                 for field in (COMMAND, EMMC_USER[:1], EMMC_USER[1:], struct.pack(">Q", region["offset"]),
-                              struct.pack(">Q", region["size"]), struct.pack(">I", CHUNK)):
+                              struct.pack(">Q", region["size"]), struct.pack(">I", self._chunk)):
                     self._send(field)
                 self._expect(ACK)
-            for index, offset in enumerate(range(0, region["size"], CHUNK)):
+            for index, offset in enumerate(range(0, region["size"], self._chunk)):
                 self._unchanged(name)
-                count = min(CHUNK, region["size"] - offset)
+                count = min(self._chunk, region["size"] - offset)
                 data = _read_at(image["fd"], count, offset)
                 require(len(data) == count and hashlib.sha256(data).digest() == image["chunks"][index],
                         f"Image changed during transfer: {name}")

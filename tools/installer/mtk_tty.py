@@ -235,6 +235,16 @@ class TtyTransport:
 
 class TtyEndpoint:
     """Descriptor attributes from the real endpoint; transfers over the callout device."""
+    # The download agent acknowledges one chunk at a time, and the acknowledgement
+    # is the only thing pacing the host. Through libusb the kernel drives the bulk
+    # pipe and the agent absorbs the reviewed 1 MiB burst. Through a callout device
+    # the ACM driver streams as fast as the port accepts, the agent falls behind and
+    # the chunk is never completed, so it never acknowledges and never commits: the
+    # boot partition is byte-identical after such a failure. Advertise a smaller
+    # burst so an acknowledgement paces the transfer. Only this transport is
+    # affected; libusb keeps the reviewed chunk.
+    max_write_chunk = 64 * 1024
+
     def __init__(self, transport, endpoint):
         self.transport = transport
         self.endpoint = endpoint
