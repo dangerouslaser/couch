@@ -370,7 +370,43 @@ fn diagnostic_summary(diagnostic: &Value) -> String {
         | "AttributeError" | "RuntimeError") => category,
         _ => "WorkerError",
     };
-    let source = diagnostic["source"]
+    let source = reviewed_source(diagnostic);
+    format!(
+        "{category} at {source}:{} (errno {:?}, backend {:?}){}",
+        diagnostic["line"].as_u64().unwrap_or(0),
+        diagnostic["errno"].as_i64(),
+        diagnostic["backend_error_code"].as_i64(),
+        diagnostic_frames(diagnostic)
+    )
+}
+
+/// The reviewed call path behind one fault, outermost first. Each entry is
+/// re-filtered exactly like a source name, so only reviewed filenames and
+/// numeric lines can appear.
+fn diagnostic_frames(diagnostic: &Value) -> String {
+    let Some(frames) = diagnostic["frames"].as_array() else {
+        return String::new();
+    };
+    let rendered = frames
+        .iter()
+        .take(8)
+        .map(|frame| {
+            format!(
+                "{}:{}",
+                reviewed_source(frame),
+                frame["line"].as_u64().unwrap_or(0)
+            )
+        })
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        String::new()
+    } else {
+        format!(" via {}", rendered.join(" > "))
+    }
+}
+
+fn reviewed_source(value: &Value) -> &str {
+    value["source"]
         .as_str()
         .filter(|v| {
             matches!(
@@ -382,13 +418,7 @@ fn diagnostic_summary(diagnostic: &Value) -> String {
                     | "mtk_writer.py"
             )
         })
-        .unwrap_or("worker");
-    format!(
-        "{category} at {source}:{} (errno {:?}, backend {:?})",
-        diagnostic["line"].as_u64().unwrap_or(0),
-        diagnostic["errno"].as_i64(),
-        diagnostic["backend_error_code"].as_i64()
-    )
+        .unwrap_or("worker")
 }
 
 #[cfg(test)]
@@ -406,7 +436,7 @@ fn emit(data:&[u8]) { let mut o=io::stdout();o.write_all(&(data.len() as u32).to
 fn ack() { let mut h=[0;4];io::stdin().read_exact(&mut h).unwrap();let mut b=vec![0;u32::from_le_bytes(h) as usize];io::stdin().read_exact(&mut b).unwrap(); }
 fn main() { match std::env::args().nth(1).unwrap().as_str() {
 "safe_error" => emit(br#"{"event":"error","diagnostic":{"category":"USBError","source":"mtk_usb.py","line":242,"errno":13,"backend_error_code":-3,"message":"secret"}}"#),
-"wrapped_error" => emit(br#"{"event":"error","diagnostic":{"category":"InstallError","source":"mtk_writer.py","line":317,"cause":{"category":"USBTimeoutError","source":"mtk_tty.py","line":168,"errno":60,"backend_error_code":-7,"message":"secret"},"message":"secret"}}"#),
+"wrapped_error" => emit(br#"{"event":"error","diagnostic":{"category":"InstallError","source":"mtk_writer.py","line":317,"cause":{"category":"USBTimeoutError","source":"mtk_tty.py","line":161,"errno":60,"backend_error_code":-7,"frames":[{"source":"mtk_writer.py","line":308},{"source":"/private/secret","line":"secret"},{"source":"mtk_tty.py","line":161}],"message":"secret"},"message":"secret"}}"#),
 "untrusted_error" => emit(br#"{"event":"error","diagnostic":{"category":"secret","source":"/private/secret","line":"secret","errno":"secret"}}"#),
 "hang" => thread::sleep(Duration::from_secs(60)),
 "oversize" => { io::stdout().write_all(&u32::MAX.to_le_bytes()).unwrap(); },
@@ -436,7 +466,12 @@ _ => panic!()
             "{error}"
         );
         assert!(
-            error.contains("cause USBTimeoutError at mtk_tty.py:168"),
+            error.contains("cause USBTimeoutError at mtk_tty.py:161"),
+            "{error}"
+        );
+        // The call path names the protocol step; an untrusted entry is neutralised.
+        assert!(
+            error.contains("via mtk_writer.py:308 > worker:0 > mtk_tty.py:161"),
             "{error}"
         );
         assert!(error.contains("Some(60)"), "{error}");

@@ -371,13 +371,20 @@ def _observed(error):
         value = getattr(error, name, None)
         if type(value) is int and -65536 <= value <= 65536:
             result[name] = value
+    # A shared transport call sits under several protocol steps, so the innermost
+    # frame alone cannot say which step stalled. Record the reviewed frames along
+    # the way, outermost first, still as filenames and line numbers only.
+    frames = []
     trace = error.__traceback__
     while trace is not None:
         filename = Path(trace.tb_frame.f_code.co_filename).name
         if filename in REVIEWED_SOURCES:
             result['source'] = filename
             result['line'] = trace.tb_lineno
+            frames.append({'source': filename, 'line': trace.tb_lineno})
         trace = trace.tb_next
+    if len(frames) > 1:
+        result['frames'] = frames[-8:]
     return result
 
 
