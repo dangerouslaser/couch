@@ -16,7 +16,12 @@ and canonical eMMC CID before following that same port into download mode.
 The model string and MT6580 chip identifier are insufficient model evidence.
 The enrollment implementation checks the pinned official boot/overlay images
 and fixed partition boundaries, then captures and independently verifies the
-remote's calibration and original boot, recovery and overlay images. The vendor
+remote's calibration and original boot, recovery and overlay images. Three
+boot/overlay pairs are admitted, each recorded in the journal as
+`android_stock_profile_verified`: the pinned official OTA prefixes, one reviewed
+older retained stock pair, and the vendor factory firmware V1.0.4 pair that the
+[factory restore](installer-factory-restore.md) flow writes. Any other
+pair stops enrollment before Wi-Fi setup or any write. The vendor
 Device ID and Wi-Fi/Bluetooth addresses are separate recorded identity; do not
 substitute Android ID or a serial number for the vendor Device ID.
 

@@ -226,12 +226,25 @@ const RETAINED_STOCK_PAIR: [&str; 2] = [
     "68f6baf03d3df9cf42503b6c7e205cb630ab0cb0bf64d2d93e19e0f551ef0e15",
     "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760",
 ];
+// Vendor factory firmware RS30_HAOS_HA100_V1.0.4_20260702, pinned in
+// tools/release/ha100_factory_firmware.json (archive SHA-256
+// cc9ad8e573a68e2cd0712c5b56d60b63ef5ccdeb7a52f048f734007e5b093c1f). A remote
+// restored by that flow carries the factory boot.img (member SHA-256
+// 8c8d3123161dc8dc52b6e49ccc10b7bb64dd65f7c3be66529b43701902736a32) and
+// odmdtbo.img (e64e44a74f9c7461...) zero-padded to 16 MiB; its overlay is byte
+// identical to the retained older stock overlay. Verified on HA100 2026-09-12.
+const FACTORY_FIRMWARE_PAIR: [&str; 2] = [
+    "36e7a0acb7e33cb17c384011fc113c2b4b12853222dc59f8ec4dff96e714ae23",
+    "13933a032fff5df271af7ce521a320c6a0653aa05a4ff652d35742eece37d760",
+];
 const STOCK_PARTITION_SIZE: usize = 16 * 1024 * 1024;
 fn admitted_stock_profile(prefixes: [bool; 2], full_hashes: [&str; 2]) -> Option<&'static str> {
     if prefixes == [true, true] {
         Some("official-ota-prefixes")
     } else if full_hashes == RETAINED_STOCK_PAIR {
         Some("reviewed-retained-stock-pair")
+    } else if full_hashes == FACTORY_FIRMWARE_PAIR {
+        Some("reviewed-factory-firmware-pair")
     } else {
         None
     }
@@ -361,10 +374,22 @@ mod tests {
             ["latest-boot", "latest-overlay"]
         ));
         assert!(admitted_stock_pair([false, false], RETAINED_STOCK_PAIR));
+        assert_eq!(
+            admitted_stock_profile([false, false], FACTORY_FIRMWARE_PAIR),
+            Some("reviewed-factory-firmware-pair")
+        );
+        assert!(admitted_stock_pair([false, false], FACTORY_FIRMWARE_PAIR));
         for (prefixes, pair) in [
             ([false, true], [RETAINED_STOCK_PAIR[0], "latest-overlay"]),
             ([true, false], ["latest-boot", RETAINED_STOCK_PAIR[1]]),
             ([false, false], ["unknown", "unknown"]),
+            // The factory overlay equals the retained overlay; the boot must match too.
+            ([false, false], ["unknown", FACTORY_FIRMWARE_PAIR[1]]),
+            ([false, false], [FACTORY_FIRMWARE_PAIR[0], "unknown"]),
+            (
+                [false, false],
+                [FACTORY_FIRMWARE_PAIR[0], RETAINED_STOCK_PAIR[0]],
+            ),
             (
                 [false, false],
                 [RETAINED_STOCK_PAIR[1], RETAINED_STOCK_PAIR[0]],
