@@ -18,7 +18,7 @@ import struct
 from couch_install import (CHUNK, MODEL, InstallError, allowed_write_targets, fingerprint,
                            layout, require, sync_directory)
 from mtk_readonly import ConnectedMtkReader
-from mtk_usb import bounded_operation
+from mtk_usb import STEP_TIMEOUT, bounded_operation
 
 COMMAND = b"\x62"
 ACK = b"\x5a"
@@ -261,11 +261,11 @@ class ConnectedMtkWriter(ConnectedMtkReader):
             self._validate_source(name)
 
     def _send(self, data):
-        result = self._ep_out.write(data, timeout=1000)
+        result = self._ep_out.write(data, timeout=STEP_TIMEOUT)
         require(type(result) is int and result == len(data), "Short or ambiguous USB write; session poisoned")
 
     def _expect(self, expected):
-        result = self._ep_in.read(1, timeout=1000)
+        result = self._ep_in.read(1, timeout=STEP_TIMEOUT)
         require(isinstance(result, (bytes, bytearray)) and bytes(result) == expected,
                 "Unexpected DA acknowledgement; session poisoned")
         # The legacy write protocol has one response byte per step, never a

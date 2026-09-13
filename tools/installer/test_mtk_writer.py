@@ -10,7 +10,7 @@ import unittest
 
 from couch_install import CHUNK, IDENTITY_PARTITIONS, InstallError, MODEL, install_transaction
 from mtk_readonly import ConnectedMtkReader, REVIEWED_REVISION
-from mtk_writer import ACK, COMMAND, CONT, PROGRESS_INTERVAL, ConnectedMtkWriter
+from mtk_writer import STEP_TIMEOUT, ACK, COMMAND, CONT, PROGRESS_INTERVAL, ConnectedMtkWriter
 from mtk_usb import PacketBufferedInput
 from test_mtk_readonly import fake_session
 
@@ -31,7 +31,7 @@ class Wire:
         self.hook = None
 
     def write(self, data, timeout):
-        assert timeout == 1000
+        assert timeout == STEP_TIMEOUT
         data = bytes(data)
         self.writes.append(data)
         if self.fail_at == len(self.writes):
@@ -70,7 +70,7 @@ class Wire:
         return len(data)
 
     def read(self, size, timeout):
-        assert size == 1 and timeout == 1000
+        assert size == 1 and timeout == STEP_TIMEOUT
         reply = self.responses.pop(0)
         return b"\xa5" if self.bad_ack else reply
 

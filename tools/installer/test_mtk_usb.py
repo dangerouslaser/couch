@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 from couch_install import InstallError
 from mtk_session import ReadPolicy, read_session
-from mtk_usb import ExactUsbBackend, PinnedImports, bounded_operation, descriptor, strict_handshake, PacketBufferedInput
+from mtk_usb import (STEP_TIMEOUT, ExactUsbBackend, PinnedImports, bounded_operation, descriptor,
+                     strict_handshake, PacketBufferedInput)
 from test_mtk_readonly import fake_session
 
 
@@ -408,6 +409,16 @@ class UsbBackendTests(unittest.TestCase):
         self.assertEqual(writes, [b"\xa0", b"\xa0", b"\x0a", b"\x50", b"\x05"])
         self.assertEqual(pauses, [0.03])
         self.assertEqual(incoming.pending, b"")
+
+    def test_packet_buffer_honours_a_step_budget_but_never_raises_a_smaller_one(self):
+        seen = []
+        endpoint = NS(wMaxPacketSize=64,
+                      read=lambda size, timeout: seen.append(timeout) or b"\x5a")
+        buffered = PacketBufferedInput(endpoint)
+        buffered.read(1, timeout=STEP_TIMEOUT)
+        buffered.read(1, timeout=500)
+        buffered.read(1)
+        self.assertEqual(seen, [STEP_TIMEOUT, 500, 1000])
 
     def test_ready_loop_is_bounded(self):
         writes = []

@@ -135,11 +135,14 @@ class TtyTransport:
     def _timeout(self, timeout):
         return (timeout if timeout is not None and timeout > 0 else self.DEFAULT_TIMEOUT) / 1000.0
 
+    # These build the fault; the caller raises it. Raising inside a shared helper
+    # would make every timeout report this one line, hiding whether a read or a
+    # write stalled, which is exactly what the reviewed diagnostic reports.
     def _timed_out(self):
-        raise self.usb.core.USBTimeoutError('Operation timed out', -7, errno.ETIMEDOUT)
+        return self.usb.core.USBTimeoutError('Operation timed out', -7, errno.ETIMEDOUT)
 
     def _gone(self):
-        raise self.usb.core.USBError('No such device (it may have been disconnected)', -4, errno.ENODEV)
+        return self.usb.core.USBError('No such device (it may have been disconnected)', -4, errno.ENODEV)
 
     def read(self, size_or_buffer, timeout=None):
         """Return the bytes already available, like one USB transfer ending on a short packet."""
@@ -152,20 +155,20 @@ class TtyTransport:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self._timed_out()
+                raise self._timed_out()
             readable, _, _ = select.select([self.fd], [], [], remaining)
             if not readable:
-                self._timed_out()
+                raise self._timed_out()
             try:
                 data = os.read(self.fd, size)
             except BlockingIOError:
                 continue
             except OSError as error:
                 if error.errno in (errno.ENXIO, errno.ENODEV, errno.EIO):
-                    self._gone()
+                    raise self._gone() from error
                 raise
             if not data:
-                self._gone()
+                raise self._gone()
             if isinstance(size_or_buffer, int):
                 return data
             memoryview(size_or_buffer).cast('B')[:len(data)] = data
@@ -193,17 +196,17 @@ class TtyTransport:
         while sent < len(data):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self._timed_out()
+                raise self._timed_out()
             _, writable, _ = select.select([], [self.fd], [], remaining)
             if not writable:
-                self._timed_out()
+                raise self._timed_out()
             try:
                 count = os.write(self.fd, data[sent:])
             except BlockingIOError:
                 continue
             except OSError as error:
                 if error.errno in (errno.ENXIO, errno.ENODEV, errno.EIO):
-                    self._gone()
+                    raise self._gone() from error
                 raise
             if count:
                 sent += count
