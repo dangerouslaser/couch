@@ -11,7 +11,7 @@ from unittest.mock import patch
 from contextlib import contextmanager
 
 from couch_install import InstallError, IDENTITY_PARTITIONS
-from mtk_adapter import Adapter, Wire, serve, MAX, failure_diagnostic
+from mtk_adapter import Adapter, Wire, serve, MAX, REVIEWED_SOURCES, failure_diagnostic
 from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
 from mtk_writer import _open_image, _fd_stamp, _read_at, ConnectedMtkWriter
 
@@ -37,6 +37,19 @@ class AdapterTests(unittest.TestCase):
         PrivateDeviceName = type('private-device-secret', (Exception,), {})
         result = failure_diagnostic(PrivateDeviceName('secret'))
         self.assertEqual(result, {'category': 'WorkerError'})
+
+    def test_failure_diagnostic_reports_the_wrapped_cause_without_text(self):
+        try:
+            try:
+                raise OSError(5, 'secret device path')
+            except OSError as cause:
+                raise InstallError('Ambiguous MTK write; session poisoned') from cause
+        except InstallError as error:
+            result = failure_diagnostic(error)
+        self.assertEqual(result['category'], 'InstallError')
+        self.assertEqual(result['cause'], {'category': 'OSError', 'errno': 5})
+        self.assertNotIn('secret', json.dumps(result))
+        self.assertIn('mtk_tty.py', REVIEWED_SOURCES)
 
     def test_real_stdio_survives_independent_library_rewrap_and_hides_output(self):
         import subprocess

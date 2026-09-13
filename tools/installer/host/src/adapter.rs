@@ -292,29 +292,16 @@ impl Worker {
             ensure!(value.is_object(), "invalid worker event");
             if value["event"] == "error" {
                 let diagnostic = &value["diagnostic"];
-                let category = diagnostic["category"].as_str().unwrap_or("WorkerError");
-                let category = match category {
-                    "USBError" | "USBTimeoutError" | "InstallError" | "OSError"
-                    | "PermissionError" | "TimeoutError" | "ValueError" | "TypeError"
-                    | "AttributeError" | "RuntimeError" => category,
-                    _ => "WorkerError",
-                };
-                let source = diagnostic["source"]
-                    .as_str()
-                    .filter(|v| {
-                        matches!(
-                            *v,
-                            "mtk_adapter.py"
-                                | "mtk_usb.py"
-                                | "mtk_tty.py"
-                                | "mtk_readonly.py"
-                                | "mtk_writer.py"
-                        )
-                    })
-                    .unwrap_or("worker");
-                anyhow::bail!("MTK worker stopped: {category} at {source}:{} (errno {:?}, backend {:?}); retain originals",
-                    diagnostic["line"].as_u64().unwrap_or(0),
-                    diagnostic["errno"].as_i64(), diagnostic["backend_error_code"].as_i64());
+                let mut summary = format!("MTK worker stopped: {}", diagnostic_summary(diagnostic));
+                // The writer reports every non-InstallError USB fault at one
+                // wrapper line, so the cause is what identifies the failure.
+                if diagnostic["cause"].is_object() {
+                    summary.push_str(&format!(
+                        "; cause {}",
+                        diagnostic_summary(&diagnostic["cause"])
+                    ));
+                }
+                anyhow::bail!("{summary}; retain originals");
             }
             if value["event"] == "deadline_end" {
                 ensure!(
@@ -373,6 +360,37 @@ impl Drop for Worker {
         self.stop();
     }
 }
+/// One diagnostic object as a fixed summary. Only an allowlisted category and
+/// reviewed source filename appear, with a numeric line and codes; worker text
+/// is never rendered.
+fn diagnostic_summary(diagnostic: &Value) -> String {
+    let category = match diagnostic["category"].as_str().unwrap_or("WorkerError") {
+        category @ ("USBError" | "USBTimeoutError" | "InstallError" | "OSError"
+        | "PermissionError" | "TimeoutError" | "ValueError" | "TypeError"
+        | "AttributeError" | "RuntimeError") => category,
+        _ => "WorkerError",
+    };
+    let source = diagnostic["source"]
+        .as_str()
+        .filter(|v| {
+            matches!(
+                *v,
+                "mtk_adapter.py"
+                    | "mtk_usb.py"
+                    | "mtk_tty.py"
+                    | "mtk_readonly.py"
+                    | "mtk_writer.py"
+            )
+        })
+        .unwrap_or("worker");
+    format!(
+        "{category} at {source}:{} (errno {:?}, backend {:?})",
+        diagnostic["line"].as_u64().unwrap_or(0),
+        diagnostic["errno"].as_i64(),
+        diagnostic["backend_error_code"].as_i64()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +406,7 @@ fn emit(data:&[u8]) { let mut o=io::stdout();o.write_all(&(data.len() as u32).to
 fn ack() { let mut h=[0;4];io::stdin().read_exact(&mut h).unwrap();let mut b=vec![0;u32::from_le_bytes(h) as usize];io::stdin().read_exact(&mut b).unwrap(); }
 fn main() { match std::env::args().nth(1).unwrap().as_str() {
 "safe_error" => emit(br#"{"event":"error","diagnostic":{"category":"USBError","source":"mtk_usb.py","line":242,"errno":13,"backend_error_code":-3,"message":"secret"}}"#),
+"wrapped_error" => emit(br#"{"event":"error","diagnostic":{"category":"InstallError","source":"mtk_writer.py","line":317,"cause":{"category":"USBTimeoutError","source":"mtk_tty.py","line":168,"errno":60,"backend_error_code":-7,"message":"secret"},"message":"secret"}}"#),
 "untrusted_error" => emit(br#"{"event":"error","diagnostic":{"category":"secret","source":"/private/secret","line":"secret","errno":"secret"}}"#),
 "hang" => thread::sleep(Duration::from_secs(60)),
 "oversize" => { io::stdout().write_all(&u32::MAX.to_le_bytes()).unwrap(); },
@@ -404,6 +423,24 @@ _ => panic!()
     }
     fn worker(mode: &str) -> Worker {
         Worker::spawn(Command::new(fixture()).arg(mode)).unwrap()
+    }
+    #[test]
+    fn wrapped_worker_errors_name_the_originating_fault() {
+        let mut worker = worker("wrapped_error");
+        let error = worker
+            .operation(Duration::from_secs(5), |w| w.event())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("InstallError at mtk_writer.py:317"),
+            "{error}"
+        );
+        assert!(
+            error.contains("cause USBTimeoutError at mtk_tty.py:168"),
+            "{error}"
+        );
+        assert!(error.contains("Some(60)"), "{error}");
+        assert!(!error.contains("secret"), "{error}");
     }
     #[test]
     fn worker_errors_retain_only_allowlisted_diagnostic_fields() {
