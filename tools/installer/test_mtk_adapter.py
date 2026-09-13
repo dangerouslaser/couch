@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from couch_install import InstallError, IDENTITY_PARTITIONS
 from mtk_adapter import Adapter, Wire, serve, MAX, REVIEWED_SOURCES, failure_diagnostic
-from mtk_usb import ExactUsbBackend, bounded_operation, supervised_operations
+from mtk_usb import ExactUsbBackend, PacketBufferedInput, bounded_operation, supervised_operations
 from mtk_writer import _open_image, _fd_stamp, _read_at, ConnectedMtkWriter
 
 
@@ -47,9 +47,26 @@ class AdapterTests(unittest.TestCase):
         except InstallError as error:
             result = failure_diagnostic(error)
         self.assertEqual(result['category'], 'InstallError')
-        self.assertEqual(result['cause'], {'category': 'OSError', 'errno': 5})
+        self.assertEqual(result['cause']['category'], 'OSError')
+        self.assertEqual(result['cause']['errno'], 5)
         self.assertNotIn('secret', json.dumps(result))
         self.assertIn('mtk_tty.py', REVIEWED_SOURCES)
+
+    def test_failure_diagnostic_records_the_reviewed_call_path(self):
+        import mtk_writer
+        buffered = PacketBufferedInput(
+            SimpleNamespace(wMaxPacketSize=64, read=lambda size, timeout: 1 / 0))
+        try:
+            mtk_writer.ConnectedMtkWriter._expect(SimpleNamespace(_ep_in=buffered), b'\x5a')
+        except ZeroDivisionError as error:
+            result = failure_diagnostic(error)
+        # Only reviewed files appear; this test file is excluded even though it
+        # is the outermost frame of the same traceback.
+        self.assertTrue(all(frame['source'] in REVIEWED_SOURCES for frame in result['frames']))
+        # Outermost reviewed frame names the protocol step, innermost the fault.
+        self.assertEqual(result['frames'][0]['source'], 'mtk_writer.py')
+        self.assertEqual(result['frames'][-1]['source'], 'mtk_usb.py')
+        self.assertEqual(result['frames'][-1], {'source': result['source'], 'line': result['line']})
 
     def test_real_stdio_survives_independent_library_rewrap_and_hides_output(self):
         import subprocess
