@@ -104,6 +104,7 @@ class TtyTransport:
     """Raw, exclusive byte stream over a callout device with USB-style timeouts."""
     BAUD = getattr(termios, 'B115200', None)  # Line coding never reaches the bulk data path.
     DEFAULT_TIMEOUT = 1000
+    PACED_PIECE = 4096  # Bytes queued before waiting for the port to transmit them.
 
     def __init__(self, path, usb, *, opener=os.open, ioctl=None):
         require(termios is not None and fcntl is not None, 'Serial transport requires a POSIX host')
@@ -174,42 +175,75 @@ class TtyTransport:
             memoryview(size_or_buffer).cast('B')[:len(data)] = data
             return len(data)
 
-    def write(self, data, timeout=None):
-        """Deliver every byte, allowing a slow link while the port keeps draining.
+    def _drain(self, deadline):
+        """Wait until the port has actually put the queued bytes on the wire.
 
-        libusb hands one bulk transfer to the kernel and the caller's timeout
-        bounds that single transfer. A callout device instead drains at the pace
-        the CDC ACM link and the device's receiver allow, and the DA writer
-        pushes a whole 1 MiB chunk in one call with a one-second timeout. Over
-        the preloader's full-speed link that chunk needs longer than a second,
-        which is why partition reads (which loop over small retried transfers)
-        succeeded while the first write did not. Treat the timeout as an
-        inactivity bound instead: a stalled or vanished port still fails within
-        it, while steady progress keeps the transfer alive. The caller's
-        enclosing bounded_operation remains the absolute cap.
+        A completed transmission means the device's endpoint accepted the bytes,
+        so this is the only device-level backpressure a callout device offers.
+        Poll the queue instead of blocking in tcdrain, so a stalled port raises
+        the same timeout as any other stall rather than hanging past the
+        caller's operation bound.
+        """
+        while True:
+            try:
+                queued = struct.unpack('i', self.ioctl(self.fd, termios.TIOCOUTQ, struct.pack('i', 0)))[0]
+            except (OSError, TypeError, struct.error):
+                # No queue query on this port: deliver unpaced rather than block
+                # in tcdrain, which cannot be bounded by the caller's deadline.
+                return
+            if queued <= 0:
+                return
+            if time.monotonic() >= deadline:
+                raise self._timed_out()
+            time.sleep(0.001)
+
+    def write(self, data, timeout=None):
+        """Deliver every byte, pacing the device rather than filling the port.
+
+        libusb hands one bulk transfer to the kernel and the device is paced by
+        that transfer completing. A callout device accepts far more than the
+        device can consume: the ACM driver keeps streaming while the download
+        agent falls behind, the agent never sees a complete chunk, so it never
+        acknowledges and never commits. A failed write leaves the partition
+        byte-identical, which is exactly what the saved originals showed.
+
+        So hand over a bounded piece at a time and wait for it to reach the wire
+        before queueing more. The timeout is an inactivity bound: a stalled or
+        vanished port still fails within it, while steady progress keeps the
+        transfer alive, and the enclosing bounded_operation stays the absolute
+        cap. Writes smaller than one piece, which is every protocol field and
+        acknowledgement, behave exactly as before.
         """
         require(self.fd is not None, 'Serial transport closed')
-        data = bytes(data)
+        data = memoryview(bytes(data))
         limit = self._timeout(timeout)
         deadline = time.monotonic() + limit
         sent = 0
         while sent < len(data):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise self._timed_out()
-            _, writable, _ = select.select([], [self.fd], [], remaining)
-            if not writable:
-                raise self._timed_out()
-            try:
-                count = os.write(self.fd, data[sent:])
-            except BlockingIOError:
-                continue
-            except OSError as error:
-                if error.errno in (errno.ENXIO, errno.ENODEV, errno.EIO):
-                    raise self._gone() from error
-                raise
-            if count:
-                sent += count
+            piece = min(len(data), sent + self.PACED_PIECE)
+            while sent < piece:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise self._timed_out()
+                _, writable, _ = select.select([], [self.fd], [], remaining)
+                if not writable:
+                    raise self._timed_out()
+                try:
+                    count = os.write(self.fd, data[sent:piece])
+                except BlockingIOError:
+                    continue
+                except OSError as error:
+                    if error.errno in (errno.ENXIO, errno.ENODEV, errno.EIO):
+                        raise self._gone() from error
+                    raise
+                if count:
+                    sent += count
+                    deadline = time.monotonic() + limit
+            if sent < len(data):
+                # Only between pieces: the point is to not queue more than the
+                # port has transmitted. After the last piece there is no more to
+                # queue, and small protocol writes never reach this at all.
+                self._drain(deadline)
                 deadline = time.monotonic() + limit
         return sent
 
@@ -235,15 +269,11 @@ class TtyTransport:
 
 class TtyEndpoint:
     """Descriptor attributes from the real endpoint; transfers over the callout device."""
-    # The download agent acknowledges one chunk at a time, and the acknowledgement
-    # is the only thing pacing the host. Through libusb the kernel drives the bulk
-    # pipe and the agent absorbs the reviewed 1 MiB burst. Through a callout device
-    # the ACM driver streams as fast as the port accepts, the agent falls behind and
-    # the chunk is never completed, so it never acknowledges and never commits: the
-    # boot partition is byte-identical after such a failure. Advertise a smaller
-    # burst so an acknowledgement paces the transfer. Only this transport is
-    # affected; libusb keeps the reviewed chunk.
-    max_write_chunk = 64 * 1024
+    # This transport deliberately advertises no smaller protocol chunk. Announcing
+    # 64 KiB in the command header behaved exactly like the reviewed 1 MiB, and
+    # upstream hardcodes 1 MiB, so the agent may ignore the announced size and
+    # still wait for a full chunk. Keep the protocol byte-identical to the path
+    # validated on Linux and pace delivery in the transport instead.
 
     def __init__(self, transport, endpoint):
         self.transport = transport
