@@ -162,6 +162,43 @@ raise SystemExit(serve_stdio(Fixture))
             serve(wire, lambda _: Worker())
         self.assertEqual(events, ['attempt', 'close'])
 
+    def bind_adapter(self, devices):
+        class DeadlineWire(MemoryWire):
+            @contextmanager
+            def deadline(self, seconds):
+                self.events.append(('deadline', seconds))
+                yield
+        wire = DeadlineWire()
+        adapter = Adapter(wire)
+        adapter.backend = SimpleNamespace(usb=SimpleNamespace(core=SimpleNamespace(find=lambda **kw: iter(devices))),
+                                          usb_backend=None)
+        return adapter, wire
+
+    def test_android_bind_survives_unreadable_descriptors_on_other_devices(self):
+        class Unreadable:
+            bus, port_numbers = 5, (2,)
+            @property
+            def serial_number(self):
+                raise ValueError('The device has no langid (permission issue, no string descriptors supported or device error)')
+        readable = SimpleNamespace(bus=5, port_numbers=(4, 1), serial_number='0127A260301T0463')
+        adapter, wire = self.bind_adapter([Unreadable(), readable])
+        adapter.dispatch({'op': 'android_bind', 'serial': '0127A260301T0463'})
+        self.assertEqual(wire.events[-1], {'event': 'android_bound', 'bus': 5, 'ports': [4, 1],
+                                           'serial_sha256': hashlib.sha256(b'0127A260301T0463').hexdigest()})
+
+    def test_android_bind_names_unreadable_descriptors_when_the_remote_is_held(self):
+        class Unreadable:
+            bus, port_numbers = 5, (13,)
+            @property
+            def serial_number(self):
+                raise ValueError('The device has no langid')
+        adapter, wire = self.bind_adapter([Unreadable()])
+        with self.assertRaisesRegex(InstallError, r'1 MediaTek USB device\(s\) had unreadable descriptors.*ADB'):
+            adapter.dispatch({'op': 'android_bind', 'serial': '0127A260301T0463'})
+        adapter, wire = self.bind_adapter([])
+        with self.assertRaisesRegex(InstallError, r'physical USB port$'):
+            adapter.dispatch({'op': 'android_bind', 'serial': '0127A260301T0463'})
+
     def test_verified_libusb_selection_is_explicit_and_has_no_fallback(self):
         calls = []
         backend = object()
