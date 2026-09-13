@@ -2,11 +2,15 @@ import errno
 import os
 import plistlib
 import struct
-import termios
+import sys
 import threading
 import time
 from types import SimpleNamespace as NS
 import unittest
+
+if sys.platform == 'win32':
+    raise unittest.SkipTest('The macOS callout transport needs termios; Windows never selects it')
+import termios
 
 from couch_install import InstallError
 from mtk_session import Candidate

@@ -14,15 +14,18 @@ address, vendor and product, to the callout device that hangs off the exact
 CDC data interface number the descriptor walk selected.
 """
 import errno
-import fcntl
 import os
 import plistlib
 import re
 import select
 import struct
 import subprocess
-import termios
 import time
+try:
+    import fcntl
+    import termios
+except ImportError:  # Windows never selects the callout path; keep the backend importable.
+    fcntl = termios = None
 
 from couch_install import require
 
@@ -99,14 +102,15 @@ def registry_listing(run=subprocess.run):
 
 class TtyTransport:
     """Raw, exclusive byte stream over a callout device with USB-style timeouts."""
-    BAUD = termios.B115200  # Line coding never reaches the bulk data path; keep a portable constant.
+    BAUD = getattr(termios, 'B115200', None)  # Line coding never reaches the bulk data path.
     DEFAULT_TIMEOUT = 1000
 
-    def __init__(self, path, usb, *, opener=os.open, ioctl=fcntl.ioctl):
+    def __init__(self, path, usb, *, opener=os.open, ioctl=None):
+        require(termios is not None and fcntl is not None, 'Serial transport requires a POSIX host')
         require(isinstance(path, str) and CALLOUT.match(path), 'Invalid callout device')
         self.usb = usb
         self.path = path
-        self.ioctl = ioctl
+        self.ioctl = fcntl.ioctl if ioctl is None else ioctl
         self.fd = opener(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         try:
             self.ioctl(self.fd, termios.TIOCEXCL)
