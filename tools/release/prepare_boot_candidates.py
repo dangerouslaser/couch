@@ -27,6 +27,9 @@ def kernel(image):
     return split_dtb(image[page:page+size])[0]
 
 
+MODULES = ('hci_stp.ko',)
+
+
 def clean_ramdisk(root, role):
     require(role in ("boot", "recovery"), "Unknown ramdisk role")
     init = 'initramfs/init' if role == 'boot' else 'recovery/init'
@@ -48,6 +51,12 @@ def clean_ramdisk(root, role):
                 arm_static(regular(binary))
                 shutil.copyfile(binary, tree / 'extra' / name)
                 (tree / 'extra' / name).chmod(0o755)
+            # Kernel modules travel with the kernel they were built against
+            # (MODVERSIONS), so a boot image built with them carries them here.
+            for name in MODULES:
+                module = root / 'build/modules' / name
+                if module.is_file():
+                    shutil.copyfile(module, tree / 'extra' / name)
         subprocess.run([sys.executable, str(root / 'tools/mkcpio.py'), str(tree), str(tree / 'ramdisk.cpio')], check=True, stdout=subprocess.DEVNULL)
         raw = (tree / 'ramdisk.cpio').read_bytes()
         entries = cpio_files(raw)
@@ -56,6 +65,9 @@ def clean_ramdisk(root, role):
             expected.add('extra/boot-health.sh')
             expected.add('extra/couch-bt-bridge')
             expected.add('extra/couch-bt-hid')
+            for name in MODULES:
+                if (root / 'build/modules' / name).is_file():
+                    expected.add('extra/' + name)
         payloads = {name for name, content in entries.items() if content}
         require(payloads == expected, 'Unexpected payload file in clean ramdisk')
         ramdisk = gzip.compress(raw, compresslevel=9, mtime=0)

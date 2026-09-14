@@ -114,8 +114,37 @@ fn stop_stack(bridge: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The in-kernel STP HCI driver, when the boot image carries it: loading
+/// the module registers hci0 and the radio is powered on and off by the
+/// adapter's own open and close, so there is no bridge to run.
+fn load_stp_driver() -> Result<(), String> {
+    if Path::new("/sys/module/hci_stp").exists() {
+        return Ok(());
+    }
+    let output = Command::new("/bin/busybox")
+        .args(["insmod", "/extra/hci_stp.ko"])
+        .output()
+        .map_err(|_| "Could not run insmod")?;
+    if !output.status.success() {
+        return Err(format!(
+            "Loading hci_stp failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn unload_stp_driver() {
+    if Path::new("/sys/module/hci_stp").exists() {
+        let _ = Command::new("/bin/busybox").args(["rmmod", "hci_stp"]).status();
+    }
+}
+
 fn down() -> Result<(), String> {
     let result = stop_stack(true);
+    if crate::ui_settings::stp_driver_available() {
+        unload_stp_driver();
+    }
     // The HID daemon binds its key socket last; a stale path from the previous
     // run would otherwise look ready while the next one is still registering.
     let _ = fs::remove_file("/tmp/couch-bt-hid.sock");
@@ -135,14 +164,20 @@ fn up() -> Result<(), String> {
     let base = base().ok_or("couch-bt-hid is not part of this runtime")?;
     // A bluetoothd or HID daemon left over from an earlier bridge holds stale
     // adapter state; when the bridge has to be (re)started, start them fresh.
-    if !crate::ui_settings::bridge_running() {
+    if !crate::ui_settings::transport_running() {
         stop_stack(false)?;
+    }
+    if crate::ui_settings::stp_driver_available() {
+        load_stp_driver()?;
+        if !wait_for(|| Path::new(HCI0).exists(), 30, Duration::from_millis(200)) {
+            return Err("hci_stp loaded but no controller appeared".into());
+        }
     }
     // Bridge first: opening the transport powers the radio and creates hci0.
     // WMT occasionally refuses the open right after a power-off (ENODEV) and
     // the bridge exits; a second try a moment later succeeds.
     let mut attempt = 0;
-    loop {
+    while !crate::ui_settings::stp_driver_available() {
         alpine_sh(&format!(
             "for p in /proc/[0-9]*; do [ \"$(cat $p/comm 2>/dev/null)\" = couch-bt-bridge ] && exit 0; done; \
              setsid {base}/couch-bt-bridge </dev/null >/tmp/couch-bt-bridge.log 2>&1 &"
@@ -179,7 +214,7 @@ fn up() -> Result<(), String> {
         "pidof couch-bt-hid >/dev/null || setsid {base}/couch-bt-hid </dev/null >/tmp/couch-bt-hid.log 2>&1 &"
     ))?;
     if wait_for(
-        || crate::ui_settings::hid_running() && crate::ui_settings::bridge_running(),
+        || crate::ui_settings::hid_running() && crate::ui_settings::transport_running(),
         30,
         Duration::from_millis(100),
     ) {
