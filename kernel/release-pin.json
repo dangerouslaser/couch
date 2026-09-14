@@ -2,10 +2,10 @@
   "schema": 1,
   "kind": "couch-ha100-kernel-candidate",
   "source_repository": "https://github.com/dangerouslaser/couch-kernel",
-  "source_commit": "06b21c74526cfa834b16f2fea67ef3eaa98ee464",
+  "source_commit": "24105812bec5a7a74bbc976b7d714712059766a4",
   "profile": "normal",
-  "config_sha256": "469b0edfa28454fcdff66cb3ecd3071580514fe07649d574eaec428902202255",
-  "zimage_sha256": "ce0087e9043fa9e364eb25a9c9cc69b8fa1496891de031c32dde8ff874497617",
+  "config_sha256": "c440f42cf8643b64314025481c57d71e81554f4c96c2a4977a2dde29fd043e0e",
+  "zimage_sha256": "0a2953b4c99af6f4f5e720205654c4c7cc4a70e7e1f6b2ebcf27ea633b73f78a",
   "compiler_sha256": "41ceccad5029346a47c485b1545b8c93e4c95ef670019a1c8b1b2b21779661a0",
   "container": "sha256:0555bb78c532853ec90a6c503095c070245f97d86ec2215072c5b45e8a345ef9",
   "installable": false,
@@ -17,6 +17,7 @@
     "Keys, key backlight and wake-from-standby on a key press with CONFIG_COUCH_HA100 unset, i.e. the vendor keypad path (HA100, 2026-09-14, .144-.149)"
   ],
   "pending": [
+    "EXPERIMENT: in-kernel STP HCI driver (couch-kernel branch couch-hci-stp, hci_stp.ko in the boot ramdisk) replacing the userspace bridge; not for promotion until hardware checks pass",
     "Keypad wake quirk now compiled in (CONFIG_COUCH_HA100=y) and the MTK scheduler monitors off: keys, key backlight, wake-from-standby, IR, display and Bluetooth to re-check on hardware (.150.dev)",
     "Clean installer image and recovery validation; release signing and corresponding-source/license review"
   ]
