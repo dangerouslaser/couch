@@ -9,7 +9,10 @@ the remote's mapped buttons and the one-way TV screen over Bluetooth
 ([user guide](bluetooth-tv.md)). Idle Bluetooth has no measurable power or
 Wi-Fi cost. Pairing is a deliberate two-minute window from Settings or the
 web page ([pairing mode](#pairing-mode)); outside it the remote is not
-discoverable. Still open: per-activity bonds. An
+discoverable. Bonds are **per device** (2026-09-15, host-tested, hardware
+pending): a device carries its TV's address next to its network connection
+and IR commands, chooses a preferred transport, and the on-screen device's
+bond is the one link the daemon keeps ([switching](#multi-device-switching-design)). An
 in-kernel HCI driver now exists (`hci_stp`, see
 [kernel-backports-research.md](kernel-backports-research.md#outcome-2026-09-15-the-in-kernel-driver-on-both-cores)). The sections below are the design record: "what
 exists today" describes the starting point, the
@@ -82,13 +85,40 @@ BLE HID peripherals connect to one central at a time. The model that works
 for multi-device keyboards applies here:
 
 - BlueZ stores one bond per central; nothing extra is needed to keep several.
-- Each activity references the bonded address it should talk to.
-- On activity switch: disconnect the current central, then directed-advertise
-  (or advertise with a whitelist) to the target's address until it connects.
-- Pairing a new device is a GUI flow: undirected connectable advertising for a
-  bounded time, then store the bond and offer it in the activity editor.
-  The bounded window exists ([pairing mode](#pairing-mode)); the per-activity
-  bond store does not yet.
+- The bond lives on the **device**, not the activity: `Device.bluetooth`
+  (`{address, name}`) in the model, next to the device's connection and IR
+  codeset. Which of those a key tries first is `Device.preferred_transport`
+  (`ir` | `ip` | `bluetooth`, absent = infrared, network, Bluetooth), and
+  the GUI's executor walks `Device::transport_order`, moving on when a
+  transport is unavailable for that press (no IR code, network client cannot
+  connect, the device's TV not on the link) and stopping at the first that
+  takes it. The Bluetooth-only device of the first cut (`Integration::
+  BluetoothTv` / a `bluetooth-tv` connection) is migrated by
+  `Config::migrate` into a device with no integration and a bond with an
+  empty address; such a bond is sent keys whenever *any* TV is on the link
+  and is never activated by address, so it behaves as before until paired
+  again.
+- The on-screen device holds the link: an activity start activates its main
+  device's bond (`Config::bluetooth_link_device`: the source if bonded, else
+  the first bonded member), and opening a device screen activates that
+  device's. The daemon side of `activate <ADDR>` (drop the other central,
+  directed-advertise or whitelist the target) is the daemon's; the GUI sends
+  the word once per change through the system service. The daemon persists
+  the active bond itself (`/opt/couch/bluetooth-active`) and, with no file
+  and exactly one bond, adopts that bond on first start, so nothing on the
+  client side re-sends `activate` after a reboot: the GUI sends it when a
+  device comes on screen and otherwise trusts the state file's `active`
+  line. During a `pair` window the daemon disconnects already-bonded TVs and
+  keeps them off the link until the window ends (a 4.0 controller cannot
+  advertise with a link up), so `link` is absent for the window and a key
+  to the previously active TV falls through to its other transports.
+- An activity with two bonded TVs drives the second over its other
+  transport. One with none is reported at edit time
+  (`Config::bluetooth_conflicts`, shown in the web activity editor) and once
+  at start on the remote, not per key.
+- Pairing a new TV is per device: undirected connectable advertising for a
+  bounded time ([pairing mode](#pairing-mode)) opened *for a device*, then
+  the daemon's `peer` line stored on that device by couch-confd.
 
 ## Pairing mode
 
@@ -126,12 +156,15 @@ socket and reads its state file.
   `btmgmt static-addr` (random static): it advertises, but bluetoothd never
   answers ATT on it, verified twice. No Wi-Fi MAC: the default is kept and
   logged.
-- **Socket words** (`/tmp/couch-bt-hid.sock`, mode 0600): `pair` removes every
-  `Device1` under `hci0` (`Adapter1.RemoveDevice`, bonds included), sets
+- **Socket words** (`/tmp/couch-bt-hid.sock`, mode 0600): `pair` sets
   `Pairable` on the adapter, re-registers the advertisement
   with `Discoverable=true` (raw-HCI path: flags byte `0x06`) and opens a
   `PAIR_WINDOW_SECS` (120 s) window; `pair-stop` closes it early; `forget`
-  removes the devices without a window. Keyboard words `enter`, `escape`,
+  removes every bond without a window and `forget <ADDR>` one bond;
+  `activate <ADDR>` makes one bond the active link (the daemon drops any
+  other TV and lets only this one connect) and `activate none` lets no TV
+  connect. Addresses are uppercase colon-hex (`44:27:45:4E:33:25`), as the
+  daemon reports them. Keyboard words `enter`, `escape`,
   `space`, `tab`, `backspace` and `kbd:<hex>` (`kbd:28`, or `kbd:0204` with
   modifiers) send a boot-style report `[mods, 0, key, 0, 0, 0, 0, 0]` then an
   all-zero release on the keyboard report characteristic; the consumer words
@@ -158,21 +191,56 @@ socket and reads its state file.
   dropped for want of a subscriber are logged in `/tmp/couch-bt-hid.log`,
   because a TV that pairs but never subscribes looks, from outside, exactly
   like keys being ignored.
-- **State file** `/tmp/couch-bt-pair.state` (format and parser in the crate's
-  lib, `PairStatus`): line 1 `<phase>[ <detail>]` with phase
+- **State file** `/tmp/couch-bt-pair.state` (phase line and parser in the
+  crate's lib, `PairStatus`): line 1 `<phase>[ <detail>]` with phase
   `idle|pairing|connected|paired|done|failed` (detail = the peer's name, or
-  `timeout`/`cancelled`), optional line 2 `link <name>` while any peer is
-  connected. The daemon rewrites it on every poll while a window is open, so
-  readers treat a window phase older than `PAIR_STALE_SECS` (window + 15 s)
-  as idle: the daemon died. `done` and `failed` are final until the next
-  `pair`; turning Bluetooth off removes the file.
-- **Readers.** `couch_system::ui_settings::bluetooth_pairing()` and
-  `bluetooth_peer()`; the GUI's Settings › Bluetooth panel (row value
-  `ON · <peer>`, a second row **Pair with TV** while on, and a modal that owns
-  OK = `enter` and Back = `pair-stop`, polled every 250 ms while shown); the
-  web Remote page's Bluetooth section and `GET /api/remote/device`
-  (`bluetooth.pairing {phase, detail}`, `bluetooth.peer`) with
-  `POST /api/remote/bluetooth {"action": pair|stop|forget|enter}`.
+  `timeout`/`cancelled`); then, whenever relevant, `peer <ADDR> <name>` on
+  `done` (the TV that just bonded: what a device stores), `link <ADDR>
+  <name>` while a TV is connected, `active <ADDR>` when a bond has been made
+  the active link. `couch_system::ui_settings::LinkStatus` parses those
+  lines (and the older `link <name>` without an address) on the readers'
+  side; the daemon's lib is expected to grow the same fields. The daemon
+  rewrites the file on every poll while a window is open, so readers treat
+  a window phase older than `PAIR_STALE_SECS` (window + 15 s) as idle: the
+  daemon died. `done` and `failed` are final until the next `pair`; turning
+  Bluetooth off removes the file.
+- **Requests.** Everything reaches the socket through the system service's
+  `Request::BluetoothPair { action, address?, device? }`, so nothing typed on
+  a web page becomes a word; `couch_system::bluetooth::word_for` is the whole
+  mapping. The CLI forms (`couch-system request '<json>'`):
+  `{"BluetoothPair":{"action":"pair"}}`;
+  `{"BluetoothPair":{"action":"pair","device":"living-tv"}}` (the window is
+  for that device); `{"BluetoothPair":{"action":"stop"}}`;
+  `{"BluetoothPair":{"action":"enter"}}`;
+  `{"BluetoothPair":{"action":"forget"}}` (every bond);
+  `{"BluetoothPair":{"action":"forget","address":"44:27:45:4E:33:25"}}` (one;
+  add `"device"` to also clear that device's stored bond);
+  `{"BluetoothPair":{"action":"activate","address":"44:27:45:4E:33:25"}}`;
+  `{"BluetoothPair":{"action":"activate"}}` (= `activate none`). A bad
+  address or device id is refused before any word is formed.
+- **Bond request file** `/tmp/couch-bt-bond.request`: written by the system
+  service on a `pair` or `forget` that names a device (`<device id> pair` or
+  `<device id> unpair`), removed on any of those without one. couch-confd is
+  the only writer of the configuration and polls it once a second
+  (`Api::tick` → `couch_system::bluetooth::take_pending_bond`): on `done`
+  with a `peer` line the bond is stored on the device, on `unpair` the
+  device's bond is cleared, and a window that ends without a TV drops the
+  request. This is how a window opened on the remote (whose GUI has no write
+  path to the configuration) still lands on the device.
+- **Readers.** `couch_system::ui_settings::bluetooth_link()` (the bond
+  lines), `bluetooth_pairing()` and `bluetooth_peer()` (name only, for the
+  rows); the GUI's Settings › Bluetooth panel (row value `ON · <peer>`, a
+  second row **Pair with TV** while on, and a modal that owns OK = `enter`
+  and Back = `pair-stop`, polled every 250 ms while shown), which every TV
+  screen's command/app list reuses for **Pair over Bluetooth** / **Unpair
+  Bluetooth** on its own device; the web device card's Bluetooth section and
+  Remote page, and `GET /api/remote/device`
+  (`bluetooth.pairing {phase, detail, device, bonded {address, name}}`,
+  `bluetooth.peer` (name), `bluetooth.link {address, name}`,
+  `bluetooth.active`) with `POST /api/remote/bluetooth {"action":
+  pair|stop|forget|enter|activate, "address"?, "device"?}` (404 for a device
+  the configuration lacks). A device edit or deletion that drops a bond sends
+  `forget <ADDR>` for it.
 - **Why the keyboard report.** An LG webOS TV completed LE Secure Connections
   pairing and bonding, read the HID service, then showed "press any key on the
   bluetooth keyboard" and dropped the link after a while; every key sent
@@ -278,9 +346,13 @@ are `apk add`ed over SSH on the development remote meanwhile.
    report map, and drives advertising through raw HCI since 3.18 has no
    `Add Advertising` management command. First pairing with a real TV; record
    which pairing method each target accepts.
-4. *Switching.* One bond per target, an activity references its bonded
-   address, and an activity switch disconnects and directed-advertises to the
-   new target. GUI: pair-new-device flow and per-activity target picker.
+4. *Switching.* **Client side done 2026-09-15** (branch
+   `bluetooth-per-device`): one bond per device, the on-screen device's bond
+   is activated on activity start and device-screen open, preferred
+   transport with fallback, per-device pairing from the web device editor
+   and the remote's TV screens, migration of the old connection. The daemon
+   side (`activate`, `forget <ADDR>`, the `peer`/`link`/`active` lines) is a
+   parallel branch; the two meet on hardware.
 5. *Proper driver.* Replace the bridge with an in-kernel `hci_dev` over STP,
    per the kernel repository's task list, once the spike has proven the radio.
 
@@ -341,7 +413,25 @@ Userland (this repo):
       controller is the fix (.157.dev). **Validated end to end with the LG on
       .157.dev**: window → connect → bond → TV subscribes → DONE, OK sends
       Enter, advert hidden afterwards, TV off/on reconnects, volume keys work.
-- [ ] Bond store keyed per activity; disconnect-and-redirect on switch.
+- [x] Bond store keyed per device, transport preference and fallback, the
+      link following the on-screen device (2026-09-15, host tests only:
+      model, couch-system, couch-confd, couch-gui, wasm check). To verify on
+      the dev remote with the daemon branch: pair the LG from its device
+      card (web) and from its TV screen (remote) and see `bluetooth.address`
+      land in config.json within a second of DONE; pair a second TV on a
+      second device; start an activity whose source is one and watch
+      `active <ADDR>` follow it (and the other TV drop); open the other
+      device's screen and watch the link move; a key on the non-linked TV
+      goes out over its IR/network transport, or reports "not connected over
+      Bluetooth" when it has none; power-on on a device preferring Bluetooth
+      goes out by IR; Unpair removes the bond on both sides; a config from
+      before (a `bluetooth-tv` connection) comes up migrated and its device
+      still takes keys; the Settings row and Remote page's global Pair with
+      TV still work and store nothing.
+- [ ] Daemon: `activate <ADDR>` / `activate none` / `forget <ADDR>` and the
+      `peer` / `link <ADDR> <name>` / `active` lines, the persisted active
+      bond and the single-bond adoption (parallel branch
+      `bluetooth-bond-slots`); the two branches meet on the dev remote.
 - [ ] Re-advertise immediately on disconnect. Done where bluetoothd exports
       `LEAdvertisingManager1` (the backported core, see
       [kernel backports research](kernel-backports-research.md)):
